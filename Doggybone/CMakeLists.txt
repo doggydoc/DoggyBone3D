@@ -12,6 +12,15 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneLib/measurement_logic.py
   DoggyboneLib/measurements.py
   DoggyboneLib/osteotomy_logic.py
+  DoggyboneUI/__init__.py
+  DoggyboneUI/common.py
+  DoggyboneUI/ui_planes.py
+  DoggyboneUI/ui_correction.py
+  DoggyboneUI/ui_segmentation.py
+  DoggyboneUI/ui_guide_edit.py
+  DoggyboneUI/ui_guide_build.py
+  DoggyboneUI/ui_pins.py
+  DoggyboneUI/ui_saw.py
   )
 
 set(MODULE_PYTHON_RESOURCES
