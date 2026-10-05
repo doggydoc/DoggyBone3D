@@ -35,7 +35,7 @@ class SegmentationMixin:
         if editor is None:
             editor = slicer.qMRMLSegmentEditorWidget()
             editor.setMRMLScene(slicer.mrmlScene)
-            editor.setMaximumNumberOfUndoStates(5)
+            editor.setMaximumNumberOfUndoStates(0)   # one undo only: Doggybone's Delete (baseline)
             editor_node = slicer.mrmlScene.GetFirstNodeByName("Doggybone segment editor")
             if editor_node is None:
                 editor_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode", "Doggybone segment editor")
@@ -116,6 +116,9 @@ class SegmentationMixin:
         if getattr(self, "_guide_active_tool", None) == "bone_lasso":
             self._remove_guide_observers()
             self._guide_active_tool = None
+            # the lasso set the bone fully opaque (and hid things) - back to the user's view
+            if hasattr(self, "_restore_guide_hidden"):
+                self._restore_guide_hidden()
         for button in buttons:
             if button.checked:
                 was_blocked = button.blockSignals(True)

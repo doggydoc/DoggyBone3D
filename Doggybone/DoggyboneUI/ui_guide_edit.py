@@ -295,7 +295,7 @@ class GuideEditMixin:
         texts = {"brush_add": "Brush +: hold the left mouse button and move over the bone surface to colour it.",
                  "brush_remove": "Brush -: hold the left mouse button and move over the coloured area to remove it.",
                  "pins": "Pins: click on the guide to mark where a pin should go (click a mark again to remove "
-                        "it). Not in the wedge and not in the saw blocks. Switch Pins off (or Extrude) to build them.",
+                        "it). Not in the wedge and not in the saw blocks. 'Finish pins' (or Extrude) builds them.",
                  "brush_smooth": "Smooth: only the guide is shown. Turn it to see its inner (contact) side and "
                                  "paint over irregular spots (yellow) - they are bridged, never moved into the bone. "
                                  "A stroke that starts on yellow erases.",
@@ -804,6 +804,10 @@ class GuideEditMixin:
             cleaned, info = guide_logic.clean_guide(body_node.GetPolyData(), bone_polydata, float(self.guide_gap.value),
                                                     bone_labelmap=labelmap, label_value=label_value,
                                                     fill_axis=None if frame_error else shaft)
+        except ValueError as error:
+            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+            self.guide_status.setText(f"Clean up not possible: {error}. The guide is unchanged.")
+            return
         finally:
             qt.QApplication.restoreOverrideCursor()
         self._guide_body_before_clean = vtk.vtkPolyData()
@@ -853,7 +857,25 @@ class GuideEditMixin:
             self._show_saw_pin_preview()
 
     def _refresh_guide_body_if_present(self):
-        '''After a footprint edit: an existing body is re-extruded so it always matches.'''
+        '''After a footprint edit or a parameter change: an existing body is rebuilt so it always
+        matches - DEBOUNCED: several strokes / spin-box steps in a row cost ONE rebuild (0.8 s after
+        the last change), the painting itself never waits for the volume body.'''
+        if slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is None:
+            return
+        timer = getattr(self, "_guide_refresh_timer", None)
+        if timer is None:
+            timer = qt.QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._run_guide_refresh)
+            self._guide_refresh_timer = timer
+        self._guide_refresh_for = (getattr(self, "_guide_mode", "saw"), self.osteotomy_bone.currentText)
+        timer.start(800)
+
+    def _run_guide_refresh(self):
+        # mode or bone switched meanwhile: the scheduled rebuild was for the other guide - skip it
+        if getattr(self, "_guide_refresh_for", None) != (getattr(self, "_guide_mode", "saw"),
+                                                           self.osteotomy_bone.currentText):
+            return
         if slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is not None:
             self._extrude_guide_body(push_undo=False)
 
@@ -865,6 +887,9 @@ class GuideEditMixin:
                 button.setChecked(False)
                 button.blockSignals(was_blocked)
         self._guide_active_tool = None
+        button = getattr(self, "place_pin_rows_button", None)
+        if button is not None and button.text != "Place pins":
+            button.setText("Place pins")          # manual pin placement ended with the tool
         self._restore_guide_hidden()
 
     def _restore_guide_hidden(self):

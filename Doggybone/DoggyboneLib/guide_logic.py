@@ -2765,6 +2765,8 @@ def clean_guide(guide, bone, gap, voxel=0.15, min_island=20.0, smooth=True, bone
     Returns (polydata, info)."""
     import scipy.ndimage as ndi
     from vtk.util.numpy_support import numpy_to_vtk as _n2v
+    if guide is None or guide.GetNumberOfPoints() == 0:
+        raise ValueError("clean_guide: the guide is empty")
     b = guide.GetBounds()
     pad = 2.0 + float(gap)
     origin = np.array([b[0] - pad, b[2] - pad, b[4] - pad])
@@ -2859,6 +2861,8 @@ def clean_guide(guide, bone, gap, voxel=0.15, min_island=20.0, smooth=True, bone
     regions.SetExtractionModeToAllRegions()
     regions.Update()
     sizes = vtk_to_numpy(regions.GetRegionSizes())
+    if len(sizes) == 0:
+        raise ValueError("clean_guide: nothing left of the guide (it lies completely in the bone + fit gap)")
     keep_ids = [int(r) for r in np.where(sizes >= max(500, 0.01 * sizes.max()))[0]]
     if len(keep_ids) < len(sizes):
         dropped += len(sizes) - len(keep_ids)
@@ -3117,7 +3121,20 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     if np.prod(dims) > 45e6:
         return None, {"error": f"region too large for the voxel grid ({dims.tolist()}) - make the footprint smaller"}
     shape = tuple(int(v) for v in dims)
-    gx, gy, gz = (origin[a] + voxel * np.arange(shape[a]) for a in range(3))
+    # float32 grid coordinates: every field below stays float32 (half the memory of float64)
+    gx, gy, gz = ((origin[a] + voxel * np.arange(shape[a])).astype(np.float32) for a in range(3))
+
+    def sub_box(points, margin_mm):
+        """Index slices of the grid box around `points` (local mm) widened by margin_mm - analytic
+        parts (bridges, sleeves) are evaluated only there, not on the whole grid."""
+        pts = np.atleast_2d(np.asarray(points, float))
+        lo_i = np.floor((pts.min(axis=0) - margin_mm - origin) / voxel).astype(int)
+        hi_i = np.ceil((pts.max(axis=0) + margin_mm - origin) / voxel).astype(int) + 1
+        lo_i = np.clip(lo_i, 0, np.array(shape))
+        hi_i = np.clip(hi_i, 0, np.array(shape))
+        if np.any(hi_i <= lo_i):
+            return None
+        return tuple(slice(int(l), int(h)) for l, h in zip(lo_i, hi_i))
     # --- bone: filled solid (cavities closed) + exact distance in the band around the shell -----
     bone_local = _poly_to_local(bone, R)
     box = vtk.vtkBox()
@@ -3262,13 +3279,17 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     Z = gz[None, None, :]
     keep_across = np.zeros(shape, dtype=bool)        # bridges / saw block: allowed to span the cut plane
     for a, b in bars:
-        ba = b - a
+        # outside this box the capsule is farther than radius + fillet + 1.5 mm: smin leaves F unchanged
+        box = sub_box([a, b], bridge_radius + fillet + 1.5)
+        if box is None:
+            continue
+        a32, ba = a.astype(np.float32), (b - a).astype(np.float32)
         bb = float(ba @ ba)
-        px, py, pz = X - a[0], Y - a[1], Z - a[2]
-        h = np.clip((px * ba[0] + py * ba[1] + pz * ba[2]) / bb, 0.0, 1.0)
-        cap = np.sqrt((px - ba[0] * h) ** 2 + (py - ba[1] * h) ** 2 + (pz - ba[2] * h) ** 2) - bridge_radius
-        F = _smin(F, cap.astype(np.float32), fillet)
-        keep_across |= cap < 0.3
+        px, py, pz = X[box[0]] - a32[0], Y[:, box[1]] - a32[1], Z[:, :, box[2]] - a32[2]
+        h = np.clip((px * ba[0] + py * ba[1] + pz * ba[2]) / np.float32(bb), 0.0, 1.0)
+        cap = np.sqrt((px - ba[0] * h) ** 2 + (py - ba[1] * h) ** 2 + (pz - ba[2] * h) ** 2) - np.float32(bridge_radius)
+        F[box] = _smin(F[box], cap, fillet)
+        keep_across[box] |= cap < 0.3
     # --- undercuts: nothing below the bone as seen from the guide side ------------------------
     trimmed = 0.0
     if trim_undercut:
@@ -3299,11 +3320,16 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
             a = R @ unit(np.asarray(pin["axis"], float))
             E = R @ np.asarray(pin["entry"], float)
             t_top = float((R @ np.asarray(pin["top"], float) - E) @ a)
-            px, py, pz = X - E[0], Y - E[1], Z - E[2]
-            along = px * a[0] + py * a[1] + pz * a[2]
+            r_out = float(pin["r_out"])
+            box = sub_box([E - 3.0 * a, E + t_top * a], r_out + fillet + 1.5)
+            if box is None:
+                continue
+            a32, E32 = a.astype(np.float32), E.astype(np.float32)
+            px, py, pz = X[box[0]] - E32[0], Y[:, box[1]] - E32[1], Z[:, :, box[2]] - E32[2]
+            along = px * a32[0] + py * a32[1] + pz * a32[2]
             radial = np.sqrt(np.maximum(px ** 2 + py ** 2 + pz ** 2 - along ** 2, 0.0))
-            f_s = np.maximum(np.maximum(radial - float(pin["r_out"]), along - t_top), -3.0 - along)
-            F = _smin(F, f_s.astype(np.float32), fillet)
+            f_s = np.maximum(np.maximum(radial - np.float32(r_out), along - np.float32(t_top)), np.float32(-3.0) - along)
+            F[box] = _smin(F[box], f_s, fillet)
             n_sleeves += 1
             del px, py, pz, along, radial, f_s
     # --- keep the bone + fit gap, the kerfs / open wedge and the pin bores free --------------------
@@ -3311,7 +3337,8 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     good = [s for s in (slots or []) if "error" not in s]
 
     def plane_dist(C, v):
-        C, v = R @ np.asarray(C, float), R @ np.asarray(v, float)
+        C = (R @ np.asarray(C, float)).astype(np.float32)
+        v = (R @ np.asarray(v, float)).astype(np.float32)
         return (X - C[0]) * v[0] + (Y - C[1]) * v[1] + (Z - C[2]) * v[2]
     half = 0.5 * SLOT_WIDTH
     if block and len(good) == 2:
@@ -3335,13 +3362,15 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     for pin in (pins or []):
         if "error" in pin:
             continue
-        a = R @ unit(np.asarray(pin["axis"], float))
-        E = R @ np.asarray(pin["entry"], float)
+        a = (R @ unit(np.asarray(pin["axis"], float))).astype(np.float32)
+        E = (R @ np.asarray(pin["entry"], float)).astype(np.float32)
         px, py, pz = X - E[0], Y - E[1], Z - E[2]
         along = px * a[0] + py * a[1] + pz * a[2]
         radial = np.sqrt(np.maximum(px ** 2 + py ** 2 + pz ** 2 - along ** 2, 0.0))
         # exact bore (pin + PIN_CLEARANCE); + 0.01 mm: the polygonised bore runs ~0.01 mm inside the field
-        F = np.maximum(F, (float(pin["r_in"]) + 0.01) - radial)
+        F = np.maximum(F, np.float32(float(pin["r_in"]) + 0.01) - radial)
+        del px, py, pz, along, radial
+    F = F.astype(np.float32, copy=False)
     thin_removed = 0.0
     if min_feature and float(min_feature) > 0:
         F, thin_removed = _remove_thin_features(F, 0.5 * float(min_feature), voxel)
@@ -3350,6 +3379,9 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     F[:, 0, :] = F[:, -1, :] = 1.0
     F[:, :, 0] = F[:, :, -1] = 1.0
     volume = float((F < 0).sum()) * voxel ** 3
+    if volume <= 0.0:
+        return None, {"error": "no guide material left (footprint too small, or everything lies in the "
+                               "bone / the kerfs / the bores)"}
     # --- surface ---------------------------------------------------------------------------------
     image = vtk.vtkImageData()
     image.SetDimensions(*shape)
@@ -3372,6 +3404,8 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     # crumbs (< 3 % of the largest piece) are dropped
     sizes = vtk_to_numpy(regions.GetRegionSizes()).astype(float) if n_regions else np.zeros(0)
     keep_ids = [int(i) for i in np.flatnonzero(sizes >= 0.03 * sizes.max())] if n_regions else []
+    if not keep_ids:
+        return None, {"error": "the guide surface could not be extracted"}
     pick = vtk.vtkPolyDataConnectivityFilter()
     pick.SetInputData(out)
     pick.SetExtractionModeToSpecifiedRegions()

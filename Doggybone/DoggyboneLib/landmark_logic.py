@@ -78,10 +78,17 @@ def snap_to_nearest_bone_voxel(position_ras, in_plane_radius_mm=100.0, out_of_pl
             return position_ras
         volume_node = volume_nodes[0]
 
+    # a transformed CT: world -> the volume's own (local) RAS first
+    parent = volume_node.GetParentTransformNode()
+    local_ras = [float(position_ras[0]), float(position_ras[1]), float(position_ras[2])]
+    if parent is not None:
+        from_world = vtk.vtkGeneralTransform()
+        parent.GetTransformFromWorld(from_world)
+        local_ras = list(from_world.TransformPoint(local_ras))
     ras_to_ijk = vtk.vtkMatrix4x4()
     volume_node.GetRASToIJKMatrix(ras_to_ijk)
     ijk_h = [0.0, 0.0, 0.0, 0.0]
-    ras_to_ijk.MultiplyPoint([float(position_ras[0]), float(position_ras[1]), float(position_ras[2]), 1.0], ijk_h)
+    ras_to_ijk.MultiplyPoint(local_ras + [1.0], ijk_h)
     i0, j0, k0 = int(round(ijk_h[0])), int(round(ijk_h[1])), int(round(ijk_h[2]))
 
     spacing = volume_node.GetSpacing()  # (x, y, z) mm per voxel
@@ -110,7 +117,8 @@ def snap_to_nearest_bone_voxel(position_ras, in_plane_radius_mm=100.0, out_of_pl
     dk = kk - k0
     dj = jj - j0
     di = ii - i0
-    dist2 = di * di + dj * dj + dk * dk
+    # distance in mm, not in voxel steps (slices are usually thicker than the in-plane pixels)
+    dist2 = (di * spacing[0]) ** 2 + (dj * spacing[1]) ** 2 + (dk * spacing[2]) ** 2
     best = int(np.argmin(dist2))
     best_ijk = (int(ii[best]), int(jj[best]), int(kk[best]))
 
@@ -118,7 +126,12 @@ def snap_to_nearest_bone_voxel(position_ras, in_plane_radius_mm=100.0, out_of_pl
     volume_node.GetIJKToRASMatrix(ijk_to_ras)
     ras_h = [0.0, 0.0, 0.0, 0.0]
     ijk_to_ras.MultiplyPoint([float(best_ijk[0]), float(best_ijk[1]), float(best_ijk[2]), 1.0], ras_h)
-    return (ras_h[0], ras_h[1], ras_h[2])
+    result = [ras_h[0], ras_h[1], ras_h[2]]
+    if parent is not None:
+        to_world = vtk.vtkGeneralTransform()
+        parent.GetTransformToWorld(to_world)
+        result = list(to_world.TransformPoint(result))
+    return (result[0], result[1], result[2])
 
 
 class SimpleLandmark:

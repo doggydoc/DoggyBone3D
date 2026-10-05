@@ -303,13 +303,17 @@ class TibiaTargetsMixin:
             if np.max(np.abs(r[:len(used)])) < 0.05:
                 break
             J = np.zeros((len(r), 3))
+            jacobian_ok = True
             for j in columns:
                 dx = np.zeros(3)
                 dx[j] = h
                 rj, _p = residual(x + dx)
                 if rj is None:
+                    jacobian_ok = False          # no step on a partial Jacobian: keep the current x
                     break
                 J[:, j] = (rj - r) / h
+            if not jacobian_ok:
+                break
             step = np.zeros(3)
             solved, *_ = np.linalg.lstsq(J[:, columns], -r, rcond=None)
             step[columns] = solved

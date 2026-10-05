@@ -625,14 +625,19 @@ class GuideBuildMixin:
         if self._ensure_current_reduction_surface():
             return
         problems = []
-        if len({p["segment"] for p in self._load_planned_pins()}) < 2:
-            problems.append("no pins in both fragments yet (set Pins on the saw guide and Extrude it)")
+        marks = slicer.mrmlScene.GetFirstNodeByName(self.REDUCTION_PIN_MARKS)
+        segments = set()
+        if marks is not None:
+            for i in range(marks.GetNumberOfControlPoints()):
+                segments.add((marks.GetNthControlPointDescription(i) or "").split("|")[0])
+        if not {"proximal", "distal"} <= segments:
+            problems.append("no pins in both fragments yet ('Place pins')")
         if combined is None:
             problems.append("no corrected bone (run the correction preview)")
         self.guide_status.setText(
-            "Reduction guide: paint a SMALL footprint on the corrected bone around the pins (Brush + / "
-            "Lasso +), then 'Extrude guide body' - sleeves come at the saw guide's pins in the corrected "
-            "position." + (("\nMissing: " + "; ".join(problems)) if problems else ""))
+            "Reduction guide: 'Place pins' on the corrected bone (click a pin to move it), then "
+            "'Extrude guide body'. The saw guide takes these pins over, pre-angled."
+            + (("\nMissing: " + "; ".join(problems)) if problems else ""))
 
     def _guide_source_polydata(self):
         """Bone surface the guide is prepared on: the bone as it is (saw guide) or both fragments

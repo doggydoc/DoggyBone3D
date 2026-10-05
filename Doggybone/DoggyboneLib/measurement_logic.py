@@ -116,7 +116,10 @@ class BaseMeasurement:
                 return False, None, "Not all landmarks defined"
         point_dict = {l.name: l.get_position() for l in self.landmarks}
         radius_dict = {l.name: getattr(l, "radius", None) for l in self.landmarks}
-        angle, message = self._measure(point_dict, radius_dict)
+        try:
+            angle, message = self._measure(point_dict, radius_dict)
+        except ValueError as error:          # degenerate landmark geometry (see helpers.angle)
+            return False, None, f"Cannot measure: {error}"
         return True, angle, message
 
 class TibiaTorsionMeasurement(BaseMeasurement):

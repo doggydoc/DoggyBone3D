@@ -23,7 +23,17 @@ class CorrectionMixin:
         return None
 
     def _moving_side_sign(self, cut_o, cut_n, moving_is_distal, side, bone):
-        """+1 / -1: on which side of the cut plane (normal cut_n) the MOVING fragment lies."""
+        """+1 / -1: on which side of the cut plane (normal cut_n) the MOVING fragment lies. Same rule as
+        the fragment split and the landmark classification: the shaft axis points proximal -> distal,
+        so the distal side is where (p - o).n has the sign of n.shaft."""
+        shaft, _ml, _ap, frame_error = self._get_anatomical_frame(side, bone)
+        if not frame_error and shaft is not None:
+            n = np.asarray(cut_n, float)
+            dot = float(np.dot(n, np.asarray(shaft, float)))
+            if abs(dot) > 1e-3:
+                distal_sign = 1.0 if dot > 0 else -1.0
+                return distal_sign if moving_is_distal else -distal_sign
+        # fallback (no anatomical frame): a proximal landmark
         panel = self.left_panel if side == "left" else self.right_panel
         node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
         proximal_names = (["femur head", "femur neck", "Femur midpoint 30%"] if bone == "Femur"

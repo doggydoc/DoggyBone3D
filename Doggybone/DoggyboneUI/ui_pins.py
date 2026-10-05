@@ -402,7 +402,9 @@ class PinsMixin:
         self._pins_dirty = True
         self.guide_status.setStyleSheet("")
         self.guide_status.setText(f"Pin {label} removed ({node.GetNumberOfControlPoints()} marked). "
-                                  "Switch Pins off to update the sleeves.")
+                                  + ("Press 'Place pins' again to finish and rebuild the guide."
+                                     if getattr(self, "_guide_active_tool", None) == "pins"
+                                     else "The guide is rebuilt."))
         if self._guide_mode_is_reduction():
             self._show_reduction_pin_axes()
             self._place_pin_gizmo()
@@ -485,12 +487,24 @@ class PinsMixin:
             self.guide_status.setText("Pin rows are placed in the 'Reduction guide' mode.")
             return
         if self._pin_distribution_manual():
+            # manual placement: 'Place pins' starts it, a second 'Place pins' finishes it (the hidden
+            # pin tool is switched off -> the guide is rebuilt with the new pins)
             button = getattr(self, "_guide_tool_buttons", {}).get("pins")
-            if button is not None and not button.checked:
-                button.setChecked(True)
+            if button is None:
+                return
+            if button.checked:
+                button.setChecked(False)
+                self.place_pin_rows_button.setText("Place pins")
+                self.guide_status.setStyleSheet("")
+                self.guide_status.setText("Manual pin placement finished. Click a pin to select / move it.")
+                return
+            button.setChecked(True)
+            if button.checked:
+                self.place_pin_rows_button.setText("Finish pins")
             self.guide_status.setStyleSheet("")
             self.guide_status.setText("Manual pins: click on the corrected bone to set a pin (it gets the gizmo), "
-                                      "click a pin to delete it, Cmd/Ctrl + click a pin to move it.")
+                                      "click a pin to delete it, Cmd/Ctrl + click a pin to move it. Press "
+                                      "'Finish pins' when done.")
             return
         self._stop_guide_edit()
         self._pin_rows_active = True
@@ -1404,8 +1418,8 @@ class PinsMixin:
             f"Pin {node.GetNthControlPointLabel(index)} set ({pin['segment']} fragment) "
             f"{'through the bone centre' if centred else 'where you clicked'}, "
             f"{pin['bone_length']:.1f} mm in bone; {node.GetNumberOfControlPoints()} set. All pins parallel to "
-            "each other and to the cut plane(s). Fine-tune it with the small gizmo; switch Pins off to "
-            "build the reduction guide." + (f"\nMoved {shift:.1f} mm away from the cut so the saw guide can take it."
+            "each other and to the cut plane(s). Fine-tune it with the small gizmo; press 'Place pins' "
+            "again when all pins are set - the reduction guide is then built." + (f"\nMoved {shift:.1f} mm away from the cut so the saw guide can take it."
                                             if shift > 0 else ""))
 
     def _toggle_pin(self, hit):

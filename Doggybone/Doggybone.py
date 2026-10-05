@@ -16,8 +16,32 @@ import os.path as osp
 import csv
 import numpy as np
 from copy import deepcopy
-import locale
-locale.setlocale(locale.LC_ALL, '')
+import locale   # (kept for compatibility; the process-wide C locale is NOT changed any more)
+
+
+def _csv_decimal():
+    """Decimal separator of the user's system (German: ',') - only used for the CSV files, so they
+    open correctly in Excel; Slicer / VTK keep the C locale ('.')."""
+    try:
+        point = qt.QLocale.system().decimalPoint()
+        point = str(point) if point is not None else "."
+        return point if point in (",", ".") else "."
+    except Exception:
+        return "."
+
+
+def _csv_number(value):
+    return repr(float(value)).replace(".", _csv_decimal())
+
+
+def _csv_float(text):
+    return float(str(text).strip().replace(",", "."))
+
+
+def _csv_delimiter_for_file(handle):
+    first = handle.readline()
+    handle.seek(0)
+    return ";" if ";" in first else ","
 
 # Slicer's "Reload" (slicer.util.reloadScriptedModule) re-executes this file, but a plain
 # `import X` further down is a no-op once X is already in sys.modules - so without an explicit
@@ -1204,6 +1228,9 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         scene (gizmos, handles) or on the views is released - otherwise the OLD widget keeps reacting
         next to the new one (e.g. a pin or saw box moved twice)."""
         self._stop_remove_bone()
+        timer = getattr(self, "_guide_refresh_timer", None)
+        if timer is not None:
+            timer.stop()                              # no delayed rebuild by the old widget
         try:
             self._remove_pin_gizmo()
         except Exception:
@@ -1251,8 +1278,20 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         # Reset the target fields to this bone's default whenever the bone selection changes -
         # a target left over from the other bone (e.g. 90° carried over from Femur to Tibia)
         # would silently produce a wrong correction magnitude.
-        self.target_wedge_value.setValue(self.WEDGE_TARGET_DEFAULT[bone])
-        self.target_rotation_value.setValue(self.ROTATION_TARGET_DEFAULT[bone])
+        # Targets are kept PER BONE: switching femur <-> tibia restores that bone's last targets
+        # (first time: the bone's defaults) - never a value carried over from the other bone.
+        stored = getattr(self, "_targets_per_bone", {})
+        previous = getattr(self, "_target_bone", None)
+        if previous is not None and previous != bone:
+            stored[previous] = (float(self.target_wedge_value.value), float(self.target_rotation_value.value))
+        self._targets_per_bone = stored
+        self._target_bone = bone
+        wedge, rotation = stored.get(bone, (self.WEDGE_TARGET_DEFAULT[bone], self.ROTATION_TARGET_DEFAULT[bone]))
+        for box, value in ((self.target_wedge_value, wedge), (self.target_rotation_value, rotation)):
+            was_blocked = box.blockSignals(True)
+            box.setValue(value)
+            box.blockSignals(was_blocked)
+        self._on_target_values_changed()
         self._set_tibia_mode_visible(bone == "Tibia")
         self._update_plane_handle_interactivity()
         if hasattr(self, "_on_guide_bone_switched") and hasattr(self, "guide_status"):
@@ -1792,18 +1831,18 @@ class MeasurementsPanel(qt.QWidget):
             return
         with open(file_name, 'w+', newline='') as csvfile:
             fieldnames = ['landmark name', 'x', 'y', 'z', 'radius']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=';' 
-                                    if locale.localeconv()['decimal_point'] == "," else ",", quoting=csv.QUOTE_MINIMAL)
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=';'
+                                    if _csv_decimal() == "," else ",", quoting=csv.QUOTE_MINIMAL)
             writer.writeheader()
             for landmark in self.landmarks:
                 if landmark.placed:
                     position = landmark.get_position()
                     radius = getattr(landmark, "radius", None)
                     writer.writerow({"landmark name": landmark.name, 
-                                     "x": locale.str(position[0]), 
-                                     "y": locale.str(position[1]), 
-                                     "z": locale.str(position[2]),
-                                     "radius": locale.str(radius) if radius is not None else ""})
+                                     "x": _csv_number(position[0]), 
+                                     "y": _csv_number(position[1]), 
+                                     "z": _csv_number(position[2]),
+                                     "radius": _csv_number(radius) if radius is not None else ""})
 
 
     def _import_landmarks(self):
@@ -1812,14 +1851,14 @@ class MeasurementsPanel(qt.QWidget):
             return
         landmark_dict = {lm.name: lm for lm in self.landmarks}
         with open(file_name, 'r', newline='') as csvfile:
-            reader = csv.DictReader(csvfile, delimiter=';'
-                                    if locale.localeconv()['decimal_point'] == "," else ",", quoting=csv.QUOTE_MINIMAL)
+            reader = csv.DictReader(csvfile, delimiter=_csv_delimiter_for_file(csvfile),
+                                    quoting=csv.QUOTE_MINIMAL)
             for row in reader:
                 try:
                     name = row['landmark name']
-                    x = locale.atof(row['x'])
-                    y = locale.atof(row['y'])
-                    z = locale.atof(row['z'])
+                    x = _csv_float(row['x'])
+                    y = _csv_float(row['y'])
+                    z = _csv_float(row['z'])
                 except Exception as e:
                     errorDisplay("Invalid file. Must contain columns: 'landmark name', 'x', 'y', 'z'")
                     return
@@ -1833,7 +1872,7 @@ class MeasurementsPanel(qt.QWidget):
                 radius_text = row.get('radius') if hasattr(row, 'get') else None
                 if radius_text and hasattr(landmark, "set_radius"):
                     try:
-                        landmark.set_radius(locale.atof(radius_text))
+                        landmark.set_radius(_csv_float(radius_text))
                     except ValueError:
                         pass
         # force update
@@ -1847,15 +1886,15 @@ class MeasurementsPanel(qt.QWidget):
 
         with open(file_name, 'w+', newline='') as csvfile:
             fieldnames = ['measurement', 'value', 'description']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=';' 
-                                    if locale.localeconv()['decimal_point'] == "," else ",", quoting=csv.QUOTE_MINIMAL)
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=';'
+                                    if _csv_decimal() == "," else ",", quoting=csv.QUOTE_MINIMAL)
             writer.writeheader()
             for i in range(self.measurement_stack.count):
                 measurement = self.measurement_stack.widget(i).measurement
                 result_ready, result_value, result_string = measurement()
                 if result_ready:
                     writer.writerow({"measurement": measurement.name, 
-                                     "value": locale.str(result_value), 
+                                     "value": _csv_number(result_value), 
                                      "description": result_string})
         
 

@@ -19,6 +19,8 @@ def normalvector_of_two_vectors(plane_vector_1, plane_vector_2):
     return np.cross(plane_vector_1,plane_vector_2)
 
 def project_vector_to_plane_from_normal(normal, vector):
+    if np.linalg.norm(normal) < 1e-9:
+        raise ValueError("degenerate plane normal (landmarks coincide or are collinear)")
     normal_component = np.dot(normal, vector)/(np.linalg.norm(normal)**2) * normal
     return (vector - normal_component) # in-plane component
 
@@ -32,6 +34,10 @@ def angle(u,v):
     c = np.dot(u,v)
     d = np.linalg.norm(u)
     e = np.linalg.norm(v)
+    if d < 1e-6 or e < 1e-6:
+        # two landmarks at the same place / an axis parallel to the projection plane normal:
+        # a NaN would silently show as a wrong side label
+        raise ValueError("angle undefined - two landmarks coincide or an axis has no length in this plane")
     cos_angle = np.clip(c/(d*e), -1.0, 1.0)
     return math.acos(cos_angle)
 
