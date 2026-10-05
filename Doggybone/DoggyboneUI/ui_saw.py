@@ -280,7 +280,7 @@ class SawMixin:
         self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
         self.guide_status.setText(
             f"Saw box {label} adjusted in its cutting plane: turned {np.degrees(theta):+.1f}\N{DEGREE SIGN}, "
-            f"extended {du:+.1f} mm along the kerf, height {dv:+.1f} mm - press 'Extrude guide body' to "
+            f"extended {du:+.1f} mm along the kerf, height {dv:+.1f} mm - press 'Extrude' to "
             "rebuild the guide. The kerf stays exactly in the planned cut.")
 
     def _bridge_size(self):

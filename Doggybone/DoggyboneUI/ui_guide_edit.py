@@ -162,7 +162,7 @@ class GuideEditMixin:
             self.guide_status.setText(
                 f"Footprint suggested on the {self.guide_side_selector.currentText.lower()} side of the "
                 f"{side} {bone.lower()}: {int(selected.sum())} surface points, ~{area:.0f} mm\N{SUPERSCRIPT TWO}. "
-                f"Refine with brush / lasso, then 'Extrude guide body'." + (f"\n{pin_note}" if pin_note else ""))
+                f"Refine with brush / lasso, then 'Extrude'." + (f"\n{pin_note}" if pin_note else ""))
         finally:
             qt.QApplication.restoreOverrideCursor()
 
@@ -658,7 +658,7 @@ class GuideEditMixin:
     def onCleanGuide(self):
         body_node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
         if body_node is None or body_node.GetPolyData() is None or body_node.GetPolyData().GetNumberOfPoints() == 0:
-            self.guide_status.setText("No guide body - press 'Extrude guide body' first.")
+            self.guide_status.setText("No guide body - press 'Extrude' first.")
             return
         if self._guide_mode_is_reduction():
             side = self.osteotomy_side.currentText.lower()

@@ -648,6 +648,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_collapsible_button.collapsed = True
         guide_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         self.layout.addWidget(guide_collapsible_button)
+        self._guide_collapsible = guide_collapsible_button
         guide_layout = qt.QVBoxLayout(guide_collapsible_button)
         guide_info_label = qt.QLabel(
             "Footprint = coloured area on the bone surface where the guide sits. Paint it by hand "
@@ -655,8 +656,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "the view as needed), then extrude it into the guide body.")
         guide_info_label.setWordWrap(True)
         guide_layout.addWidget(guide_info_label)
+        self._guide_info_label = guide_info_label           # text follows the guide mode
 
         guide_form = qt.QFormLayout()
+        guide_form.setHorizontalSpacing(6)
         guide_layout.addLayout(guide_form)
         self.guide_mode_saw = qt.QRadioButton("2. Saw guide")
         self.guide_mode_reduction = qt.QRadioButton("1. Reduction guide")
@@ -708,10 +711,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.reduction_bar_diameter.setToolTip("Width of the webs joining the pin bosses.")
         for col, (label, field) in enumerate((("Height", self.reduction_standoff),
                                               ("Width", self.reduction_bar_diameter))):
-            reduction_grid.addWidget(qt.QLabel(label), 1, 2 * col)
             field.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             field.setMinimumWidth(55)
-            reduction_grid.addWidget(field, 1, 2 * col + 1)
         def row_spin(lo, hi, step, suffix, tip, decimals=1, special=None):
             box = qt.QDoubleSpinBox()
             box.setRange(lo, hi)
@@ -741,16 +742,6 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "to select it and move it with the small gizmo, click the selected pin again to remove it. "
             "Added or moved pins are kept when the rows are recalculated.")
         self.place_pin_rows_button.clicked.connect(self.onPlacePinRows)
-        reduction_grid.addWidget(qt.QLabel("Pins"), 2, 0)
-        reduction_grid.addWidget(self.pin_row_count, 2, 1)
-        reduction_grid.addWidget(qt.QLabel("Spacing"), 2, 2)
-        reduction_grid.addWidget(self.pin_row_spacing, 2, 3)
-        reduction_grid.addWidget(qt.QLabel("Prox."), 3, 0)
-        reduction_grid.addWidget(self.pin_row_distance_proximal, 3, 1)
-        reduction_grid.addWidget(qt.QLabel("Dist."), 3, 2)
-        reduction_grid.addWidget(self.pin_row_distance_distal, 3, 3)
-        self._reduction_diam_label = qt.QLabel("Pin size")        # pin diameter shown here in reduction mode
-        reduction_grid.addWidget(self._reduction_diam_label, 4, 0)
         self.pin_centre_checkbox = qt.QCheckBox("Centre in bone")
         self.pin_centre_checkbox.setChecked(False)
         self.pin_centre_checkbox.setToolTip(
@@ -759,18 +750,15 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "level along the bone). The automatic pin rows are always centred. All pins always stay "
             "parallel to each other and to the cut plane(s).")
         self.pin_centre_checkbox.setVisible(False)   # not offered: manual pins go exactly where they are put
-        reduction_grid.addWidget(self.place_pin_rows_button, 5, 0, 1, 2)
         self.reduction_delete_pins_button = qt.QPushButton("Delete pins")
         self.reduction_delete_pins_button.setToolTip("Delete all pins (and the reduction guide built on them).")
         self.reduction_delete_pins_button.clicked.connect(self.onDeletePins)
-        reduction_grid.addWidget(self.reduction_delete_pins_button, 5, 2, 1, 2)
-        self.reduction_ring_checkbox = qt.QCheckBox("Ring (closed frame around all pins)")
+        self.reduction_ring_checkbox = qt.QCheckBox("Ring frame")
         self.reduction_ring_checkbox.setChecked(True)
         self.reduction_ring_checkbox.setToolTip(
             "The webs run as a closed ring along the outline of all pins (plus links to inner pins) instead "
             "of a single chain - two bridges across the osteotomy, much stiffer against rotation and "
             "bending. Needs pins that do not all lie in one line.")
-        reduction_grid.addWidget(self.reduction_ring_checkbox, 6, 0, 1, 4)
         self.pin_row_pattern = qt.QComboBox()
         self.pin_row_pattern.addItems(["Row", "Staggered", "Manual"])
         self.pin_row_pattern.setCurrentIndex(1)
@@ -784,10 +772,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.reduction_filled_checkbox.setToolTip(
             "The whole area inside the ring becomes solid - stiffer, but it covers more bone (less room for "
             "the plate).")
-        reduction_grid.addWidget(qt.QLabel("Pin distrib."), 4, 2)
-        reduction_grid.addWidget(self.pin_row_pattern, 4, 3)
         self.reduction_filled_checkbox.setVisible(False)    # not offered (open ring only)
-        self.reduction_contact_only_checkbox = qt.QCheckBox("Bone contact only at the pins")
+        self.reduction_contact_only_checkbox = qt.QCheckBox("Contact only at pins")
         self.reduction_contact_only_checkbox.setChecked(True)
         self.reduction_contact_only_checkbox.setToolTip(
             "The guide touches the bone only with the small cylinders around the pins; the webs / ring / "
@@ -806,16 +792,51 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                                  "approach to the bone. The pins stay parallel to the cut (they can never meet the "
                                  "saw blade) and parallel to each other. + = pin heads towards proximal.", decimals=0)
         self.pin_tilt.setValue(0.0)
-        reduction_grid.addWidget(qt.QLabel("Pin tilt"), 7, 0)
-        reduction_grid.addWidget(self.pin_tilt, 7, 1)
-        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 8, 0, 1, 3)
-        reduction_grid.addWidget(self.reduction_clearance, 8, 3)
+        # layout: label | field | label | field - pairs of related values, then the two options, then
+        # the pin buttons (the guide parameters below use the same label width, so all fields line up)
+        self._reduction_labels = []
+
+        def red_label(text):
+            label = qt.QLabel(text)
+            self._reduction_labels.append(label)
+            return label
+        self._reduction_diam_label = red_label("Pin size")    # pin diameter field placed next to it in reduction mode
+        for row, (l1, f1, l2, f2) in enumerate((
+                ("Height", self.reduction_standoff, "Width", self.reduction_bar_diameter),
+                ("Pins", self.pin_row_count, "Spacing", self.pin_row_spacing),
+                ("Prox.", self.pin_row_distance_proximal, "Dist.", self.pin_row_distance_distal),
+                (None, None, "Pattern", self.pin_row_pattern),
+                ("Pin tilt", self.pin_tilt, "Clearance", self.reduction_clearance))):
+            if l1 is not None:
+                reduction_grid.addWidget(red_label(l1), row, 0)
+                reduction_grid.addWidget(f1, row, 1)
+            else:
+                reduction_grid.addWidget(self._reduction_diam_label, row, 0)
+            reduction_grid.addWidget(red_label(l2), row, 2)
+            reduction_grid.addWidget(f2, row, 3)
+        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 5, 0, 1, 2)
+        reduction_grid.addWidget(self.reduction_ring_checkbox, 5, 2, 1, 2)
+        self._reduction_pin_buttons = qt.QGridLayout()
+        self._reduction_pin_buttons.setContentsMargins(0, 0, 0, 0)
+        self._reduction_pin_buttons.setHorizontalSpacing(6)
+        self._reduction_pin_buttons.addWidget(self.place_pin_rows_button, 0, 0)
+        self._reduction_pin_buttons.addWidget(self.reduction_delete_pins_button, 0, 2)
+        for col in range(3):
+            self._reduction_pin_buttons.setColumnStretch(col, 1)
+        reduction_grid.addLayout(self._reduction_pin_buttons, 6, 0, 1, 4)
+        self.reduction_delete_pins_button.setText("Delete all")
+        self.pin_row_pattern.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.pin_row_pattern.setMinimumContentsLength(4)
+        self.reduction_contact_only_checkbox.setToolTip(
+            self.reduction_contact_only_checkbox.toolTip + " 'Clearance' sets that free space.")
+        self.reduction_ring_checkbox.setToolTip(
+            "Closed frame around all pins: " + self.reduction_ring_checkbox.toolTip)
         for box in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
                     self.pin_row_distance_distal, self.pin_tilt):
             box.valueChanged.connect(lambda _v: self._pin_rows_changed())
         self.reduction_type.currentIndexChanged.connect(lambda _i: self._update_guide_tool_visibility())
         # same look as the guide parameters below: label | field | label | field, two equal field
-        # columns, every field / button as high as 'Extrude guide body'
+        # columns, every field / button as high as 'Extrude'
         reduction_grid.setColumnStretch(1, 1)
         reduction_grid.setColumnStretch(3, 1)
         reduction_grid.setVerticalSpacing(2)
@@ -895,7 +916,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         brush_radius_layout = qt.QHBoxLayout()
         brush_radius_layout.setContentsMargins(0, 0, 0, 0)
         brush_radius_layout.setSpacing(6)
-        brush_radius_layout.addWidget(qt.QLabel("Brush size"))
+        self._brush_size_label = qt.QLabel("Brush size")
+        brush_radius_layout.addWidget(self._brush_size_label)
         brush_radius_layout.addWidget(self.guide_brush_radius, 1)
         self._brush_radius_widget = qt.QWidget()
         self._brush_radius_widget.setLayout(brush_radius_layout)
@@ -907,13 +929,16 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.guide_pins_delete_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         self.guide_pins_delete_button.clicked.connect(self.onDeletePins)
         tools_row.addWidget(self.guide_pins_delete_button, 3, 0)
-        self.guide_pin_delete_selected_button = qt.QPushButton("Delete selected pin")
+        self.guide_pin_delete_selected_button = qt.QPushButton("Delete pin")
         self.guide_pin_delete_selected_button.setToolTip(
             "Reduction guide: click a pin in the 3D view to select it (gizmo to move it), then delete it "
             "here or with the Delete key.")
         self.guide_pin_delete_selected_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         self.guide_pin_delete_selected_button.clicked.connect(self.onDeleteSelectedPin)
-        tools_row.addWidget(self.guide_pin_delete_selected_button, 3, 1)
+        # in the row of the reduction-guide pin buttons: Place pins | Delete pin | Delete all
+        self.guide_pin_delete_selected_button.setMinimumWidth(60)
+        self.guide_pin_delete_selected_button.setMinimumHeight(self._reduction_row_height)
+        self._reduction_pin_buttons.addWidget(self.guide_pin_delete_selected_button, 0, 1)
         tools_widget = qt.QWidget()
         tools_widget.setLayout(tools_row)
         guide_form.addRow(tools_widget)
@@ -993,6 +1018,14 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             fields_grid.addWidget(field, row, 2 * col + 1)
         fields_grid.setColumnStretch(1, 1)
         fields_grid.setColumnStretch(3, 1)
+        # one label width for both grids (reduction block above, parameters here): the fields of both
+        # line up in two equal columns
+        all_labels = (list(getattr(self, "_reduction_labels", [])) + [t for t, _f in self._guide_field_labels.values()]
+                      + ([self._brush_size_label] if getattr(self, "_brush_size_label", None) is not None else []))
+        label_width = max(label.sizeHint.width() for label in all_labels) if all_labels else 0
+        for label in all_labels:
+            label.setFixedWidth(label_width)
+        self._guide_label_width = label_width
         fields_widget = qt.QWidget()
         fields_widget.setLayout(fields_grid)
         guide_form.addRow(fields_widget)
@@ -1002,17 +1035,24 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.guide_export_button = qt.QPushButton("Export STL...")
         self.guide_export_button.setToolTip("Save the guide (body + saw blocks) as a binary STL in mm.")
         self.guide_export_button.clicked.connect(self.onExportGuideStl)
-        extrude_row = qt.QHBoxLayout()
-        extrude_row.setContentsMargins(0, 0, 0, 0)
-        extrude_row.addWidget(self.guide_extrude_button)
-        extrude_row.addWidget(self.guide_export_button)
-        self.guide_clean_button = qt.QPushButton("Clean up guide")
+        self.guide_clean_button = qt.QPushButton("Clean up")
         self.guide_clean_button.setToolTip(
             "Rebuild the guide as ONE clean, closed solid: all parts united, loose triangles and islands "
             "removed, broken edges closed, and the whole contact surface re-made as an even offset of the "
-            "bone (fit gap). Run it after 'Extrude guide body', before exporting.")
+            "bone (fit gap). Run it after 'Extrude', before exporting.")
         self.guide_clean_button.clicked.connect(self.onCleanGuide)
-        extrude_row.addWidget(self.guide_clean_button)
+        # workflow order, three equal buttons: Extrude -> Clean up -> Export
+        self.guide_extrude_button.setText("Extrude")
+        self.guide_extrude_button.setToolTip("Build the guide body (guide body, saw blocks / pin bosses, label).")
+        self.guide_export_button.setText("Export STL...")
+        extrude_row = qt.QGridLayout()
+        extrude_row.setContentsMargins(0, 0, 0, 0)
+        extrude_row.setHorizontalSpacing(6)
+        for col, button in enumerate((self.guide_extrude_button, self.guide_clean_button, self.guide_export_button)):
+            button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+            button.setMinimumWidth(60)
+            extrude_row.addWidget(button, 0, col)
+            extrude_row.setColumnStretch(col, 1)
         extrude_widget = qt.QWidget()
         extrude_widget.setLayout(extrude_row)
         guide_form.addRow(extrude_widget)
@@ -1021,7 +1061,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.guide_label_mode.setToolTip(
             "Patient no., bone, side and an arrow to proximal. 'Break-off tag': a small plate at the proximal "
             "end of the guide, joined by a thin neck - break it off with pliers when it is no longer needed. "
-            "'On the guide': raised text on a free flat area of the guide. Built with 'Extrude guide body'.")
+            "'On the guide': raised text on a free flat area of the guide. Built with 'Extrude'.")
         guide_form.addRow("Label", self.guide_label_mode)
         self.guide_opacity_slider = self._new_bone_opacity_slider()
         guide_form.addRow("Bone opacity", self.guide_opacity_slider)
@@ -1031,6 +1071,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.guide_status.setWordWrap(True)
         self.guide_status.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         guide_form.addRow("Status", self.guide_status)
+        # the form's own labels (Guide, Label, Bone opacity, Status) as wide as the grid labels:
+        # one common field column for the whole guide panel
+        for row in range(guide_form.rowCount()):
+            item = guide_form.itemAt(row, qt.QFormLayout.LabelRole)
+            if item is not None and item.widget() is not None and getattr(self, "_guide_label_width", 0):
+                item.widget().setFixedWidth(self._guide_label_width)
         self._guide_observers = []
         self._guide_drag = False
         self._guide_active_tool = None

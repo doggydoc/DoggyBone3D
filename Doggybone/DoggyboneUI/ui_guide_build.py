@@ -188,7 +188,7 @@ class GuideBuildMixin:
         software (PreForm, Chitubox, PrusaSlicer, ...) unites overlapping shells."""
         node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
         if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
-            self.guide_status.setText("No guide body yet - Extrude guide body first.")
+            self.guide_status.setText("No guide body yet - press Extrude first.")
             return
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText.lower()
@@ -462,7 +462,7 @@ class GuideBuildMixin:
         if getattr(self, "_reduction_row_height", None):
             field.setMinimumHeight(self._reduction_row_height)
         if self._guide_mode_is_reduction():
-            grid.addWidget(field, 4, 1)
+            grid.addWidget(field, 3, 1)
             param_label.setVisible(False)
             self._reduction_diam_label.setVisible(True)
         else:
@@ -514,6 +514,28 @@ class GuideBuildMixin:
                 if widget in (self.reduction_standoff, self.reduction_bar_diameter) or (
                         isinstance(widget, qt.QLabel) and widget.text in ("Height", "Width")):
                     widget.setVisible(full)
+        info = getattr(self, "_guide_info_label", None)
+        if info is not None:
+            info.setText(
+                "Reduction guide: place the pins on the corrected bone ('Place pins', click a pin to move "
+                "it), then 'Extrude'. The saw guide takes these pins over."
+                if self._guide_mode_is_reduction() else
+                "Footprint = coloured area on the bone surface where the guide sits. Paint it by hand "
+                "with Brush + / Lasso + anywhere on the outer bone surface around the osteotomy (rotate "
+                "the view as needed), then 'Extrude'.")
+        qt.QTimer.singleShot(0, self._relayout_guide_panel)
+
+    def _relayout_guide_panel(self):
+        """After widgets were shown / hidden: lay the guide panel out again at once (otherwise the
+        rows keep their old, too small height until the panel is resized - fields overlap)."""
+        box = getattr(self, "_guide_collapsible", None)
+        if box is None or box.layout() is None:
+            return
+        for widget in (getattr(self, "reduction_options_widget", None), box):
+            if widget is not None:
+                widget.updateGeometry()
+        box.layout().invalidate()
+        box.layout().activate()
 
     def onGuideModeChanged(self):
         mode = "reduction" if self.guide_mode_reduction.checked else "saw"
@@ -578,7 +600,7 @@ class GuideBuildMixin:
             problems.append("no corrected bone (run the correction preview)")
         self.guide_status.setText(
             "Reduction guide: 'Place pins' on the corrected bone (click a pin to move it), then "
-            "'Extrude guide body'. The saw guide takes these pins over, pre-angled."
+            "'Extrude'. The saw guide takes these pins over, pre-angled."
             + (("\nMissing: " + "; ".join(problems)) if problems else ""))
 
     def _guide_source_polydata(self):

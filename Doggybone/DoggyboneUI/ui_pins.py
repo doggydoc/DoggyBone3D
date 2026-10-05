@@ -635,7 +635,7 @@ class PinsMixin:
                 f"from the cut, spacing {spacing:.1f} mm - "
                 + ("staggered to both sides of the bone centre" if self._pin_row_staggered() else "centred")
                 + ", parallel to each other and to the cut plane(s). Drag the row handles along the bone to "
-                "adjust, then 'Extrude guide body'.")
+                "adjust, then 'Extrude'.")
         if getattr(self, "_pin_tilt_note", ""):
             text += "\n" + self._pin_tilt_note
         moved_on = [f"{k} +{v:.1f} mm" for k, v in shifted.items() if v > 0.0]
@@ -1168,7 +1168,7 @@ class PinsMixin:
             self.guide_status.setStyleSheet("")
             self.guide_status.setText(
                 f"Pin {node.GetNthControlPointLabel(index)} selected - move it with the gizmo above it (it "
-                "stays parallel); 'Delete selected pin' or the Delete key removes it, a click elsewhere "
+                "stays parallel); 'Delete pin' or the Delete key removes it, a click elsewhere "
                 "deselects it.")
 
     def _pin_gizmo_axes(self, segment):
@@ -1352,7 +1352,7 @@ class PinsMixin:
         label = node.GetNthControlPointLabel(index)
         text = (f"Pin {label} moved ({pin['segment']} fragment, {'centred' if centred else 'free'}), "
                 f"{pin['bone_length']:.1f} mm in bone, parallel to the other pins. Rebuild the guide "
-                "('Extrude guide body') when all pins are placed."
+                "('Extrude') when all pins are placed."
                 + (f"\nPushed {shift:.1f} mm away from the cut so the saw guide can take it." if shift > 0 else ""))
         if ok_segment is None:
             self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
@@ -1447,7 +1447,7 @@ class PinsMixin:
                 self._relabel_pins(node)
                 self._pins_dirty = True
                 self.guide_status.setText(f"Pin removed ({node.GetNumberOfControlPoints()} marked). "
-                                          "Extrude guide body to update the sleeves.")
+                                          "Press Extrude to update the sleeves.")
                 return
         segment, reason = self._pin_segment(p)
         if segment is None:
@@ -1460,7 +1460,7 @@ class PinsMixin:
         self._pin_feedback(None, p, ok=True)
         self.guide_status.setText(f"Pin {node.GetNthControlPointLabel(index)} marked ({segment}); "
                                   f"{node.GetNumberOfControlPoints()} marked. Mark further pins, then "
-                                  "Extrude guide body to build sleeves and bores.")
+                                  "press Extrude to build sleeves and bores.")
 
     @staticmethod
     def _relabel_pins(node):
