@@ -314,7 +314,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.export_bone_button.setToolTip(
             "Save the segmented bone (as shown, after the clean-up) as a binary STL in mm - e.g. to print "
             "a bone model for test-fitting the guides. Coordinates as in the CT (not moved).")
-        self.export_bone_button.clicked.connect(self.onExportBoneStl)
+        self.export_bone_button.clicked.connect(lambda: self.onExportBoneStl(self.segmentation_status))
         segmentation_form_layout.addRow("Export", self.export_bone_button)
 
         # A VISIBLE, compact Segment Editor: interactive effects such as the Scissors/lasso only
@@ -1047,18 +1047,26 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "removed, broken edges closed, and the whole contact surface re-made as an even offset of the "
             "bone (fit gap). Run it after 'Extrude', before exporting.")
         self.guide_clean_button.clicked.connect(self.onCleanGuide)
-        # workflow order, three equal buttons: Extrude -> Clean up -> Export
+        # workflow order: Extrude | Clean up, below Export guide STL | Export bone STL
         self.guide_extrude_button.setText("Extrude")
         self.guide_extrude_button.setToolTip("Build the guide body (guide body, saw blocks / pin bosses, label).")
-        self.guide_export_button.setText("Export STL...")
+        self.guide_export_button.setText("Export guide STL...")
+        self.guide_export_bone_button = qt.QPushButton("Export bone STL...")
+        self.guide_export_bone_button.setToolTip(
+            "Save the segmented bone as a binary STL in mm (CT coordinates) - e.g. to print a bone model "
+            "for test-fitting the guide.")
+        self.guide_export_bone_button.clicked.connect(lambda: self.onExportBoneStl(self.guide_status))
         extrude_row = qt.QGridLayout()
         extrude_row.setContentsMargins(0, 0, 0, 0)
         extrude_row.setHorizontalSpacing(6)
-        for col, button in enumerate((self.guide_extrude_button, self.guide_clean_button, self.guide_export_button)):
+        extrude_row.setVerticalSpacing(2)
+        for index, button in enumerate((self.guide_extrude_button, self.guide_clean_button,
+                                        self.guide_export_button, self.guide_export_bone_button)):
             button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             button.setMinimumWidth(60)
-            extrude_row.addWidget(button, 0, col)
-            extrude_row.setColumnStretch(col, 1)
+            extrude_row.addWidget(button, index // 2, index % 2)
+        extrude_row.setColumnStretch(0, 1)
+        extrude_row.setColumnStretch(1, 1)
         extrude_widget = qt.QWidget()
         extrude_widget.setLayout(extrude_row)
         guide_form.addRow(extrude_widget)
@@ -1115,12 +1123,14 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         except Exception as e:
             self.correction_status.setText(f"Screenshot failed: {e}")
 
-    def onExportBoneStl(self):
+    def onExportBoneStl(self, status=None):
         """Binary STL of the segmented bone (the closed surface of the Doggybone segmentation) in mm,
-        in the CT coordinates."""
+        in the CT coordinates. status: the label for the result (segmentation or guide panel)."""
+        if not hasattr(status, "setText"):
+            status = self.segmentation_status
         polydata = self._get_bone_polydata()
         if polydata is None or polydata.GetNumberOfPoints() == 0:
-            self.segmentation_status.setText("No bone segmentation to export - segment the bone first.")
+            status.setText("No bone segmentation to export - segment the bone first.")
             return
         number = self.patient_number.text.strip() if getattr(self, "patient_number", None) else ""
         name = self.patient_name.text.strip() if getattr(self, "patient_name", None) else ""
@@ -1140,11 +1150,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         writer.SetFileName(path)
         writer.SetFileTypeToBinary()
         if not writer.Write():
-            self.segmentation_status.setText(f"Export failed: {path}")
+            status.setText(f"Export failed: {path}")
             return
         self._last_stl_dir = os.path.dirname(path)
         b = polydata.GetBounds()
-        self.segmentation_status.setText(
+        status.setText(
             f"Bone exported: {path}\n({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x {b[5] - b[4]:.1f} mm, "
             f"{polydata.GetNumberOfCells()} triangles)")
 
