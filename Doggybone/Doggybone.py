@@ -310,6 +310,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         islands_row_widget = qt.QWidget()
         islands_row_widget.setLayout(islands_row)
         segmentation_form_layout.addRow("Small islands", islands_row_widget)
+        self.export_bone_button = qt.QPushButton("Export bone STL...")
+        self.export_bone_button.setToolTip(
+            "Save the segmented bone (as shown, after the clean-up) as a binary STL in mm - e.g. to print "
+            "a bone model for test-fitting the guides. Coordinates as in the CT (not moved).")
+        self.export_bone_button.clicked.connect(self.onExportBoneStl)
+        segmentation_form_layout.addRow("Export", self.export_bone_button)
 
         # A VISIBLE, compact Segment Editor: interactive effects such as the Scissors/lasso only
         # receive the view's mouse events when their editor widget is part of the GUI. Only the
@@ -1108,6 +1114,39 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             self.correction_status.setText(f"Screenshot saved: {file_name}")
         except Exception as e:
             self.correction_status.setText(f"Screenshot failed: {e}")
+
+    def onExportBoneStl(self):
+        """Binary STL of the segmented bone (the closed surface of the Doggybone segmentation) in mm,
+        in the CT coordinates."""
+        polydata = self._get_bone_polydata()
+        if polydata is None or polydata.GetNumberOfPoints() == 0:
+            self.segmentation_status.setText("No bone segmentation to export - segment the bone first.")
+            return
+        number = self.patient_number.text.strip() if getattr(self, "patient_number", None) else ""
+        name = self.patient_name.text.strip() if getattr(self, "patient_name", None) else ""
+        prefix = "_".join(part for part in (number, name) if part)
+        default_name = (f"{prefix}_" if prefix else "") + "Doggybone_bone.stl"
+        start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
+        path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export segmented bone",
+                                              os.path.join(start_dir, default_name), "STL (*.stl)")
+        if not path:
+            return
+        if not path.lower().endswith(".stl"):
+            path += ".stl"
+        triangles = vtk.vtkTriangleFilter()
+        triangles.SetInputData(polydata)
+        writer = vtk.vtkSTLWriter()
+        writer.SetInputConnection(triangles.GetOutputPort())
+        writer.SetFileName(path)
+        writer.SetFileTypeToBinary()
+        if not writer.Write():
+            self.segmentation_status.setText(f"Export failed: {path}")
+            return
+        self._last_stl_dir = os.path.dirname(path)
+        b = polydata.GetBounds()
+        self.segmentation_status.setText(
+            f"Bone exported: {path}\n({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x {b[5] - b[4]:.1f} mm, "
+            f"{polydata.GetNumberOfCells()} triangles)")
 
     def _ensure_landmark_observers(self):
         """Observe the landmark node of BOTH sides - also a node that was created later (new case,
