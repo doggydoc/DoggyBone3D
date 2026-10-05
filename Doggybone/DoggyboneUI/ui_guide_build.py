@@ -191,8 +191,9 @@ class GuideBuildMixin:
             self.guide_status.setText("No guide body yet - press Extrude first.")
             return
         bone = "fem" if self.osteotomy_bone.currentText == "Femur" else "tib"
+        side = "dx" if self.osteotomy_side.currentText == "Right" else "sx"
         kind = "red" if self._guide_mode_is_reduction() else "cut"
-        default_name = self._export_file_name(bone, kind)          # name-number-fem/tib-red/cut.stl
+        default_name = self._export_file_name(bone, side, kind)    # name-number-fem/tib-dx/sx-red/cut.stl
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
         path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export cutting guide",
                                               os.path.join(start_dir, default_name), "STL (*.stl)")

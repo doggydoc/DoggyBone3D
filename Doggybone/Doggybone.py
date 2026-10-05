@@ -1124,8 +1124,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             self.correction_status.setText(f"Screenshot failed: {e}")
 
     def _export_file_name(self, *parts):
-        """Default STL file name: patient name - patient number - parts ('fem' / 'tib', 'red' / 'cut'),
-        e.g. 'Bello-1234-fem-cut.stl'; the bone alone: 'Bello-1234.stl'. Empty fields are left out,
+        """Default STL file name: patient name - patient number - parts ('fem' / 'tib', 'dx' / 'sx',
+        'red' / 'cut'), e.g. 'Bello-1234-fem-dx-cut.stl'; the bone alone: 'Bello-1234.stl'. Empty fields are left out,
         characters not allowed in file names are replaced."""
         name = self.patient_name.text.strip() if getattr(self, "patient_name", None) else ""
         number = self.patient_number.text.strip() if getattr(self, "patient_number", None) else ""
