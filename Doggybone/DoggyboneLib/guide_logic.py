@@ -11,6 +11,7 @@ The footprint is a per-vertex selection on the bone SURFACE mesh (no voxel volum
 suggested automatically, edited with brush / lasso tools, and finally extruded into a closed
 guide body (lifted off the bone by a fit gap, fixed wall thickness).
 """
+import time
 import numpy as np
 import vtk
 from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk, numpy_to_vtkIdTypeArray
@@ -647,6 +648,7 @@ SLOT_MARGIN = 1.5        # slot longer than the bone on each side
 BLOCK_HEIGHT = 10.0      # top of the saw block above the highest bone point under it
 BLOCK_MAX_DEPTH = 22.0   # block never reaches further down than this below its top
 BRIDGE_WIDTH = 2.0       # closed slot ends / break-off bridges (along the slot)
+BLOCK_WALL = 3.5         # block guide (open face instead of a slot): wall thickness behind the cutting face
 BREAK_BRIDGE_LENGTH = 1.5   # saw block pair: break-off bridge at each END of each kerf, along the kerf (mm)
 BREAK_BRIDGE_HEIGHT = 1.5   # ... and its height below the top of the block (mm) - snaps off with pliers
 BRIDGE_HEIGHT = 3.0          # minimum height of a bridge (mm)
@@ -720,7 +722,8 @@ def contour_diameter(contour, normal):
     return 0.5 * (float(np.ptp(Q @ vt[0])) + float(np.ptp(Q @ vt[1])))
 
 
-def plan_slot(bone_points, contour, origin, normal, other_plane, v_hint, gap, adjust=None):
+def plan_slot(bone_points, contour, origin, normal, other_plane, v_hint, gap, adjust=None, margin=None,
+              near_fraction=None):
     """Geometry of one slot + saw block (dict) or {'error': ...}.
     Frame: C = slot centre, n = plane normal, v = saw direction (bone -> guide), u = n x v."""
     o = np.asarray(origin, float)
@@ -764,7 +767,15 @@ def plan_slot(bone_points, contour, origin, normal, other_plane, v_hint, gap, ad
     C = c + side * half * nn
     rel_contour = contour - C
     us = rel_contour @ u
-    u0, u1 = float(us.min()) - SLOT_MARGIN, float(us.max()) + SLOT_MARGIN
+    # slot length: the whole cross-section (default) or only its part on the guide side
+    # (near_fraction of the section depth, measured from the cortex the guide sits on)
+    if near_fraction is not None and 0.0 < float(near_fraction) < 1.0:
+        vs = rel_contour @ v
+        near = vs >= float(vs.max()) - float(near_fraction) * float(vs.max() - vs.min())
+        if near.sum() >= 2:
+            us = us[near]
+    m = SLOT_MARGIN if margin is None else float(margin)
+    u0, u1 = float(us.min()) - m, float(us.max()) + m
     du = float(adjust.get("du", 0.0))            # the box is extended in the dragged direction, never shortened
     u0, u1 = min(u0, u0 + du), max(u1, u1 + du)
     ua, ub = u0 - BRIDGE_WIDTH, u1 + BRIDGE_WIDTH
@@ -893,27 +904,31 @@ def _finish_shell(raw):
     return out
 
 
-def saw_block_shells(slot, other=None):
+def saw_block_shells(slot, other=None, block_side=None):
     """Closed shells of the saw block: two plates (underside follows the bone) and two end caps.
     Every part is built from the slot face OUTWARD, so the slot walls are exact; wedge-side parts
-    are clamped at the neighbouring slot (other)."""
+    are clamped at the neighbouring slot (other).
+    block_side (+1 / -1 along the slot normal): block guide - ONE plate on that side only, the blade
+    runs along its face (no slot, no end caps)."""
     half = 0.5 * SLOT_WIDTH
     nn = slot["normal"]
     ub_, bot, top = slot["ubins"], slot["bottom"], slot["v_top"]
     m = len(ub_)
     wedge_dir = slot["side"] if slot["side"] != 0 else None
     shells = []
-    for sgn in (1.0, -1.0):
+    for sgn in ((float(block_side),) if block_side else (1.0, -1.0)):
         P = np.vstack([_frame_points(slot, ub_, bot, np.full(m, sgn * half)),
                        _frame_points(slot, ub_, np.full(m, top), np.full(m, sgn * half))])
         tris = []
         for k in range(m - 1):
             a, b, c2, d = k, k + 1, m + k + 1, m + k
             tris += [(a, b, c2), (a, c2, d)]
-        raw = _extrude_sheet_raw(P, tris, sgn * SLOT_WALL * nn)
+        raw = _extrude_sheet_raw(P, tris, sgn * (BLOCK_WALL if block_side else SLOT_WALL) * nn)
         if other is not None and wedge_dir is not None and sgn == wedge_dir:
             _clamp_far_layer(raw, len(P), sgn * nn, other)
         shells.append(_finish_shell(raw))
+    if block_side:
+        return shells
     # end caps (break-off bridges): from the kept-side outer face across the slot to the wedge side;
     # top BRIDGE_FRACTION of the local block height, open below (towards the bone)
     start = -(wedge_dir or 1.0)
@@ -927,6 +942,72 @@ def saw_block_shells(slot, other=None):
             _clamp_far_layer(raw, 4, -start * nn, other)
         shells.append(_finish_shell(raw))
     return shells
+
+
+def cut_wedge_window(patch, slot_a, slot_b, extra=0.0):
+    """Block guide: clip the whole wedge between the two cutting faces (along the saw path u0..u1)
+    out of the footprint patch, `extra` mm wider on both faces."""
+    region = vtk.vtkImplicitBoolean()
+    region.SetOperationTypeToIntersection()            # inside = all functions < 0
+    half = 0.5 * SLOT_WIDTH + float(extra)
+    for slot in (slot_a, slot_b):
+        C, nn, side = np.asarray(slot["centre"], float), np.asarray(slot["normal"], float), float(slot.get("side") or 1.0)
+        plane = vtk.vtkPlane()                         # f = -side * s - half  (< 0 on the wedge side)
+        plane.SetOrigin(*(C - side * half * nn).tolist())
+        plane.SetNormal(*(-side * nn).tolist())
+        region.AddFunction(plane)
+    C, u = np.asarray(slot_a["centre"], float), np.asarray(slot_a["u"], float)
+    for value, direction in ((float(slot_a["u0"]), -1.0), (float(slot_a["u1"]), 1.0)):
+        plane = vtk.vtkPlane()
+        plane.SetOrigin(*(C + value * u).tolist())
+        plane.SetNormal(*(direction * u).tolist())
+        region.AddFunction(plane)
+    clip = vtk.vtkClipPolyData()
+    clip.SetInputData(patch)
+    clip.SetClipFunction(region)
+    clip.SetValue(0.0)                                 # keep outside of the wedge
+    tri = vtk.vtkTriangleFilter()
+    tri.SetInputConnection(clip.GetOutputPort())
+    clean = vtk.vtkCleanPolyData()
+    clean.SetInputConnection(tri.GetOutputPort())
+    clean.Update()
+    only_triangles = vtk.vtkPolyData()
+    only_triangles.SetPoints(clean.GetOutput().GetPoints())
+    only_triangles.SetPolys(clean.GetOutput().GetPolys())
+    only_triangles.GetPointData().ShallowCopy(clean.GetOutput().GetPointData())   # keep the normals
+    compact = vtk.vtkCleanPolyData()
+    compact.SetInputData(only_triangles)
+    compact.SetTolerance(0.0)
+    compact.Update()
+    result = vtk.vtkPolyData()
+    result.DeepCopy(compact.GetOutput())
+    return result
+
+
+def push_out_of_wedge(shell, slot_a, slot_b, clearance=0.05):
+    """Block guide: vertices of the extruded body that lean into the open wedge (u0..u1) are moved
+    onto the nearer cutting face. Topology unchanged."""
+    from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
+    P = vtk_to_numpy(shell.GetPoints().GetData()).astype(float).copy()
+    half = 0.5 * SLOT_WIDTH + float(clearance)
+    depth = []
+    for slot in (slot_a, slot_b):
+        C, nn, side = np.asarray(slot["centre"], float), np.asarray(slot["normal"], float), float(slot.get("side") or 1.0)
+        depth.append((side * ((P - C) @ nn) + half, nn, side))      # > 0: on the wedge side of this face
+    uu = (P - np.asarray(slot_a["centre"], float)) @ np.asarray(slot_a["u"], float)
+    inside = (depth[0][0] > 0) & (depth[1][0] > 0) & (uu >= float(slot_a["u0"])) & (uu <= float(slot_a["u1"]))
+    if not np.any(inside):
+        return shell, 0
+    nearer_a = depth[0][0] <= depth[1][0]
+    for k, (d, nn, side) in enumerate(depth):
+        sel = inside & (nearer_a if k == 0 else ~nearer_a)
+        P[sel] -= np.outer(d[sel] * side, nn)
+    points = vtk.vtkPoints()
+    points.SetData(numpy_to_vtk(np.ascontiguousarray(P), deep=True))
+    out = vtk.vtkPolyData()
+    out.DeepCopy(shell)
+    out.SetPoints(points)
+    return out, int(np.count_nonzero(inside))
 
 
 def cut_slot_holes(patch, slots, extra=0.0):
@@ -1433,7 +1514,7 @@ def tip_bridge_shell(slot_a, slot_b):
 # Pins of the moving segment are pre-angled with the inverse correction, so after the reduction
 # every pin is parallel. Each pin gets a sleeve (bore = pin + clearance, wall SLEEVE_WALL) standing
 # on the bone; the guide body gets a clean hole underneath (clipped, extruded along the pin axis).
-PIN_CLEARANCE = 0.15
+PIN_CLEARANCE = 0.10          # bore = pin diameter + 0.1 mm (diametral play)
 SLEEVE_WALL = 2.0
 SLEEVE_SEGMENTS = 32
 
@@ -1495,8 +1576,14 @@ def sleeve_shell(obb, pin, gap):
             hits = line_hits(obb, base + (t_top + 5.0) * a, base - 25.0 * a)
             t_bottom = float((hits[0] - entry) @ a) + gap if len(hits) else gap
             t_bottom = min(t_bottom, t_top - 1.0)
-            bottom.append(base + t_bottom * a)
+            bottom.append(t_bottom)
             upper.append(base + t_top * a)
+        # a ring sample that misses the bone (sleeve at the bone edge) would hit something far below
+        # (fibula, malleolus) and draw a long spike - keep the bottom within 3 mm of the ring's median
+        t_b = np.array(bottom)
+        t_b = np.maximum(t_b, float(np.median(t_b)) - 3.0)
+        bottom = [entry + r * (np.cos(2.0 * np.pi * k / m) * e1 + np.sin(2.0 * np.pi * k / m) * e2) + t_b[k] * a
+                  for k in range(m)]
         rings.append((np.array(bottom), np.array(upper)))
     (ob, ot), (ib, it) = rings
     P = np.vstack([ob, ot, it, ib])           # blocks of m points
@@ -1511,6 +1598,91 @@ def sleeve_shell(obb, pin, gap):
     pts = vtk.vtkPoints()
     pts.SetData(numpy_to_vtk(np.ascontiguousarray(P), deep=True))
     poly.SetPoints(pts)
+    cells = vtk.vtkCellArray()
+    for t in tris:
+        cells.InsertNextCell(3)
+        for q in t:
+            cells.InsertCellPoint(int(q))
+    poly.SetPolys(cells)
+    nrm = vtk.vtkPolyDataNormals()
+    nrm.SetInputData(poly)
+    nrm.ConsistencyOn()
+    nrm.AutoOrientNormalsOn()
+    nrm.SplittingOff()
+    nrm.Update()
+    out = vtk.vtkPolyData()
+    out.DeepCopy(nrm.GetOutput())
+    return out
+
+
+def sleeve_post(obb, pin, gap, body_thickness, fillet=1.5, arc_steps=6):
+    """Pin sleeve with a solid COLLAR and a concave (positive) fillet where it meets the guide body:
+    from the bone (+ gap) up to the body surface (bone + gap + body_thickness) the post has the
+    radius r_out + fillet - it fills the hole cut into the body around the pin completely (no ragged
+    rim) - then a quarter-circle fillet runs it down to r_out, the plain sleeve continues to the top.
+    The bore (r_in) stays open over the whole length. Closed, consistently oriented surface."""
+    a = unit(np.asarray(pin["axis"], float))
+    e1, e2 = _perp_frame(a)
+    entry, top = np.asarray(pin["entry"], float), np.asarray(pin["top"], float)
+    t_top = float((top - entry) @ a)
+    r_in, r_out = float(pin["r_in"]), float(pin["r_out"])
+    m = SLEEVE_SEGMENTS
+
+    def bottoms(r):
+        t = []
+        for k in range(m):
+            ang = 2.0 * np.pi * k / m
+            base = entry + r * (np.cos(ang) * e1 + np.sin(ang) * e2)
+            hits = line_hits(obb, base + (t_top + 5.0) * a, base - 25.0 * a)
+            t.append(float((hits[0] - entry) @ a) + gap if len(hits) else gap)
+        t = np.minimum(np.array(t), t_top - 1.0)
+        return np.maximum(t, float(np.median(t)) - 3.0)       # no spikes where a ray misses the bone
+    f = max(0.0, float(fillet))
+    t_out = bottoms(r_out + f)
+    t_inner = bottoms(r_in)
+    # profile of the outer wall per angle: (t, r) from the bone to the top
+    profiles = []
+    for k in range(m):
+        t0 = float(t_out[k])
+        t_body = min(t0 + float(body_thickness), t_top - 0.5)
+        f_k = max(0.0, min(f, t_top - 0.3 - t_body))
+        prof = [(t0, r_out + f_k), (t_body, r_out + f_k)]
+        for j in range(1, arc_steps + 1):
+            phi = 0.5 * np.pi * j / arc_steps
+            # concave quarter circle centred at (t_body + f, r_out + f): r = r_out + f - f*sin(phi)
+            prof.append((t_body + f_k * (1.0 - np.cos(phi)), r_out + f_k - f_k * np.sin(phi)))
+        prof.append((t_top, r_out))
+        profiles.append(prof)
+    L = len(profiles[0])
+    pts = []
+    for level in range(L):
+        for k in range(m):
+            ang = 2.0 * np.pi * k / m
+            radial = np.cos(ang) * e1 + np.sin(ang) * e2
+            t, r = profiles[k][level]
+            pts.append(entry + r * radial + t * a)
+    IT, IB = L * m, L * m + m                                   # inner (bore) rings: top, bottom
+    for k in range(m):
+        ang = 2.0 * np.pi * k / m
+        pts.append(entry + r_in * (np.cos(ang) * e1 + np.sin(ang) * e2) + t_top * a)
+    for k in range(m):
+        ang = 2.0 * np.pi * k / m
+        pts.append(entry + r_in * (np.cos(ang) * e1 + np.sin(ang) * e2) + float(t_inner[k]) * a)
+    tris = []
+    for k in range(m):
+        k1 = (k + 1) % m
+        for level in range(L - 1):                              # outer wall, bottom -> top
+            a0, a1 = level * m + k, level * m + k1
+            b0, b1 = (level + 1) * m + k, (level + 1) * m + k1
+            tris += [(a0, a1, b1), (a0, b1, b0)]
+        top0, top1 = (L - 1) * m + k, (L - 1) * m + k1          # top annulus
+        tris += [(top0, top1, IT + k1), (top0, IT + k1, IT + k)]
+        tris += [(IT + k, IT + k1, IB + k1), (IT + k, IB + k1, IB + k)]      # bore
+        tris += [(IB + k, IB + k1, k1), (IB + k, k1, k)]                     # bottom annulus
+    poly = vtk.vtkPolyData()
+    vp = vtk.vtkPoints()
+    vp.SetData(numpy_to_vtk(np.ascontiguousarray(np.array(pts, float)), deep=True))
+    poly.SetPoints(vp)
     cells = vtk.vtkCellArray()
     for t in tris:
         cells.InsertNextCell(3)
@@ -2042,7 +2214,7 @@ def push_out_of_kerfs(shell, slots, clearance=0.05):
     return shell, 0
 
 
-def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.3):
+def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.3, block=False):
     """ONE saw block for both cuts (closing wedge): the outer faces of the two blocks are extended until
     they close each other (no crossing plates, no mirrored remnants), the space between the blocks is
     filled, the underside follows the bone (+gap). Both kerfs run through the whole block (open at the
@@ -2052,7 +2224,9 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.3):
     from vtk.util.numpy_support import numpy_to_vtk as _n2v
     from scipy.ndimage import distance_transform_edt
     half = 0.5 * SLOT_WIDTH
-    outer = half + SLOT_WALL
+    # block guide: no slots - the whole wedge between the two cutting faces is open, the blade runs
+    # along each face (the kerf lies in the wedge); thicker walls behind the faces
+    outer = half + (BLOCK_WALL if block else SLOT_WALL)
     slots = (slot_a, slot_b)
     frames = []
     for slot in slots:
@@ -2121,22 +2295,34 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.3):
         f_u = np.full(AA.shape, np.inf)
         f_top = np.full(AA.shape, -np.inf)
         kerf = np.full(AA.shape, np.inf)
+        plates = np.full(AA.shape, np.inf)
         normals_dist = []
         for C, u, v, n, side, ua, ub, u0, u1, top, hb in frames:
             rel = X - C
             s_n = rel @ n
             s_v = rel @ v
             f_outer = np.maximum(f_outer, -side * s_n - outer)            # not beyond the kept-side face
+            # the OUTER wall of this cut (behind its kerf, away from the wedge) on its own - kept even
+            # where the two cuts cross inside the block and the wedge between them flips over
+            plates = np.minimum(plates, np.maximum(-side * s_n - outer, side * s_n))
             f_top = np.maximum(f_top, s_v - top)
             normals_dist.append(s_n)
+        f_outer = np.minimum(f_outer, plates)
         # kerfs through the WHOLE block (open at the sides, from the bone to the top) except a SMALL
         # break-off bridge at each end of each kerf: BREAK_BRIDGE_LENGTH along the kerf and
         # BREAK_BRIDGE_HEIGHT below the ACTUAL top of the block (the top of the whole block, which may be
         # set by the other slot) - the halves hang together only at these four corners
         at_end = np.minimum(AA - (a_lo + BREAK_BRIDGE_LENGTH), (a_hi - BREAK_BRIDGE_LENGTH) - AA)    # < 0 at an end
         bridge = np.maximum(at_end, -f_top - BREAK_BRIDGE_HEIGHT)                                  # <= 0 in a bridge
-        for s_n in normals_dist:
-            kerf = np.minimum(kerf, np.maximum(np.abs(s_n) - half, -bridge))
+        if block:
+            # open window = the wedge between both cutting faces (side * s_n > -half for both slots)
+            window = np.full(AA.shape, -np.inf)
+            for (C, u, v, n, side, ua, ub, u0, u1, top, hb), s_n in zip(frames, normals_dist):
+                window = np.maximum(window, -side * s_n - half)
+            kerf = np.maximum(window, -bridge)
+        else:
+            for s_n in normals_dist:
+                kerf = np.minimum(kerf, np.maximum(np.abs(s_n) - half, -bridge))
         f_u = np.maximum(a_lo - AA, AA - a_hi)                           # common block length
         solid = np.maximum(np.maximum(f_outer, f_u), np.maximum(f_top, seat - b))
         sdf[:, jb, :] = np.maximum(solid, -kerf)
@@ -2707,3 +2893,502 @@ def clean_guide(guide, bone, gap, voxel=0.15, min_island=20.0, smooth=True, bone
                 islands_dropped=dropped, bone_voxels_removed=removed_bone,
                 open_edges=open_edge_count(out), volume_mm3=float(solid.sum()) * voxel ** 3)
     return out, info
+
+
+# ---------------------------------------------------------------------------------------------
+# Volume guide body: a shell built from the DISTANCE FIELD of the bone around the painted contact
+# region - grows away from the bone in every direction (several sides of the bone at once), the
+# inner surface follows the bone exactly at the fit gap, closed by construction (one iso-surface).
+# ---------------------------------------------------------------------------------------------
+
+def _poly_to_local(poly, R):
+    m = vtk.vtkMatrix4x4()
+    for r in range(3):
+        for c in range(3):
+            m.SetElement(r, c, float(R[r, c]))
+    tf = vtk.vtkTransform()
+    tf.SetMatrix(m)
+    f = vtk.vtkTransformPolyDataFilter()
+    f.SetInputData(poly)
+    f.SetTransform(tf)
+    f.Update()
+    out = vtk.vtkPolyData()
+    out.DeepCopy(f.GetOutput())
+    return out
+
+
+def _rasterize_closed(poly_local, origin, voxel, dims):
+    """bool[x, y, z]: voxels inside the closed surface poly_local (local frame)."""
+    stencil = vtk.vtkPolyDataToImageStencil()
+    stencil.SetInputData(poly_local)
+    stencil.SetOutputOrigin(*[float(v) for v in origin])
+    stencil.SetOutputSpacing(voxel, voxel, voxel)
+    stencil.SetOutputWholeExtent(0, int(dims[0]) - 1, 0, int(dims[1]) - 1, 0, int(dims[2]) - 1)
+    stencil.Update()
+    conv = vtk.vtkImageStencilToImage()
+    conv.SetInputConnection(stencil.GetOutputPort())
+    conv.SetInsideValue(1)
+    conv.SetOutsideValue(0)
+    conv.SetOutputScalarTypeToUnsignedChar()
+    conv.Update()
+    arr = vtk_to_numpy(conv.GetOutput().GetPointData().GetScalars())
+    return arr.reshape(int(dims[2]), int(dims[1]), int(dims[0])).transpose(2, 1, 0) > 0
+
+
+def _smin(a, b, k):
+    """Smooth minimum (rounded union) with blend radius k."""
+    if k <= 0:
+        return np.minimum(a, b)
+    h = np.clip(0.5 + 0.5 * (b - a) / k, 0.0, 1.0)
+    return b * (1.0 - h) + a * h - k * h * (1.0 - h)
+
+
+def _smax(a, b, k):
+    """Smooth maximum (rounded intersection) with blend radius k."""
+    return -_smin(-a, -b, k)
+
+
+def cut_bridges(slots, radius=1.75, reach_into=6.0, leg=7.0):
+    """Four round bridges across the cut(s): at both ends of the kerf (just outside it) and at two
+    heights (close to the bone and near the top of the saw block). They run perpendicular to the
+    cutting plane(s) and reach `reach_into` mm into the guide on both sides, so the two halves of the
+    guide are held at four points and cannot twist or bend at the cut. Each bridge ends in two legs
+    that run back over the guide on both sides (U-shape), so it is anchored in the body even where the
+    painted region does not reach the end of the kerf. Returns capsule segments [(P0, P1), ...] (world)."""
+    slots = [s for s in (slots or []) if "error" not in s]
+    if not slots:
+        return []
+    s0 = slots[0]
+    C0, n0, u0v, v0 = (np.asarray(s0[k], float) for k in ("centre", "normal", "u", "v"))
+    us, ts = [], []
+    for s in slots:
+        C = np.asarray(s["centre"], float)
+        u = np.asarray(s["u"], float)
+        for uu in (float(s["u0"]), float(s["u1"])):
+            us.append(float((C + uu * u - C0) @ u0v))
+        ts.append(float((C - C0) @ n0))
+    u_lo, u_hi = min(us) - 0.5 - radius - 0.2, max(us) + 0.5 + radius + 0.2
+    half = 0.5 * SLOT_WIDTH + SLOT_WALL
+    t_lo, t_hi = min(ts) - half - reach_into, max(ts) + half + reach_into
+    bars = []
+    for u_end in (u_lo, u_hi):
+        # low: just above the block bottom (bone + gap) at this end; high: below the block top
+        lows, tops = [], []
+        for s in slots:
+            C = np.asarray(s["centre"], float)
+            uu = float((C0 + u_end * u0v - C) @ np.asarray(s["u"], float))
+            ubins = np.asarray(s["ubins"], float)
+            bottom = np.asarray(s["bottom"], float)
+            # beyond the bone edge the block bottom is only a depth limit - take the bone height at the
+            # nearest bin that really lies over bone (the edge of the bone at this end)
+            on_bone = bottom > float(s["v_top"]) - BLOCK_MAX_DEPTH + 0.01
+            if on_bone.any():
+                k = int(np.argmin(np.where(on_bone, np.abs(ubins - uu), np.inf)))
+                lows.append(float(bottom[k]) + float((C - C0) @ v0))
+            tops.append(float(s["v_top"]) + float((C - C0) @ v0))
+        if not lows:
+            lows = [min(tops) - 8.0]
+        v_low = max(lows) + radius + 0.3
+        v_high = max(min(tops) - radius - 0.3, v_low + 2.0 * radius + 0.5)
+        inward = -np.sign(u_end - 0.5 * (u_lo + u_hi)) * leg     # towards the middle of the cut
+        for vv in (v_low, v_high):
+            base = C0 + u_end * u0v + vv * v0
+            a, b = base + t_lo * n0, base + t_hi * n0
+            bars.append((a, b))                                   # across the cut, outside the kerf
+            bars.append((a, a + inward * u0v))                    # legs into the guide on both sides
+            bars.append((b, b + inward * u0v))
+    return bars
+
+
+def _remove_thin_features(F, r, voxel):
+    """Morphological opening of the field F (< 0 inside, ~ signed distance in mm) with a ball of
+    radius r: parts thinner than 2 r vanish, everything else keeps its shape (convex edges get at
+    most an r rounding). Sub-voxel: erosion = F + r; the dilation back is measured from the eroded
+    boundary voxels including their own field value. Returns (F_new, removed volume mm3)."""
+    from scipy import ndimage as ndi
+    from scipy.spatial import cKDTree
+    inside = F < 0
+    if not inside.any():
+        return F, 0.0
+    # the field is only roughly a distance (smooth unions, the smoothed rim region ...): near the
+    # surface it is normalised by its gradient (first-order distance), so erosion/dilation are in mm
+    layer_idx = np.flatnonzero((F < voxel) & (F > -(r + 3.0 * voxel)))
+    li = np.stack(np.unravel_index(layer_idx, F.shape), axis=1)
+    grad2 = np.zeros(len(layer_idx), np.float32)
+    for ax in range(3):
+        hi_ = li.copy()
+        lo_ = li.copy()
+        hi_[:, ax] = np.minimum(hi_[:, ax] + 1, F.shape[ax] - 1)
+        lo_[:, ax] = np.maximum(lo_[:, ax] - 1, 0)
+        # one-sided slopes, the steeper one: also correct ON a ridge (thin wall: the central
+        # difference would be zero there)
+        f0 = F[tuple(li.T)]
+        slope = np.maximum(np.abs(F[tuple(hi_.T)] - f0), np.abs(f0 - F[tuple(lo_.T)])) / voxel
+        grad2 += slope ** 2
+    gmag = np.ones(F.shape, np.float32)
+    gmag.ravel()[layer_idx] = np.clip(np.sqrt(grad2), 0.2, 1.0)   # > 1 only at kinks (carved faces): keep F
+    Fn = F / gmag
+    Fe = Fn + np.float32(r)
+    E = Fe < 0
+    cand = inside & ~E
+    if not cand.any():
+        return F, 0.0
+    cand_idx = np.flatnonzero(cand)
+    eb = E & ~ndi.binary_erosion(E)
+    eb_idx = np.flatnonzero(eb)
+    G = np.full(len(cand_idx), np.float32(voxel))           # no eroded core nearby: removed
+    if len(eb_idx):
+        Pe = np.stack(np.unravel_index(eb_idx, F.shape), axis=1).astype(np.float32) * voxel
+        Pc = np.stack(np.unravel_index(cand_idx, F.shape), axis=1).astype(np.float32) * voxel
+        k = min(8, len(eb_idx))
+        dist, idx = cKDTree(Pe).query(Pc, k=k, distance_upper_bound=r + 2.5 * voxel, workers=-1)
+        if k == 1:
+            dist, idx = dist[:, None], idx[:, None]
+        ok = idx < len(eb_idx)
+        fe = np.where(ok, Fe.ravel()[eb_idx[np.minimum(idx, len(eb_idx) - 1)]], 0.0)
+        val = np.where(ok, dist + fe, np.inf).min(axis=1) - r
+        G = np.where(np.isfinite(val), val, voxel).astype(np.float32)
+    old = F.ravel()[cand_idx]
+    fn_c = Fn.ravel()[cand_idx]
+    # the reconstruction from voxel samples overestimates by a few 1/100 mm on any face - such small
+    # differences are not thin features: the face keeps its exact field (fit surface stays exact)
+    new = np.where(G > fn_c + 0.08, G, fn_c) * gmag.ravel()[cand_idx]
+    removed = float(np.count_nonzero((old < 0) & (new >= 0))) * voxel ** 3
+    F = F.copy()
+    F.ravel()[cand_idx] = new
+    return F, removed
+
+
+def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=None, block=False,
+                   parts=None, bridges=True, bridge_radius=1.75, voxel=0.25, rim_round=1.0, fillet=1.0,
+                   trim_undercut=True, min_feature=0.3, outer_smooth=0.75, pit_close=1.0, sleeves=False):
+    """Guide body from the distance field of the bone.
+    bone: closed bone surface (whole bone or the fragments); mesh + selected: the painted contact
+    region (bool per vertex of the bone-surface ROI mesh); direction: the guide side (insertion
+    direction, bone -> guide).
+    - shell: every point whose distance to the bone is between `gap` and `gap + wall` and whose
+      nearest bone point lies in the painted region - grows away from the bone in all directions,
+      the inner surface is the bone offset exactly by the fit gap (distances evaluated on the mesh,
+      not on voxels); hollow spaces inside the bone (medullary canal ...) are ignored.
+    - rim: rounded (rim_round mm) where the painted region ends.
+    - undercuts (trim_undercut): parts of the shell lying under the bone as seen from the guide side
+      would block placing the guide - they are cut away.
+    - bridges: four round bars across the cut (see cut_bridges), fused with the shell.
+    - parts (saw block, sleeves): fused with the shell by rounded fillets (fillet mm).
+    - kerfs (or the open wedge of a block guide) and pin bores are kept exactly free.
+    - outer_smooth: the outer surface follows a smoothed bone distance (Gaussian, mm) - no ripples
+      from the bone surface / the voxel grid; the inner fit surface stays exact.
+    - pit_close: pits / pores in the bone surface narrower than 2 x this (mm) are bridged - the
+      inner surface does not grow pegs into them (they would block seating and break off).
+    - sleeves: the pin sleeves are built IN the field (exact cylinders r_out up to pin['top']): their
+      bottom keeps the same fit gap to the bone as the body (normal distance), they are fused with a
+      fillet, and every bore is cut through everything - a sleeve standing close to another pin can
+      never reach into its bore.
+    - min_feature: everything thinner than this (mm) - thin edges, slivers, feathered rims - is
+      removed (morphological opening of the field; material is only removed, never added).
+    Returns (polydata or None, info)."""
+    from scipy import ndimage as ndi
+    from scipy.spatial import cKDTree
+    t_start = time.time()
+    _tm = {}
+    d = unit(np.asarray(direction, float))
+    e1, e2 = _perp_frame(d)
+    R = np.stack([e1, e2, d])                                  # world -> local rows
+    P = vtk_to_numpy(mesh.GetPoints().GetData()).astype(float)
+    sel = np.asarray(selected, bool)
+    if sel.sum() < 3:
+        return None, {"error": "the footprint is empty"}
+    reach = float(gap) + float(wall)
+    S_local = P[sel] @ R.T
+    parts = [p for p in (parts or []) if p is not None and p.GetNumberOfPoints() > 0]
+    parts_local = [_poly_to_local(p, R) for p in parts]
+    bars = [(R @ a, R @ b) for a, b in (cut_bridges(slots, bridge_radius) if bridges else [])]
+    extent_pts = [S_local] + [vtk_to_numpy(p.GetPoints().GetData()).astype(float) for p in parts_local]
+    extent_pts += [np.array(bar) for bar in bars]
+    if sleeves:
+        extent_pts += [np.array([R @ np.asarray(p_["top"], float), R @ np.asarray(p_["entry"], float)])
+                       for p_ in (pins or []) if "error" not in p_]
+    allp = np.vstack(extent_pts)
+    margin = reach + rim_round + bridge_radius + 2.0
+    lo = allp.min(axis=0) - margin
+    hi = allp.max(axis=0) + margin
+    origin = lo
+    dims = np.ceil((hi - lo) / voxel).astype(int) + 1
+    if np.prod(dims) > 45e6:
+        return None, {"error": f"region too large for the voxel grid ({dims.tolist()}) - make the footprint smaller"}
+    shape = tuple(int(v) for v in dims)
+    gx, gy, gz = (origin[a] + voxel * np.arange(shape[a]) for a in range(3))
+    # --- bone: filled solid (cavities closed) + exact distance in the band around the shell -----
+    bone_local = _poly_to_local(bone, R)
+    box = vtk.vtkBox()
+    box.SetBounds(lo[0] - 4, hi[0] + 4, lo[1] - 4, hi[1] + 4, lo[2] - 4, hi[2] + 4)
+    crop = vtk.vtkExtractPolyDataGeometry()
+    crop.SetInputData(bone_local)
+    crop.SetImplicitFunction(box)
+    crop.ExtractInsideOn()
+    crop.ExtractBoundaryCellsOn()
+    tri = vtk.vtkTriangleFilter()
+    tri.SetInputConnection(crop.GetOutputPort())
+    tri.Update()
+    bone_crop = vtk.vtkPolyData()
+    bone_crop.DeepCopy(tri.GetOutput())
+    if bone_crop.GetNumberOfPoints() == 0:
+        return None, {"error": "no bone surface around the footprint"}
+    _tm['crop'] = round(time.time() - t_start, 1)
+    bone_mask = _rasterize_closed(bone_local, origin, voxel, dims)
+    # the medullary canal leaves the grid at its faces - cap the faces first, then fill cavities
+    for ax in range(3):
+        for end in (0, -1):
+            sl = [slice(None)] * 3
+            sl[ax] = end
+            bone_mask[tuple(sl)] = ndi.binary_fill_holes(bone_mask[tuple(sl)])
+    bone_mask = ndi.binary_fill_holes(bone_mask)
+    _tm['stencil'] = round(time.time() - t_start, 1)
+    # pits / pores of the bone surface: closed with a ball of radius pit_close
+    pit_mask = None
+    if pit_close and pit_close > 0:
+        rk = max(1, int(round(float(pit_close) / voxel)))
+        zz, yy, xx = np.mgrid[-rk:rk + 1, -rk:rk + 1, -rk:rk + 1]
+        ball = (xx ** 2 + yy ** 2 + zz ** 2) <= rk * rk
+        padded = np.pad(bone_mask, rk + 1)
+        closed = ndi.binary_erosion(ndi.binary_dilation(padded, ball), ball)[
+            rk + 1:-(rk + 1), rk + 1:-(rk + 1), rk + 1:-(rk + 1)]
+        pit_mask = closed & ~bone_mask
+        # only REAL pits: the closing also fills the voxel steps of every oblique surface - those are
+        # at most ~1 voxel deep; a pit counts when it reaches >= 0.5 mm below the bridged surface
+        if pit_mask.any():
+            depth_c = ndi.distance_transform_edt(closed) * voxel
+            lab, n_lab = ndi.label(pit_mask)
+            if n_lab:
+                deep = ndi.maximum(depth_c, lab, index=np.arange(1, n_lab + 1))
+                keep_lab = np.flatnonzero(np.asarray(deep) >= 0.5) + 1
+                pit_mask = np.isin(lab, keep_lab) if len(keep_lab) else np.zeros_like(pit_mask)
+                closed = bone_mask | pit_mask
+            del depth_c, lab
+        if pit_mask.any():
+            near = ndi.distance_transform_edt(~pit_mask) * voxel <= float(gap) + float(pit_close) + 1.0
+            out_c = np.maximum(ndi.distance_transform_edt(~closed) * voxel - 0.5 * voxel, 0.0)
+            pit_db = np.full(shape, np.inf, dtype=np.float32)
+            pit_db[near] = out_c[near]
+            pit_db[pit_mask] = -voxel
+            del near, out_c
+        else:
+            pit_mask = None
+        del closed, padded
+    outside = ndi.distance_transform_edt(~bone_mask) * voxel
+    depth = ndi.distance_transform_edt(bone_mask) * voxel
+    db = np.where(bone_mask, -depth, outside).astype(np.float32)          # approx. signed distance
+    del depth
+    _tm['edt'] = round(time.time() - t_start, 1)
+    band = (~bone_mask) & (outside >= max(0.0, gap - 0.8)) & (outside <= reach + rim_round + 0.8)
+    del outside
+    band_idx = np.flatnonzero(band)
+    del band
+    ii, jj, kk = np.unravel_index(band_idx, shape)
+    Q = np.stack([gx[ii], gy[jj], gz[kk]], axis=1)
+    # only the band around the painted region needs exact distances
+    tree_s = cKDTree(S_local)
+    dS = tree_s.query(Q, distance_upper_bound=reach + rim_round + 3.0, workers=-1)[0]
+    keep = np.isfinite(dS)
+    band_idx, Q, dS = band_idx[keep], Q[keep], dS[keep]
+    # distance to the bone surface: densely resampled surface (<= 0.2 mm edges) + its normals; the
+    # distance to the tangent plane of the nearest sample (exact on smooth bone, no voxel steps)
+    _tm['band_ds'] = round(time.time() - t_start, 1)
+    dense = vtk.vtkAdaptiveSubdivisionFilter()
+    dense.SetInputData(bone_crop)
+    dense.SetMaximumEdgeLength(0.2)
+    dense.SetMaximumNumberOfPasses(12)
+    nrm_b = vtk.vtkPolyDataNormals()
+    nrm_b.SetInputConnection(dense.GetOutputPort())
+    nrm_b.ComputePointNormalsOn()
+    nrm_b.SplittingOff()
+    nrm_b.ConsistencyOn()
+    nrm_b.AutoOrientNormalsOff()
+    nrm_b.Update()
+    _tm['dense'] = round(time.time() - t_start, 1)
+    D = vtk_to_numpy(nrm_b.GetOutput().GetPoints().GetData()).astype(float)
+    Dn = vtk_to_numpy(nrm_b.GetOutput().GetPointData().GetNormals()).astype(float)
+    cap_d = reach + rim_round + 1.5
+    dist_v, near = cKDTree(D).query(Q, distance_upper_bound=cap_d, workers=-1)
+    found = near < len(D)
+    plane = np.full(len(Q), cap_d)
+    plane[found] = np.abs(np.einsum("ij,ij->i", Q[found] - D[near[found]], Dn[near[found]]))
+    dist_v = np.where(found, dist_v, cap_d)
+    db_band = np.maximum(plane, dist_v - 0.15).astype(np.float32)
+    _tm['dist_query'] = round(time.time() - t_start, 1)
+    pits_closed = 0.0
+    if pit_mask is not None:
+        # over a pit the distance to the bridged surface; elsewhere (difference < 0.15 mm: only the
+        # voxel quantisation of the bridged distance) the exact distance stays
+        pit_band = pit_db.ravel()[band_idx]
+        db_band = np.where(pit_band < db_band - 0.15, pit_band, db_band).astype(np.float32)
+        db = np.where(pit_db < db - 0.15, pit_db, db).astype(np.float32)
+        pits_closed = float(pit_mask.sum()) * voxel ** 3
+        del pit_db, pit_band
+    db.ravel()[band_idx] = db_band
+    # outer surface: from a smoothed distance (the nearest-sample distance ripples a little far from
+    # the bone; the bone surface itself has small steps) - the inner fit surface keeps db_band
+    if outer_smooth and outer_smooth > 0:
+        db_outer = ndi.gaussian_filter(db, float(outer_smooth) / voxel).ravel()[band_idx]
+    else:
+        db_outer = db_band
+    t_dist = time.time() - t_start
+    # --- painted region: is the nearest bone point painted? ------------------------------------
+    spacing = float(np.median(tree_s.query(S_local, k=2)[0][:, 1])) if len(S_local) > 2 else 0.5
+    B = vtk_to_numpy(bone_crop.GetPoints().GetData()).astype(float)
+    near_sel = tree_s.query(B, distance_upper_bound=2.0 * spacing + 0.3, workers=-1)[0] < np.inf
+    U = np.vstack([B[~near_sel], P[~sel] @ R.T])
+    tree_u = cKDTree(U) if len(U) else None
+    dU = tree_u.query(Q, distance_upper_bound=reach + rim_round + 6.0, workers=-1)[0] if tree_u is not None \
+        else np.full(len(Q), np.inf)
+    dU = np.minimum(dU, reach + rim_round + 6.0)
+    f_reg = (0.5 * (dS - dU)).astype(np.float32)                         # < 0 inside the region
+    # the painted rim follows the triangles - smooth the region field (0.5 mm) for an even rim
+    reg3 = np.full(shape, reach, dtype=np.float32)
+    reg3.ravel()[band_idx] = f_reg
+    reg3 = ndi.gaussian_filter(reg3, 0.5 / voxel)
+    f_reg = reg3.ravel()[band_idx]
+    del reg3
+    # --- shell -----------------------------------------------------------------------------------
+    f_inner = gap - db_band
+    f_outer = db_outer - reach
+    shell_band = np.maximum(f_inner, _smax(f_outer, f_reg, rim_round))
+    F = np.ones(shape, dtype=np.float32)
+    F.ravel()[band_idx] = shell_band
+    del Q, f_inner, f_outer, f_reg, shell_band
+    # --- bridges across the cut ----------------------------------------------------------------
+    X = gx[:, None, None]
+    Y = gy[None, :, None]
+    Z = gz[None, None, :]
+    keep_across = np.zeros(shape, dtype=bool)        # bridges / saw block: allowed to span the cut plane
+    for a, b in bars:
+        ba = b - a
+        bb = float(ba @ ba)
+        px, py, pz = X - a[0], Y - a[1], Z - a[2]
+        h = np.clip((px * ba[0] + py * ba[1] + pz * ba[2]) / bb, 0.0, 1.0)
+        cap = np.sqrt((px - ba[0] * h) ** 2 + (py - ba[1] * h) ** 2 + (pz - ba[2] * h) ** 2) - bridge_radius
+        F = _smin(F, cap.astype(np.float32), fillet)
+        keep_across |= cap < 0.3
+    # --- undercuts: nothing below the bone as seen from the guide side ------------------------
+    trimmed = 0.0
+    if trim_undercut:
+        has = bone_mask.any(axis=2)
+        top_k = shape[2] - 1 - np.argmax(bone_mask[:, :, ::-1], axis=2)
+        top_z = np.where(has, gz[top_k], -1e9).astype(np.float32)
+        f_uc = top_z[:, :, None] - Z.astype(np.float32)
+        trimmed = float(((F < 0) & (f_uc > 0)).sum()) * voxel ** 3
+        F = np.maximum(F, f_uc)
+        del f_uc
+    # --- saw block and sleeves fused with fillets -----------------------------------------------
+    if parts_local:
+        pmask = np.zeros(shape, dtype=bool)
+        for p in parts_local:
+            pmask |= _rasterize_closed(p, origin, voxel, dims)
+        # the exact part meshes are part of the guide as well: their voxel copy stays 0.3 mm INSIDE
+        # them (otherwise its voxel steps poke through the exact faces as a rough skin)
+        psdf = (ndi.distance_transform_edt(~pmask) - ndi.distance_transform_edt(pmask)) * voxel + 0.3
+        F = _smin(F, psdf.astype(np.float32), fillet)
+        keep_across |= pmask
+        del psdf, pmask
+    # --- pin sleeves as exact cylinders (bottom trimmed below by the fit gap) ------------------------
+    n_sleeves = 0
+    if sleeves:
+        for pin in (pins or []):
+            if "error" in pin:
+                continue
+            a = R @ unit(np.asarray(pin["axis"], float))
+            E = R @ np.asarray(pin["entry"], float)
+            t_top = float((R @ np.asarray(pin["top"], float) - E) @ a)
+            px, py, pz = X - E[0], Y - E[1], Z - E[2]
+            along = px * a[0] + py * a[1] + pz * a[2]
+            radial = np.sqrt(np.maximum(px ** 2 + py ** 2 + pz ** 2 - along ** 2, 0.0))
+            f_s = np.maximum(np.maximum(radial - float(pin["r_out"]), along - t_top), -3.0 - along)
+            F = _smin(F, f_s.astype(np.float32), fillet)
+            n_sleeves += 1
+            del px, py, pz, along, radial, f_s
+    # --- keep the bone + fit gap, the kerfs / open wedge and the pin bores free --------------------
+    F = np.maximum(F, gap - db)
+    good = [s for s in (slots or []) if "error" not in s]
+
+    def plane_dist(C, v):
+        C, v = R @ np.asarray(C, float), R @ np.asarray(v, float)
+        return (X - C[0]) * v[0] + (Y - C[1]) * v[1] + (Z - C[2]) * v[2]
+    half = 0.5 * SLOT_WIDTH
+    if block and len(good) == 2:
+        s_free = None
+        for s in good:
+            side = float(s.get("side") or 1.0)
+            term = -half - side * plane_dist(s["centre"], s["normal"])
+            s_free = term if s_free is None else np.maximum(s_free, term)
+        uu = plane_dist(good[0]["centre"], good[0]["u"])
+        s_free = np.maximum(s_free, np.maximum(float(good[0]["u0"]) - 0.5 - uu, uu - float(good[0]["u1"]) - 0.5))
+        F = np.maximum(F, -s_free)
+    else:
+        for s in good:
+            uu = plane_dist(s["centre"], s["u"])
+            across = np.abs(plane_dist(s["centre"], s["normal"])) - half
+            s_free = np.maximum(across, np.maximum(float(s["u0"]) - 0.5 - uu, uu - float(s["u1"]) - 0.5))
+            F = np.maximum(F, -s_free)
+            # beyond the slot ends the kerf plane is kept clean as well (no shell remnants hugging the
+            # bone flank in the cut) - only the saw block (its end caps) and the bridges span the cut
+            F = np.where(keep_across, F, np.maximum(F, -across)).astype(np.float32)
+    for pin in (pins or []):
+        if "error" in pin:
+            continue
+        a = R @ unit(np.asarray(pin["axis"], float))
+        E = R @ np.asarray(pin["entry"], float)
+        px, py, pz = X - E[0], Y - E[1], Z - E[2]
+        along = px * a[0] + py * a[1] + pz * a[2]
+        radial = np.sqrt(np.maximum(px ** 2 + py ** 2 + pz ** 2 - along ** 2, 0.0))
+        # exact bore (pin + PIN_CLEARANCE); + 0.01 mm: the polygonised bore runs ~0.01 mm inside the field
+        F = np.maximum(F, (float(pin["r_in"]) + 0.01) - radial)
+    thin_removed = 0.0
+    if min_feature and float(min_feature) > 0:
+        F, thin_removed = _remove_thin_features(F, 0.5 * float(min_feature), voxel)
+        _tm['thin'] = round(time.time() - t_start, 1)
+    F[0, :, :] = F[-1, :, :] = 1.0
+    F[:, 0, :] = F[:, -1, :] = 1.0
+    F[:, :, 0] = F[:, :, -1] = 1.0
+    volume = float((F < 0).sum()) * voxel ** 3
+    # --- surface ---------------------------------------------------------------------------------
+    image = vtk.vtkImageData()
+    image.SetDimensions(*shape)
+    image.SetOrigin(*[float(v) for v in origin])
+    image.SetSpacing(voxel, voxel, voxel)
+    image.GetPointData().SetScalars(numpy_to_vtk(np.ascontiguousarray((-F).transpose(2, 1, 0)).ravel(),
+                                                 deep=True, array_type=vtk.VTK_FLOAT))
+    iso = vtk.vtkFlyingEdges3D()
+    iso.SetInputData(image)
+    iso.SetValue(0, 0.0)
+    iso.ComputeNormalsOff()
+    iso.Update()
+    out = _poly_to_local(iso.GetOutput(), R.T)                         # back to world
+    regions = vtk.vtkPolyDataConnectivityFilter()
+    regions.SetInputData(out)
+    regions.SetExtractionModeToAllRegions()
+    regions.Update()
+    n_regions = int(regions.GetNumberOfExtractedRegions())
+    # keep every piece of real size (a guide that falls apart must be SEEN, not silently halved);
+    # crumbs (< 3 % of the largest piece) are dropped
+    sizes = vtk_to_numpy(regions.GetRegionSizes()).astype(float) if n_regions else np.zeros(0)
+    keep_ids = [int(i) for i in np.flatnonzero(sizes >= 0.03 * sizes.max())] if n_regions else []
+    pick = vtk.vtkPolyDataConnectivityFilter()
+    pick.SetInputData(out)
+    pick.SetExtractionModeToSpecifiedRegions()
+    for i in keep_ids:
+        pick.AddSpecifiedRegion(i)
+    clean = vtk.vtkCleanPolyData()
+    clean.SetInputConnection(pick.GetOutputPort())
+    nrm = vtk.vtkPolyDataNormals()
+    nrm.SetInputConnection(clean.GetOutputPort())
+    nrm.ConsistencyOn()
+    nrm.AutoOrientNormalsOn()
+    nrm.SplittingOff()
+    nrm.Update()
+    result = vtk.vtkPolyData()
+    result.DeepCopy(nrm.GetOutput())
+    result.GetPointData().SetScalars(None)
+    return result, dict(volume_mm3=volume, islands_dropped=max(0, n_regions - len(keep_ids)),
+                        pieces=len(keep_ids), bridges=len(bars) // 3,
+                        undercut_trimmed_mm3=trimmed, thin_removed_mm3=thin_removed, pits_closed_mm3=pits_closed, sleeves=n_sleeves, open_edges=open_edge_count(result), grid=list(shape),
+                        t_distance=round(t_dist, 1), timing=_tm, t_total=round(time.time() - t_start, 1))

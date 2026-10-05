@@ -10,6 +10,7 @@ MEASUREMENTS = [
     AntetorsionMeasurement,
     VarusValgusFemurMeasurement,
     VarusValgusTibiaMeasurement,
+    TibialPlateauAngleMeasurement,
     TibiaTorsionMeasurement,
     FemorotibialRotationMeasurement,
     TibiotalarRotationMeasurement,

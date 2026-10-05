@@ -55,6 +55,8 @@ importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_edit'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_build'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_pins'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_saw'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_tibia'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_volume'))
 from DoggyboneUI.ui_planes import PlanesMixin
 from DoggyboneUI.ui_correction import CorrectionMixin
 from DoggyboneUI.ui_segmentation import SegmentationMixin
@@ -62,6 +64,8 @@ from DoggyboneUI.ui_guide_edit import GuideEditMixin
 from DoggyboneUI.ui_guide_build import GuideBuildMixin
 from DoggyboneUI.ui_pins import PinsMixin
 from DoggyboneUI.ui_saw import SawMixin
+from DoggyboneUI.ui_tibia import TibiaTargetsMixin
+from DoggyboneUI.ui_guide_volume import GuideVolumeMixin
 
 #
 # Doggybone
@@ -98,7 +102,7 @@ MIT License.
       self.parent.icon = qt.QIcon(iconPath)
 
 
-class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
+class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
                       ScriptedLoadableModuleWidget):
     """
     Base widget that manages the measurement groups
@@ -111,12 +115,11 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
     WEDGE_MEASUREMENT_NAME = {"Femur": "aLDFA (Varus/Valgus Femur)", "Tibia": "Varus Valgus Tibia"}
     ROTATION_MEASUREMENT_NAME = {"Femur": "Antetorsion", "Tibia": "Tibia Torsion"}
     # Default target ("Zielwert") each measurement should read after correction, per bone.
-    # Femur wedge (90°) and Tibia wedge (0°) match how those measurements are already defined in
-    # measurement_logic.py (aLDFA is read relative to 90°; the tibial varus/valgus angle is
-    # already a deviation-from-straight angle). The rotation targets are placeholders (0°) - this
+    # Femur: aLDFA target. Tibia: frontal angle between the two joint lines (mMPTA + mMDTA - 180,
+    # torsion-free), target = canine reference mMPTA + mMDTA - 180 (see measurement_logic.py). The rotation targets are placeholders (0°) - this
     # module has no reliable breed/bone-specific reference for normal antetorsion/tibial torsion,
     # so these MUST be reviewed and set by the vet rather than trusted as clinical defaults.
-    WEDGE_TARGET_DEFAULT = {"Femur": 94.0, "Tibia": 0.0}   # aLDFA target (canine reference ~94°)
+    WEDGE_TARGET_DEFAULT = {"Femur": 94.0, "Tibia": round(measurement_logic.TIBIA_MPTA_REF_DEG + measurement_logic.TIBIA_MDTA_REF_DEG - 180.0, 1)}   # aLDFA target (canine reference ~94°)
     ROTATION_TARGET_DEFAULT = {"Femur": 25.0, "Tibia": 0.0}   # femoral antetorsion target
     # Landmark pair used as the medial->lateral reference direction at the osteotomy level -
     # reuses landmarks already placed for the angle measurements rather than adding new ones.
@@ -203,34 +206,50 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         self.opacity_slider.setMinimum(0)
         self.opacity_slider.setMaximum(100)
         self.opacity_slider.setValue(70)
-        self.opacity_slider.setToolTip(
-            "3D opacity of the bone surface. Lower it to see landmarks placed inside the bone (e.g. femur head, condyle centers).")
-        self.opacity_slider.valueChanged.connect(self.onOpacityChanged)
-        segmentation_form_layout.addRow("3D Opacity", self.opacity_slider)
+        self.opacity_slider.setToolTip(BONE_OPACITY_TIP)
+        self.opacity_slider.valueChanged.connect(self._set_bone_opacity)
+        segmentation_form_layout.addRow("Bone opacity", self.opacity_slider)
 
         self.segmentation_status = qt.QLabel("no segmentation")
         self.segmentation_status.setWordWrap(True)
         segmentation_form_layout.addRow("Status", self.segmentation_status)
 
+        # take over a segmentation made in the Segment Editor (only its VISIBLE segments)
+        self.take_over_button = qt.QPushButton("Use Segment Editor segmentation")
+        self.take_over_button.setToolTip(
+            "Takes the segmentation you made in the Segment Editor as the Doggybone bone segmentation. "
+            "Only the segments that are VISIBLE there (eye icon) are used and merged into one bone - "
+            "hide a segment in the Segment Editor to leave it out. Replaces the current Doggybone "
+            "segmentation (the editor's segmentation itself stays unchanged and is hidden).")
+        self.take_over_button.clicked.connect(self.onTakeOverEditorSegmentation)
+        segmentation_form_layout.addRow("From editor", self.take_over_button)
+
         # Clean-up of the bone segmentation with Segment Editor effects: a free-form lasso in the
         # 3D view keeps only the encircled region (through the full depth), then small islands
         # (noise, CT table fragments) are removed.
-        self.lasso_button = qt.QPushButton("Lasso: keep inside")
+        self.erase_inside_button = qt.QPushButton("Erase inside")
+        self.erase_inside_button.setCheckable(True)
+        self.erase_inside_button.setToolTip(
+            "Switch on, then draw around the part to REMOVE in the 3D view (hold the left mouse button): "
+            "everything inside the lasso is removed through the full depth - rotate the view so that nothing "
+            "you want to keep lies in front of or behind it. One stroke per click.")
+        self.erase_inside_button.toggled.connect(self.onEraseInsideToggled)
+        self.lasso_button = qt.QPushButton("Erase outside")
         self.lasso_button.setCheckable(True)
         self.lasso_button.setToolTip(
-            "Switch on, then draw around the region to KEEP in the 3D view (hold the left mouse "
-            "button). Everything outside the lasso is removed through the full depth. Draw "
-            "several times if needed; switch off when done. Landmark placement pauses meanwhile.")
+            "Switch on, then draw around the region to KEEP in the 3D view (hold the left mouse button): "
+            "everything outside the lasso is removed through the full depth. One stroke per click.")
         self.lasso_button.toggled.connect(self.onLassoToggled)
         self.delete_cleanup_button = qt.QPushButton("Delete")
         self.delete_cleanup_button.setToolTip(
-            "Delete all clean-up edits (lasso and islands) - back to the segmentation as it was "
-            "before the first clean-up step, to start again.")
+            "Delete all clean-up edits (erase inside / outside, islands, remove bone, fill cavities) - back to the "
+            "segmentation as it was before the first clean-up step, to start again.")
         self.delete_cleanup_button.clicked.connect(self.onDeleteSegmentationEdits)
         lasso_row = qt.QHBoxLayout()
         lasso_row.setContentsMargins(0, 0, 0, 0)
+        lasso_row.addWidget(self.erase_inside_button, 1)
         lasso_row.addWidget(self.lasso_button, 1)
-        lasso_row.addWidget(self.delete_cleanup_button)
+        lasso_row.addWidget(self.delete_cleanup_button, 1)
         lasso_row_widget = qt.QWidget()
         lasso_row_widget.setLayout(lasso_row)
         segmentation_form_layout.addRow("Clean-up", lasso_row_widget)
@@ -316,6 +335,23 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             self._get_or_create_fiducial_node("DoggyboneFiducialsRight"), self)
         self._relink_existing_landmarks(self.left_panel)
         self._relink_existing_landmarks(self.right_panel)
+        # A closed scene (File > Close Scene) deletes the landmark lists - the panels would then
+        # place plain "F-1, F-2 ..." points. After closing or loading a scene the module is rebuilt,
+        # which creates / re-links the landmark lists.
+        self._scene_observers = [
+            slicer.mrmlScene.AddObserver(slicer.mrmlScene.EndCloseEvent, self._on_scene_reset),
+            slicer.mrmlScene.AddObserver(slicer.mrmlScene.EndImportEvent, self._on_scene_reset)]
+        # the shown current values / calculated corrections follow the landmarks: refresh (debounced)
+        # whenever a landmark is placed, moved or deleted - and once after the module is (re)loaded
+        self._landmark_observers = []
+        for panel in (self.left_panel, self.right_panel):
+            node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+            if node is None:
+                continue
+            for event in (slicer.vtkMRMLMarkupsNode.PointPositionDefinedEvent,
+                          slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
+                          slicer.vtkMRMLMarkupsNode.PointRemovedEvent):
+                self._landmark_observers.append((node, node.AddObserver(event, self._schedule_values_refresh)))
 
         self.side_stack = qt.QStackedWidget()
         self.side_stack.addWidget(self.left_panel)
@@ -324,11 +360,36 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         side_row = qt.QHBoxLayout()
         side_row.addWidget(qt.QLabel("Side"))
         side_row.addWidget(self.side_selector)
-        side_row.addStretch(1)
+        side_row.addSpacing(16)
+        side_row.addWidget(qt.QLabel("Bone opacity"))
+        self.measurement_opacity_slider = self._new_bone_opacity_slider()
+        side_row.addWidget(self.measurement_opacity_slider, 1)
         side_row_widget = qt.QWidget()
         side_row_widget.setLayout(side_row)
 
         measurements_layout.addWidget(side_row_widget)
+
+        # slice views aligned to the BONE instead of the scanner (the limb is never lying exactly
+        # along the scanner axes): red = perpendicular to the shaft axis, green = frontal plane
+        # (shaft + condylar axis), yellow = sagittal plane
+        align_row = qt.QHBoxLayout()
+        align_row.addWidget(qt.QLabel("Slice views"))
+        self.view_align_selector = qt.QComboBox()
+        self.view_align_selector.addItems(["Scanner", "Aligned to femur", "Aligned to tibia"])
+        self.view_align_selector.setToolTip(
+            "Scanner: the usual axial / coronal / sagittal views of the CT.\n"
+            "Aligned: red = perpendicular to the shaft axis, green = frontal plane (shaft axis + "
+            "caudal condylar axis), yellow = sagittal plane - independent of how the limb lay in "
+            "the scanner. Needs the two shaft midpoints (and the condyle points for the rotation).")
+        self.view_align_selector.currentIndexChanged.connect(lambda _i: self.onAlignSliceViews())
+        align_row.addWidget(self.view_align_selector, 1)
+        self.view_align_update = qt.QPushButton("Update")
+        self.view_align_update.setToolTip("Re-align after landmarks were moved, centred on the crosshair.")
+        self.view_align_update.clicked.connect(self.onAlignSliceViews)
+        align_row.addWidget(self.view_align_update)
+        align_row_widget = qt.QWidget()
+        align_row_widget.setLayout(align_row)
+        measurements_layout.addWidget(align_row_widget)
         measurements_layout.addWidget(self.side_stack, 1)
 
         # Osteotomy planning (stage 1): a cutting plane, parametrically seeded from the existing
@@ -368,6 +429,7 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             "(e.g. plate/bone graft). CWO: a bone wedge is removed, no gap - needs a second, "
             "converging cutting plane.")
         osteotomy_form_layout.addRow("Technique", self.osteotomy_technique)
+        self.osteotomy_technique.currentIndexChanged.connect(lambda _i: self._on_technique_changed())
 
         self.reference_plane_selector = qt.QComboBox()
         self.reference_plane_selector.addItems(["Proximal", "Distal"])
@@ -396,6 +458,8 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         self.target_rotation_value.setSingleStep(0.5)
         self.target_rotation_value.setSuffix(" °")
         osteotomy_form_layout.addRow("Torsion target", self.target_rotation_value)
+        self._osteotomy_form_layout = osteotomy_form_layout
+        sagittal_field = self._build_tibia_targets(osteotomy_form_layout)   # tibia: table of current / target values
 
         osteotomy_form_layout.addRow(qt.QLabel("<b>Calculated correction</b>"))
         self.calculated_wedge = qt.QDoubleSpinBox()
@@ -412,6 +476,7 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         self.rotation_angle.setReadOnly(True)
         self.rotation_angle.setButtonSymbols(qt.QAbstractSpinBox.NoButtons)
         osteotomy_form_layout.addRow("Torsion", self.rotation_angle)
+        osteotomy_form_layout.addRow("Sagittal (TPA)", sagittal_field)
 
         self.target_wedge_value.valueChanged.connect(self._on_target_values_changed)
         self.target_rotation_value.valueChanged.connect(self._on_target_values_changed)
@@ -438,8 +503,12 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         self.show_hinge_button.setVisible(False)
         self.sync_other_plane_button = qt.QPushButton()
         self.sync_other_plane_button.setVisible(False)
-        self.osteotomy_status = qt.QLabel()
-        self.osteotomy_status.setVisible(False)
+        # ONE visible status line for the whole osteotomy section (planes and correction preview);
+        # both names point to it (older code writes to either)
+        self.correction_status = qt.QLabel()
+        self.correction_status.setWordWrap(True)
+        self.correction_status.setTextInteractionFlags(qt.Qt.TextSelectableByMouse)
+        self.osteotomy_status = self.correction_status
 
         #############################
         # Corrective osteotomy (wedge + rotation, with live preview)
@@ -450,6 +519,19 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         self.rotation_suggest_button.setVisible(False)
 
         osteotomy_form_layout.addRow(qt.QLabel("<b>Preview</b>"))
+
+        self.reduction_gap = qt.QDoubleSpinBox()
+        self.reduction_gap.setRange(0.0, 0.5)
+        self.reduction_gap.setDecimals(2)
+        self.reduction_gap.setSingleStep(0.05)
+        self.reduction_gap.setValue(0.2)
+        self.reduction_gap.setSuffix(" mm")
+        self.reduction_gap.setToolTip(
+            "Small gap left between the cut faces after reduction (0.1-0.3 mm recommended) to avoid "
+            "tension. The moved fragment is shifted along the cut normal; the reduction-guide pins "
+            "follow, i.e. they sit this much farther apart than in the cutting guide. "
+            "Applied with the next preview update.")
+        osteotomy_form_layout.addRow("Reduction gap", self.reduction_gap)
 
         self.preview_button = qt.QPushButton("Show/update correction preview")
         self.preview_button.setToolTip(
@@ -511,12 +593,23 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         preview_grid.addWidget(self.clear_preview_button, 0, 1)
         preview_grid.addWidget(self.reset_planning_button, 1, 0)
         preview_grid.addWidget(self.save_screenshot_button, 1, 1)
+        self.reset_all_button = qt.QPushButton("Reset planning and guides")
+        self.reset_all_button.setToolTip(
+            "Start the osteotomy over: removes the preview, both cutting planes AND everything of the saw "
+            "guide and the reduction guide (footprints, guide bodies, pins, sleeves, saw boxes, labels). "
+            "Landmarks, measurements, segmentation and target values are kept. Asks before deleting.")
+        self.reset_all_button.setStyleSheet("QPushButton { color: #9b1c1c; }")
+        self.reset_all_button.clicked.connect(self.onResetPlanningAndGuides)
+        preview_grid.addWidget(self.reset_all_button, 2, 0, 1, 2)
+        self.hide_annotations_button = qt.QCheckBox("Hide labels and cutting planes")
+        self.hide_annotations_button.setToolTip(
+            "One click hides all labels (landmark names, plane names, L/M markers) and the cutting "
+            "planes - e.g. for a clean view or a screenshot. Click again to show them as before.")
+        self.hide_annotations_button.toggled.connect(self.onHideAnnotationsToggled)
         preview_widget = qt.QWidget()
         preview_widget.setLayout(preview_grid)
         osteotomy_form_layout.addRow(preview_widget)
 
-        self.correction_status = qt.QLabel()
-        self.correction_status.setVisible(False)
 
         self.hide_original_in_preview = qt.QCheckBox("Hide original segmentation in preview")
         self.hide_original_in_preview.setChecked(True)
@@ -529,16 +622,11 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             "measured on the corrected bone.")
         self.show_corrected_landmarks.toggled.connect(lambda _c: self._update_corrected_landmarks())
         osteotomy_form_layout.addRow(self.show_corrected_landmarks)
+        osteotomy_form_layout.addRow(self.hide_annotations_button)
 
-        self.segment_opacity_slider = qt.QSlider(qt.Qt.Horizontal)
-        self.segment_opacity_slider.setMinimum(0)
-        self.segment_opacity_slider.setMaximum(100)
-        self.segment_opacity_slider.setValue(90)
-        self.segment_opacity_slider.setToolTip(
-            "3D opacity of the (reduced) bone segments of the preview. Lower it to see the "
-            "corrected landmarks, spheres and axes inside the bone.")
-        self.segment_opacity_slider.valueChanged.connect(lambda _v: self._apply_segment_opacity())
-        osteotomy_form_layout.addRow("Segment opacity", self.segment_opacity_slider)
+        self.segment_opacity_slider = self._new_bone_opacity_slider()
+        osteotomy_form_layout.addRow("Bone opacity", self.segment_opacity_slider)
+        osteotomy_form_layout.addRow("Status", self.correction_status)
 
         # Guide planning (stage 2, upcoming): placeholder section so the entry point is already
         # visible once the guide geometry (cutting slot + drill sleeves, STL export) is built on
@@ -662,18 +750,18 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             "level along the bone). The automatic pin rows are always centred. All pins always stay "
             "parallel to each other and to the cut plane(s).")
         self.pin_centre_checkbox.setVisible(False)   # not offered: manual pins go exactly where they are put
-        reduction_grid.addWidget(self.place_pin_rows_button, 5, 0, 1, 3)
+        reduction_grid.addWidget(self.place_pin_rows_button, 5, 0, 1, 2)
         self.reduction_delete_pins_button = qt.QPushButton("Delete pins")
         self.reduction_delete_pins_button.setToolTip("Delete all pins (and the reduction guide built on them).")
         self.reduction_delete_pins_button.clicked.connect(self.onDeletePins)
-        reduction_grid.addWidget(self.reduction_delete_pins_button, 5, 3, 1, 3)
+        reduction_grid.addWidget(self.reduction_delete_pins_button, 5, 2, 1, 2)
         self.reduction_ring_checkbox = qt.QCheckBox("Ring (closed frame around all pins)")
         self.reduction_ring_checkbox.setChecked(True)
         self.reduction_ring_checkbox.setToolTip(
             "The webs run as a closed ring along the outline of all pins (plus links to inner pins) instead "
             "of a single chain - two bridges across the osteotomy, much stiffer against rotation and "
             "bending. Needs pins that do not all lie in one line.")
-        reduction_grid.addWidget(self.reduction_ring_checkbox, 6, 0, 1, 6)
+        reduction_grid.addWidget(self.reduction_ring_checkbox, 6, 0, 1, 4)
         self.pin_row_pattern = qt.QComboBox()
         self.pin_row_pattern.addItems(["Row", "Staggered", "Manual"])
         self.pin_row_pattern.setCurrentIndex(1)
@@ -688,7 +776,7 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             "The whole area inside the ring becomes solid - stiffer, but it covers more bone (less room for "
             "the plate).")
         reduction_grid.addWidget(qt.QLabel("Pin distrib."), 4, 2)
-        reduction_grid.addWidget(self.pin_row_pattern, 4, 3, 1, 3)
+        reduction_grid.addWidget(self.pin_row_pattern, 4, 3)
         self.reduction_filled_checkbox.setVisible(False)    # not offered (open ring only)
         self.reduction_contact_only_checkbox = qt.QCheckBox("Bone contact only at the pins")
         self.reduction_contact_only_checkbox.setChecked(True)
@@ -704,12 +792,33 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         self.reduction_clearance.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         self.reduction_clearance.setMinimumWidth(55)
         self.reduction_contact_only_checkbox.toggled.connect(self.reduction_clearance.setEnabled)
-        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 8, 0, 1, 4)
-        reduction_grid.addWidget(self.reduction_clearance, 8, 4, 1, 2)
+        self.pin_tilt = row_spin(-60.0, 60.0, 5.0, "\N{DEGREE SIGN}",
+                                 "Turns all pins WITHIN the cutting plane (about the cut normal) - for a better "
+                                 "approach to the bone. The pins stay parallel to the cut (they can never meet the "
+                                 "saw blade) and parallel to each other. + = pin heads towards proximal.", decimals=0)
+        self.pin_tilt.setValue(0.0)
+        reduction_grid.addWidget(qt.QLabel("Pin tilt"), 7, 0)
+        reduction_grid.addWidget(self.pin_tilt, 7, 1)
+        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 8, 0, 1, 3)
+        reduction_grid.addWidget(self.reduction_clearance, 8, 3)
         for box in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
-                    self.pin_row_distance_distal):
+                    self.pin_row_distance_distal, self.pin_tilt):
             box.valueChanged.connect(lambda _v: self._pin_rows_changed())
         self.reduction_type.currentIndexChanged.connect(lambda _i: self._update_guide_tool_visibility())
+        # same look as the guide parameters below: label | field | label | field, two equal field
+        # columns, every field / button as high as 'Extrude guide body'
+        reduction_grid.setColumnStretch(1, 1)
+        reduction_grid.setColumnStretch(3, 1)
+        reduction_grid.setVerticalSpacing(2)
+        row_height = qt.QPushButton("X").sizeHint.height()
+        for widget in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
+                       self.pin_row_distance_distal, self.pin_row_pattern, self.place_pin_rows_button,
+                       self.reduction_delete_pins_button, self.pin_tilt, self.reduction_clearance,
+                       self.reduction_standoff, self.reduction_bar_diameter):
+            widget.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+            widget.setMinimumWidth(60)
+            widget.setMinimumHeight(row_height)
+        self._reduction_row_height = row_height
         self.reduction_options_widget = qt.QWidget()
         self.reduction_options_widget.setLayout(reduction_grid)
         self.reduction_options_widget.setVisible(True)           # shown in reduction mode only (default)
@@ -744,12 +853,12 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         tools_row.setContentsMargins(0, 0, 0, 0)
         tools_row.setHorizontalSpacing(4)
         tools_row.setVerticalSpacing(2)
+        tools_row.setColumnStretch(0, 1)          # two equal columns
+        tools_row.setColumnStretch(1, 1)
         tool_positions = {"brush_add": (0, 0), "brush_remove": (0, 1), "lasso_add": (1, 0),
-                          "lasso_remove": (1, 1), "brush_smooth": (2, 0), "pins": (3, 0)}
+                          "lasso_remove": (1, 1), "pins": (3, 0)}
         for key, label, tip in (("brush_add", "Brush +", "Colour the surface under the mouse (drag)."),
                                 ("brush_remove", "Brush -", "Uncolour the surface under the mouse (drag) - removes footprint and Smooth marks."),
-                                ("brush_smooth", "Smooth", "Retouch the contact surface of the finished guide: only the "
-                                 "guide is shown - paint on its inner side. A stroke starting on yellow erases."),
                                 ("pins", "Edit pins", "Pins on the corrected bone: click on the bone to add a pin (parallel "
                                  "to the others), click a pin to delete it, Cmd/Ctrl + click a pin to move it with the "
                                  "gizmo. The saw guide takes the pins over, pre-angled."),
@@ -762,25 +871,45 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             tools_row.addWidget(button, *tool_positions[key])
             self._guide_tool_buttons[key] = button
+        # pins are selected by clicking them in the 3D view (reduction guide); the tool button is only
+        # used internally for manual pin placement ('Pin distrib.: Manual' -> 'Place pins')
+        self._guide_tool_buttons["pins"].setVisible(False)
         self.guide_delete_button = qt.QPushButton("Delete")
         self.guide_delete_button.setToolTip(
             "Delete the whole footprint and the guide body - then paint again "
             "or by painting with Brush + / Lasso +.")
         self.guide_delete_button.clicked.connect(self.onGuideDelete)
         self.guide_delete_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+        # row 3: brush radius (under 'Lasso +') and 'Delete' next to it
+        self.guide_brush_radius = spin(0.5, 15.0, 3.0, 0.5, " mm", "Brush radius.")
+        self.guide_brush_radius.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+        brush_radius_layout = qt.QHBoxLayout()
+        brush_radius_layout.setContentsMargins(0, 0, 0, 0)
+        brush_radius_layout.setSpacing(6)
+        brush_radius_layout.addWidget(qt.QLabel("Brush size"))
+        brush_radius_layout.addWidget(self.guide_brush_radius, 1)
+        self._brush_radius_widget = qt.QWidget()
+        self._brush_radius_widget.setLayout(brush_radius_layout)
+        self._brush_radius_widget.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+        tools_row.addWidget(self._brush_radius_widget, 2, 0)
         tools_row.addWidget(self.guide_delete_button, 2, 1)
         self.guide_pins_delete_button = qt.QPushButton("Pins delete")
         self.guide_pins_delete_button.setToolTip("Remove all pin marks, sleeves and bores (the guide is rebuilt without pins).")
         self.guide_pins_delete_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         self.guide_pins_delete_button.clicked.connect(self.onDeletePins)
-        tools_row.addWidget(self.guide_pins_delete_button, 3, 1)
+        tools_row.addWidget(self.guide_pins_delete_button, 3, 0)
+        self.guide_pin_delete_selected_button = qt.QPushButton("Delete selected pin")
+        self.guide_pin_delete_selected_button.setToolTip(
+            "Reduction guide: click a pin in the 3D view to select it (gizmo to move it), then delete it "
+            "here or with the Delete key.")
+        self.guide_pin_delete_selected_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+        self.guide_pin_delete_selected_button.clicked.connect(self.onDeleteSelectedPin)
+        tools_row.addWidget(self.guide_pin_delete_selected_button, 3, 1)
         tools_widget = qt.QWidget()
         tools_widget.setLayout(tools_row)
         guide_form.addRow(tools_widget)
         self._update_guide_tool_visibility()
         guide_fields = []
-        self.guide_brush_radius = spin(0.5, 15.0, 3.0, 0.5, " mm", "Brush radius.")
-        guide_fields.append(("Brush radius", self.guide_brush_radius))
         self.guide_side_only_checkbox = qt.QCheckBox("Guide side only")
         self.guide_side_only_checkbox.checked = False   # always free manual painting
         self.guide_side_only_checkbox.setToolTip(
@@ -796,7 +925,7 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         guide_fields.append(("Wall thickness", self.guide_thickness))
         self.guide_rim_smoothing = spin(0.0, 3.0, 1.0, 0.2, " mm",
                                         "Smooths the outline of the footprint (fringes, notches) before extrusion.")
-        guide_fields.append(("Rim smoothing", self.guide_rim_smoothing))
+        # (not shown any more - fixed 1.0 mm: rounded rim of the volume body)
         self.guide_top_smoothing = qt.QDoubleSpinBox()
         self.guide_top_smoothing.setRange(0.0, 15.0)
         self.guide_top_smoothing.setSingleStep(0.5)
@@ -807,7 +936,7 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             "Smoothing radius of the OUTER guide surface in mm (0 = follows the bone). The bone-contact "
             "side stays exact; bone bumps are filled in; the wall never gets thinner than 80 % of the "
             "wall thickness.")
-        guide_fields.append(("Top smoothing", self.guide_top_smoothing))
+        # (not shown any more - fixed 3.0 mm: smoothing of the outer surface of the volume body)
         for control in (self.guide_rim_smoothing, self.guide_top_smoothing, self.guide_gap, self.guide_thickness):
             control.valueChanged.connect(lambda _v: self._refresh_guide_body_if_present())
 
@@ -825,6 +954,61 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         self.guide_block_height = combo(["6 mm", "8 mm", "10 mm", "12 mm", "15 mm"], "10 mm",
                                         "Height of the saw blocks above the highest bone point (blade guidance).")
         guide_fields.append(("Slot height", self.guide_block_height))
+        self.guide_slot_extent = combo(["Whole bone", "Guide side"], "Whole bone",
+                                       "Length of the slots along the cut:\n"
+                                       "Whole bone: the full width of the bone cross-section in the cutting plane "
+                                       "(the far cortex can stick out further than the near one).\n"
+                                       "Guide side: only the width of the half of the cross-section the guide "
+                                       "sits on - narrower guide; the far part of the cut is finished along the "
+                                       "plane without the slot.")
+        guide_fields.append(("Slot length", self.guide_slot_extent))
+        self.guide_slot_margin = spin(0.0, 3.0, 1.0, 0.25, " mm",
+                                      "Slot longer than the bone on each side (then the 2 mm end caps).",
+                                      decimals=2)
+        self.guide_slot_margin.valueChanged.connect(lambda _v: self._refresh_guide_body_if_present())
+        guide_fields.append(("Slot margin", self.guide_slot_margin))
+        self.guide_saw_type = combo(["Slot", "Block"], "Slot",
+                                    "Slot: the blade runs in a closed slot (guided on both sides).\n"
+                                    "Block: no slot - the guide ends exactly at the cutting plane and the blade "
+                                    "runs along its flat face. Closing wedge: the whole wedge between the two "
+                                    "faces stays open. Smaller guide, easier to use on small bones.")
+        guide_fields.append(("Saw guide", self.guide_saw_type))
+        self.guide_body_method = combo(["Extrude", "Volume"], "Volume",
+                                       "Extrude: the painted surface is lifted along the bone normals (classic).\n"
+                                       "Volume: the guide is built from the distance field of the bone - it grows "
+                                       "away from the bone in every direction, so it can lie on several sides of "
+                                       "the bone at once. Inner surface = bone + fit gap (exact), outer surface = "
+                                       "fit gap + wall thickness, rounded rim, always closed. Saw block and "
+                                       "sleeves are fused with it.")
+        # (not shown any more - always 'Volume')
+        self.guide_bridges = qt.QCheckBox("4 at the cut")
+        self.guide_bridges.checked = False
+        self.guide_bridges.setToolTip(
+            "Body: Volume - four round bridges across the cut (both ends of the kerf, close to the bone and "
+            "near the top of the saw block), fused into the guide on both sides: the two halves cannot "
+            "twist or bend at the cut. The kerfs stay open.")
+        self.guide_bridges.toggled.connect(lambda _c: self._refresh_guide_body_if_present())
+        # (not shown any more - off: the saw block holds the two halves together)
+        self.guide_trim_undercut = qt.QCheckBox("trim")
+        self.guide_trim_undercut.checked = True
+        self.guide_trim_undercut.setToolTip(
+            "Body: Volume - parts of the guide lying UNDER the bone as seen from the guide side (beyond the "
+            "widest point of the bone) would block placing the guide; they are cut away.")
+        self.guide_trim_undercut.toggled.connect(lambda _c: self._refresh_guide_body_if_present())
+        # (not shown any more - always on: nothing below the bone as seen from the guide side)
+        self.guide_min_feature = qt.QDoubleSpinBox()
+        self.guide_min_feature.setRange(0.0, 1.0)
+        self.guide_min_feature.setDecimals(2)
+        self.guide_min_feature.setSingleStep(0.05)
+        self.guide_min_feature.setValue(0.3)
+        self.guide_min_feature.setSuffix(" mm")
+        self.guide_min_feature.setSpecialValueText("off")
+        self.guide_min_feature.setToolTip(
+            "Body: Volume - parts of the guide thinner than this (thin edges, slivers, feathered rims) are "
+            "removed - they would break off or print badly. Material is only removed, never added; the fit "
+            "surface, kerfs and bores are not changed. 0 = off.")
+        self.guide_min_feature.editingFinished.connect(lambda: self._refresh_guide_body_if_present())
+        # (not shown any more - fixed 0.3 mm: thinner parts of the guide are removed)
         self.guide_pin = combo(["Auto (bone size)", "1.2 mm", "1.6 mm", "2.0 mm"], "Auto (bone size)",
                                "Fixation pin diameter. Auto: bone up to 15 mm -> 1.2 mm, larger -> 1.6 mm.")
         guide_fields.insert(0, ("Pin size", self.guide_pin))        # pin diameter first (top left)
@@ -850,6 +1034,7 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         fields_widget = qt.QWidget()
         fields_widget.setLayout(fields_grid)
         guide_form.addRow(fields_widget)
+        self._update_guide_tool_visibility()        # again, now that the parameter fields exist
         self.guide_extrude_button = qt.QPushButton("Extrude guide body")
         self.guide_extrude_button.clicked.connect(self.onExtrudeGuideBody)
         self.guide_export_button = qt.QPushButton("Export STL...")
@@ -876,6 +1061,8 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             "end of the guide, joined by a thin neck - break it off with pliers when it is no longer needed. "
             "'On the guide': raised text on a free flat area of the guide. Built with 'Extrude guide body'.")
         guide_form.addRow("Label", self.guide_label_mode)
+        self.guide_opacity_slider = self._new_bone_opacity_slider()
+        guide_form.addRow("Bone opacity", self.guide_opacity_slider)
 
 
         self.guide_status = qt.QLabel("No footprint yet.")
@@ -915,10 +1102,60 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         except Exception as e:
             self.correction_status.setText(f"Screenshot failed: {e}")
 
+    def _schedule_values_refresh(self, caller=None, event=None):
+        if getattr(self, "_values_refresh_pending", False):
+            return
+        self._values_refresh_pending = True
+
+        def run():
+            self._values_refresh_pending = False
+            try:
+                self._on_target_values_changed()
+            except Exception:
+                logging.exception("Doggybone: refreshing the calculated corrections failed (continuing)")
+        qt.QTimer.singleShot(300, run)
+
+    def _on_scene_reset(self, caller=None, event=None):
+        if getattr(self, "_scene_reset_pending", False):
+            return
+        self._scene_reset_pending = True
+        qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule("Doggybone"))
+
     def cleanup(self):
+        for node, tag in getattr(self, "_landmark_observers", []):
+            try:
+                node.RemoveObserver(tag)
+            except Exception:
+                pass
+        self._landmark_observers = []
+        for tag in getattr(self, "_scene_observers", []):
+            slicer.mrmlScene.RemoveObserver(tag)
+        self._scene_observers = []
         self._remove_fine_shift_observers()
+        self._remove_pin_picker()
+        self._release_widget_observers()
         self._stop_lasso()
         self._stop_guide_edit()
+        # module reload: the old landmark objects must stop listening to the (still existing)
+        # landmark node - otherwise e.g. an old sphere landmark draws its sphere on a new point
+        for panel in (getattr(self, "left_panel", None), getattr(self, "right_panel", None)):
+            for landmark in getattr(panel, "landmarks", []) or []:
+                try:
+                    landmark.stop_interaction()
+                    node = landmark._markups_node
+                    for tag in list(getattr(landmark, "_private_observers", [])):
+                        if node is not None:
+                            node.RemoveObserver(tag)
+                    landmark._private_observers = []
+                    if hasattr(landmark, "_remove_handle_observer"):
+                        landmark._remove_handle_observer()
+                    landmark.change_callbacks = []
+                except Exception:
+                    logging.exception("Doggybone: landmark clean-up failed (continuing)")
+        for name in ("Doggybone sphere preview", "Doggybone sphere radius"):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None:
+                slicer.mrmlScene.RemoveNode(node)
 
     def enter(self):
         # Called by Slicer whenever the user switches to this module's tab. Also call the base
@@ -927,6 +1164,8 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         if hasattr(ScriptedLoadableModuleWidget, "enter"):
             ScriptedLoadableModuleWidget.enter(self)
         self._current_panel().activate()
+        self._schedule_values_refresh()          # current values / calculated corrections up to date
+        self._install_pin_picker()               # reduction guide: click a pin to select / move it
         # The embedded clean-up editor observes the views while this module is shown, so its
         # effects also work when picked directly from its own effect buttons.
         editor = getattr(self, "_cleanup_editor_widget", None)
@@ -939,18 +1178,71 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
             ScriptedLoadableModuleWidget.exit(self)
         self._stop_lasso()
         self._stop_guide_edit()
+        self._remove_pin_picker()
+        self._stop_remove_bone()
         editor = getattr(self, "_cleanup_editor_widget", None)
         if editor is not None:
             editor.setActiveEffect(None)
             editor.removeViewObservations()
         self._current_panel().deactivate()
 
+    def _stop_remove_bone(self):
+        """'Remove bone (click)' off - its 3D-view observer must never outlive the module tab / widget."""
+        button = getattr(self, "remove_bone_button", None)
+        if button is not None and button.checked:
+            button.setChecked(False)                  # removes the observer (onRemoveBoneToggled)
+        elif getattr(self, "_remove_bone_tag", None) is not None:
+            try:
+                slicer.app.layoutManager().threeDWidget(0).threeDView().interactor().RemoveObserver(
+                    self._remove_bone_tag)
+            except Exception:
+                pass
+            self._remove_bone_tag = None
+
+    def _release_widget_observers(self):
+        """Module reload / close: everything this widget instance observes on nodes that stay in the
+        scene (gizmos, handles) or on the views is released - otherwise the OLD widget keeps reacting
+        next to the new one (e.g. a pin or saw box moved twice)."""
+        self._stop_remove_bone()
+        try:
+            self._remove_pin_gizmo()
+        except Exception:
+            pass
+        # pin-row handles
+        tag = getattr(self, "_pin_row_handle_tag", None)
+        node = slicer.mrmlScene.GetNodeByID(getattr(self, "_pin_row_handle_node_id", "") or "")
+        if tag is not None and node is not None:
+            try:
+                node.RemoveObserver(tag)
+            except Exception:
+                pass
+        self._pin_row_handle_tag = None
+        # saw-box gizmos
+        for node_id, tag in list(getattr(self, "_saw_box_gizmo_tags", {}).values()):
+            node = slicer.mrmlScene.GetNodeByID(node_id)
+            if node is not None:
+                try:
+                    node.RemoveObserver(tag)
+                except Exception:
+                    pass
+        self._saw_box_gizmo_tags = {}
+        # embedded segment editor: stop observing views / segmentation
+        editor = getattr(self, "_cleanup_editor_widget", None)
+        if editor is not None:
+            try:
+                editor.setActiveEffect(None)
+                editor.removeViewObservations()
+                editor.setSegmentationNode(None)
+            except Exception:
+                pass
+
     def _current_panel(self):
         return self.side_stack.currentWidget()
 
     def _on_side_changed(self, index):
-        old_panel = self.right_panel if index == 1 else self.left_panel
-        old_panel.deactivate()
+        old_panel = self._current_panel()          # the stack still shows the PREVIOUS side here
+        if old_panel is not self.side_stack.widget(index):
+            old_panel.deactivate()
         self.side_stack.setCurrentIndex(index)
         self._current_panel().activate()
 
@@ -961,7 +1253,19 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         # would silently produce a wrong correction magnitude.
         self.target_wedge_value.setValue(self.WEDGE_TARGET_DEFAULT[bone])
         self.target_rotation_value.setValue(self.ROTATION_TARGET_DEFAULT[bone])
+        self._set_tibia_mode_visible(bone == "Tibia")
         self._update_plane_handle_interactivity()
+        if hasattr(self, "_on_guide_bone_switched") and hasattr(self, "guide_status"):
+            self._on_guide_bone_switched()
+
+    def _on_technique_changed(self):
+        """Switched to CWO with two almost identical planes: recommend an OWO right away."""
+        if not hasattr(self, "correction_status") or not hasattr(self, "_cwo_wedge_advice"):
+            return
+        side = self.osteotomy_side.currentText.lower()
+        advice = self._cwo_wedge_advice(side, self.osteotomy_bone.currentText)
+        if advice:
+            self.correction_status.setText(advice)
 
     def _on_master_plane_changed(self, index=None):
         # Selecting the master plane must never move either cutting plane.
@@ -991,6 +1295,8 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         panel = self.left_panel if side == "left" else self.right_panel
+        if bone == "Tibia" and hasattr(self, "_refresh_tibia_current"):
+            self._refresh_tibia_current()
 
         current_parts = []
         wedge_measurement = self._get_measurement_by_name(panel, self.WEDGE_MEASUREMENT_NAME[bone])
@@ -1088,6 +1394,125 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         else:
             display_node.SetOpacity(opacity)
 
+    # --- ONE bone opacity for the whole module: the slider in every section shows and sets the
+    # same value (bone segmentation and the preview fragments / corrected bone alike) -------------
+    def _new_bone_opacity_slider(self):
+        slider = qt.QSlider(qt.Qt.Horizontal)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(int(getattr(self, "opacity_slider", None).value) if getattr(self, "opacity_slider", None) else 70)
+        slider.setToolTip(BONE_OPACITY_TIP)
+        slider.valueChanged.connect(self._set_bone_opacity)
+        return slider
+
+    def _bone_opacity_sliders(self):
+        return [s for s in (getattr(self, name, None) for name in
+                ("opacity_slider", "measurement_opacity_slider", "segment_opacity_slider", "guide_opacity_slider"))
+                if s is not None]
+
+    def _set_bone_opacity(self, value):
+        value = int(value)
+        for slider in self._bone_opacity_sliders():
+            if slider.value != value:
+                was = slider.blockSignals(True)
+                slider.setValue(value)
+                slider.blockSignals(was)
+        self.onOpacityChanged(value)                 # bone segmentation(s)
+        if hasattr(self, "_apply_segment_opacity"):
+            self._apply_segment_opacity()            # preview fragments + corrected bone
+
+    def onHideAnnotationsToggled(self, hide):
+        """Hide / show all labels and the cutting planes; the previous state is restored exactly."""
+        if hide:
+            saved = []
+            for node in slicer.util.getNodesByClass("vtkMRMLMarkupsNode"):
+                name = node.GetName() or ""
+                display = node.GetDisplayNode()
+                if display is None or not name.startswith("Doggybone"):
+                    continue
+                is_plane = node.IsA("vtkMRMLMarkupsPlaneNode") or name.endswith(" marker")
+                if is_plane:
+                    saved.append((node.GetID(), "visibility", bool(display.GetVisibility())))
+                    display.SetVisibility(False)
+                else:
+                    saved.append((node.GetID(), "point labels", bool(display.GetPointLabelsVisibility())))
+                    display.SetPointLabelsVisibility(False)
+                if hasattr(display, "GetPropertiesLabelVisibility"):
+                    saved.append((node.GetID(), "properties label", bool(display.GetPropertiesLabelVisibility())))
+                    display.SetPropertiesLabelVisibility(False)
+            self._hidden_annotations = saved
+            return
+        for node_id, kind, value in getattr(self, "_hidden_annotations", []):
+            node = slicer.mrmlScene.GetNodeByID(node_id)
+            display = node.GetDisplayNode() if node is not None else None
+            if display is None:
+                continue
+            if kind == "visibility":
+                display.SetVisibility(value)
+            elif kind == "point labels":
+                display.SetPointLabelsVisibility(value)
+            else:
+                display.SetPropertiesLabelVisibility(value)
+        self._hidden_annotations = []
+
+    def onAlignSliceViews(self):
+        choice = self.view_align_selector.currentText
+        layout_manager = slicer.app.layoutManager()
+        slice_nodes = {name: layout_manager.sliceWidget(name).mrmlSliceNode()
+                       for name in ("Red", "Green", "Yellow") if layout_manager.sliceWidget(name) is not None}
+        if choice == "Scanner":
+            for name, node in slice_nodes.items():
+                {"Red": node.SetOrientationToAxial, "Green": node.SetOrientationToCoronal,
+                 "Yellow": node.SetOrientationToSagittal}[name]()
+            return
+        bone = "Femur" if "femur" in choice else "Tibia"
+        side = self.side_selector.currentText.lower()
+        origin, shaft, error = self._get_anatomical_axis(side, bone)
+        if error:
+            slicer.util.showStatusMessage(f"Slice alignment: {error}", 5000)
+            self.view_align_selector.setToolTip(f"Not aligned: {error}")
+            return
+        shaft = osteotomy_logic.normalize(np.asarray(shaft, dtype=float))     # proximal -> distal
+        ml_vector = self._get_ml_vector(side, bone)
+        if ml_vector is None or np.linalg.norm(ml_vector) < 1e-6:
+            ml_vector = np.array([1.0, 0.0, 0.0])                            # rotation unknown yet
+        ml = np.asarray(ml_vector, dtype=float) - float(np.dot(ml_vector, shaft)) * shaft
+        if np.linalg.norm(ml) < 1e-6:
+            ml = np.array([0.0, 1.0, 0.0]) - shaft[1] * shaft
+        ml = osteotomy_logic.normalize(ml)                                     # medial -> lateral
+        if side == "right":
+            ml = -ml                                                           # patient left = screen right
+        up = -shaft                                                            # proximal
+        ap = osteotomy_logic.normalize(np.cross(ml, up))                       # cranial
+        # centre: on the shaft line, at the level of the crosshair (so 'Update' keeps the level you
+        # scrolled to), limited to the bone between the two joints
+        crosshair = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLCrosshairNode")
+        level = 0.0
+        if crosshair is not None:
+            level = float(np.dot(np.array(crosshair.GetCrosshairRAS(), dtype=float) - origin, shaft))
+        panel = self.left_panel if side == "left" else self.right_panel
+        ends = [float(np.dot(np.asarray(l.get_position(), dtype=float) - origin, shaft))
+                for l in panel.landmarks if l.placed]
+        if ends:
+            level = min(max(level, min(ends)), max(ends))
+        centre = np.asarray(origin, dtype=float) + level * shaft
+        # (normal, screen-right); screen-up = normal x screen-right. As in Slicer's standard views:
+        # red  - screen up = cranial, right = patient left; green - up = proximal, right = patient
+        # left; yellow - up = proximal, cranial on the left
+        frames = {"Red": (-up, ml), "Green": (ap, ml), "Yellow": (ml, -ap)}
+        for name, (normal, transverse) in frames.items():
+            node = slice_nodes.get(name)
+            if node is None:
+                continue
+            node.SetSliceToRASByNTP(*[float(v) for v in normal], *[float(v) for v in transverse],
+                                    *[float(v) for v in centre], 0)
+        if crosshair is not None:
+            crosshair.SetCrosshairRAS(*[float(v) for v in centre])
+        self.view_align_selector.setToolTip(
+            f"Aligned to the {side} {bone.lower()}: red perpendicular to the shaft, green frontal, "
+            "yellow sagittal. Scroll the red view to move along the bone.")
+        slicer.util.showStatusMessage(f"Slice views aligned to the {side} {bone.lower()}.", 4000)
+
     def onOpacityChanged(self, value):
         opacity = value / 100.0
         # Apply to every segmentation currently in the scene, not just the one this module
@@ -1183,7 +1608,8 @@ class DoggyboneWidget(PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEdit
         segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         if segmentation_node is not None:
             slicer.mrmlScene.RemoveNode(segmentation_node)
-        segmentation_node = slicer.mrmlScene.AddNewNodeByClassWithID("vtkMRMLSegmentationNode", "", self.SEGMENTATION_NODE_NAME)
+        # normal scene-generated ID (an ID with spaces breaks node references in saved scenes)
+        segmentation_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", self.SEGMENTATION_NODE_NAME)
         segmentation_node.CreateDefaultDisplayNodes() # only needed for display
         segmentation_node.SetReferenceImageGeometryParameterFromVolumeNode(volume_node)
         segmentation_node.SetName(self.SEGMENTATION_NODE_NAME)
@@ -1284,7 +1710,8 @@ class MeasurementsPanel(qt.QWidget):
         # 2nd axis) from AXIS_PALETTE, consistently across every measurement.
         self.axis_nodes = {}
         self.axes_visible = True
-        self.AXIS_PALETTE = [(0.15, 0.85, 0.95), (0.95, 0.35, 0.85), (0.95, 0.65, 0.15), (0.55, 0.85, 0.25)]
+        self.AXIS_PALETTE = [(0.15, 0.85, 0.95), (0.95, 0.35, 0.85), (0.95, 0.65, 0.15), (0.55, 0.85, 0.25),
+                             (1.0, 0.25, 0.25), (0.35, 0.45, 1.0)]
 
         self.show_spheres_checkbox = qt.QCheckBox("Show fitted spheres")
         self.show_spheres_checkbox.setChecked(True)
@@ -1607,6 +2034,11 @@ class MeasurementsPanel(qt.QWidget):
                 pass
 
     def activate(self):
+        if slicer.mrmlScene.GetNodeByID(self.markup_node_id) is None:
+            # the landmark list was deleted with the scene - rebuild the module (new lists)
+            if self.base_widget is not None and hasattr(self.base_widget, "_on_scene_reset"):
+                self.base_widget._on_scene_reset()
+            return
         selectionNode = slicer.app.applicationLogic().GetSelectionNode()
         selectionNode.SetReferenceActivePlaceNodeID(self.markup_node_id)
 

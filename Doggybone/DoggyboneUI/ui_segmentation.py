@@ -50,31 +50,50 @@ class SegmentationMixin:
         editor.setCurrentSegmentID(segmentation_node.GetSegmentation().GetNthSegmentID(0))
         return editor
 
+    def onEraseInsideToggled(self, checked):
+        self._bone_lasso_toggled(checked, "inside")
+
     def onLassoToggled(self, checked):
-        '''Own lasso on the bone segmentation (keep inside, full depth). The embedded Segment
+        self._bone_lasso_toggled(checked, "outside")
+
+    def _bone_lasso_toggled(self, checked, mode):
+        '''Own lasso on the bone segmentation (erase inside / outside, full depth). The embedded Segment
         Editor's Scissors did not receive mouse events in this module, so the lasso is handled
         like the guide tools: own view observers, orange trace, one stroke per click.'''
         if not checked:
-            self._stop_lasso()   # landmark placement stays paused until a landmark is clicked
+            other = self.lasso_button if mode == "inside" else getattr(self, "erase_inside_button", None)
+            if other is None or not other.checked:
+                self._stop_lasso()   # landmark placement stays paused until a landmark is clicked
             return
+        # only one of the two lasso buttons is on
+        other = self.lasso_button if mode == "inside" else getattr(self, "erase_inside_button", None)
+        if other is not None and other.checked:
+            was = other.blockSignals(True)
+            other.setChecked(False)
+            other.blockSignals(was)
+        self._bone_lasso_mode = mode
+        own = self.lasso_button if mode == "outside" else self.erase_inside_button
         segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         if segmentation_node is None or segmentation_node.GetSegmentation().GetNumberOfSegments() == 0:
             self.segmentation_status.setText("No segmentation - run 'Apply' first.")
-            was_blocked = self.lasso_button.blockSignals(True)
-            self.lasso_button.setChecked(False)
-            self.lasso_button.blockSignals(was_blocked)
+            was_blocked = own.blockSignals(True)
+            own.setChecked(False)
+            own.blockSignals(was_blocked)
             return
         self._stop_guide_edit()
         self._pause_landmark_placement()  # no landmark placement while drawing
         self._hide_preview_for_guide_edit(bone_lasso=True)  # cut on the visible ORIGINAL bone (any guide mode)
-        self._lasso_hidden_preview = list(getattr(self, "_guide_hidden_preview", []))
+        self._lasso_hidden_preview = list(getattr(self, "_lasso_hidden_preview", []) or []) + \
+            list(getattr(self, "_guide_hidden_preview", []))
         self._guide_hidden_preview = []
         self._guide_active_tool = "bone_lasso"
         self._install_guide_observers()
+        what = ("the part to REMOVE (orange trace). On release everything INSIDE is removed"
+                if mode == "inside" else
+                "the region to KEEP (orange trace). On release everything OUTSIDE is removed")
         self.segmentation_status.setText(
-            "Lasso active: in the 3D view hold the left mouse button and draw around the region to "
-            "KEEP (orange trace). On release everything outside is removed through the full depth "
-            "and the lasso switches off - rotate, then click 'Lasso' again for another stroke.")
+            f"Lasso active: in the 3D view hold the left mouse button and draw around {what} through the "
+            "full depth and the lasso switches off - rotate, then click the button again for another stroke.")
 
     def _pause_landmark_placement(self):
         '''Stop placing / dragging the current landmark (landmarks stay visible) and give the mouse
@@ -91,15 +110,17 @@ class SegmentationMixin:
         interaction_node.SetPlaceModePersistence(0)
 
     def _stop_lasso(self):
-        button = getattr(self, "lasso_button", None)
-        was_active = button is not None and button.checked
+        buttons = [b for b in (getattr(self, "lasso_button", None), getattr(self, "erase_inside_button", None))
+                   if b is not None]
+        was_active = any(b.checked for b in buttons)
         if getattr(self, "_guide_active_tool", None) == "bone_lasso":
             self._remove_guide_observers()
             self._guide_active_tool = None
-        if button is not None and button.checked:
-            was_blocked = button.blockSignals(True)
-            button.setChecked(False)
-            button.blockSignals(was_blocked)
+        for button in buttons:
+            if button.checked:
+                was_blocked = button.blockSignals(True)
+                button.setChecked(False)
+                button.blockSignals(was_blocked)
         for node_id in getattr(self, "_lasso_hidden_preview", []):
             node = slicer.mrmlScene.GetNodeByID(node_id)
             if node is not None and node.GetDisplayNode() is not None:
@@ -269,10 +290,7 @@ class SegmentationMixin:
             self._bone_set_labelmap(segmentation_node, image)
         finally:
             qt.QApplication.restoreOverrideCursor()
-        for name in ("Doggybone guide bone surface", "Doggybone guide bone surface (reduction)"):
-            node = slicer.mrmlScene.GetFirstNodeByName(name)
-            if node is not None:
-                slicer.mrmlScene.RemoveNode(node)
+        self._invalidate_guide_surfaces()
         self.segmentation_status.setText(
             f"Bone removed ({removed * float(np.prod(spacing)):.0f} mm\N{SUPERSCRIPT THREE}, {note}). "
             "For the next bone press 'Remove bone (click)' again. 'Delete' undoes all clean-up edits.")
@@ -319,13 +337,17 @@ class SegmentationMixin:
             qt.QApplication.restoreOverrideCursor()
         added = int(mask.sum()) - before
         # the prepared guide surfaces were made from the old bone - rebuild them on the next paint
-        for name in ("Doggybone guide bone surface", "Doggybone guide bone surface (reduction)"):
-            node = slicer.mrmlScene.GetFirstNodeByName(name)
-            if node is not None:
-                slicer.mrmlScene.RemoveNode(node)
+        self._invalidate_guide_surfaces()
         self.segmentation_status.setText(
             f"Cavities filled: {added} voxels added - the bone is solid, only its outer surface remains. "
             "Paint the guide footprint again ('Delete' undoes the fill).")
+
+    def _invalidate_guide_surfaces(self):
+        """The bone changed: the prepared guide bone surfaces (both bones, both guide modes) were made
+        from the old bone - removed, they are rebuilt from the new bone on the next paint."""
+        for node in list(slicer.util.getNodesByClass("vtkMRMLModelNode")):
+            if (node.GetName() or "").startswith("Doggybone guide bone surface"):
+                slicer.mrmlScene.RemoveNode(node)
 
     def onRemoveSmallIslands(self):
         editor = self._ensure_cleanup_editor()
@@ -344,6 +366,7 @@ class SegmentationMixin:
             editor.setActiveEffect(None)
         finally:
             qt.QApplication.restoreOverrideCursor()
+        self._invalidate_guide_surfaces()
         self.segmentation_status.setText(
             f"Islands smaller than {int(self.island_min_size.value)} voxels removed.")
 
@@ -358,9 +381,95 @@ class SegmentationMixin:
         self._stop_lasso()
         self._bone_set_labelmap(segmentation_node, baseline)
         self._bone_baseline = None
+        self._invalidate_guide_surfaces()
         self.segmentation_status.setText("Clean-up edits deleted - segmentation restored. Start again with the lasso.")
 
     # --- clean-up baseline + lasso cut for the bone segmentation --------------
+    def onTakeOverEditorSegmentation(self):
+        """Doggybone bone segmentation = union of the VISIBLE segments of a segmentation made in the
+        Segment Editor (the one open there, otherwise the first other segmentation in the scene)."""
+        own_name = self.SEGMENTATION_NODE_NAME
+        source, volume = None, None
+        try:
+            editor = slicer.modules.segmenteditor.widgetRepresentation().self().editor
+            node = editor.segmentationNode()
+            if node is not None and node.GetName() != own_name:
+                source = node
+            volume = editor.sourceVolumeNode() if hasattr(editor, "sourceVolumeNode") else editor.masterVolumeNode()
+        except Exception:
+            pass
+        if source is None:
+            others = [n for n in slicer.util.getNodesByClass("vtkMRMLSegmentationNode") if n.GetName() != own_name]
+            source = others[0] if others else None
+        if source is None:
+            self.segmentation_status.setText("No Segment Editor segmentation found.")
+            return
+        display = source.GetDisplayNode()
+        segmentation = source.GetSegmentation()
+        ids = vtk.vtkStringArray()
+        names = []
+        for i in range(segmentation.GetNumberOfSegments()):
+            segment_id = segmentation.GetNthSegmentID(i)
+            if display is None or display.GetSegmentVisibility(segment_id):
+                ids.InsertNextValue(segment_id)
+                names.append(segmentation.GetSegment(segment_id).GetName())
+        if ids.GetNumberOfValues() == 0:
+            self.segmentation_status.setText(f"'{source.GetName()}': no visible segment - show the segment(s) to use.")
+            return
+        if hasattr(self, "_stop_guide_edit"):
+            self._stop_guide_edit()
+        self._stop_lasso()
+        qt.QApplication.setOverrideCursor(qt.Qt.WaitCursor)
+        labelmap, target = None, None
+        try:
+            labelmap = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "Doggybone take-over (temp)")
+            logic = slicer.modules.segmentations.logic()
+            if volume is not None:
+                logic.ExportSegmentsToLabelmapNode(source, ids, labelmap, volume)
+            else:
+                logic.ExportSegmentsToLabelmapNode(source, ids, labelmap)
+            array = slicer.util.arrayFromVolume(labelmap)
+            if array is None or not np.any(array):
+                # nothing to take over - the existing Doggybone segmentation stays untouched
+                self.segmentation_status.setText("The visible segments are empty - nothing taken over.")
+                return
+            array[:] = (array > 0).astype(array.dtype)            # all visible segments -> one bone
+            slicer.util.arrayFromVolumeModified(labelmap)
+            # build the new segmentation FIRST; the old one is replaced only when the new one is valid
+            target = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", own_name + " (new)")
+            target.CreateDefaultDisplayNodes()
+            target.SetReferenceImageGeometryParameterFromVolumeNode(volume if volume is not None else labelmap)
+            logic.ImportLabelmapToSegmentationNode(labelmap, target)
+            if target.GetSegmentation().GetNumberOfSegments() == 0:
+                slicer.mrmlScene.RemoveNode(target)
+                target = None
+                self.segmentation_status.setText("The visible segments are empty - nothing taken over.")
+                return
+            old = slicer.mrmlScene.GetFirstNodeByName(own_name)
+            if old is not None:
+                slicer.mrmlScene.RemoveNode(old)
+            target.SetName(own_name)
+            target.GetSegmentation().GetNthSegment(0).SetName("Bones")
+            smoothing = getattr(self, "smoothing", None)
+            if smoothing is not None:
+                target.GetSegmentation().SetConversionParameter("Smoothing factor", f"{smoothing.value}")
+            target.CreateClosedSurfaceRepresentation()
+            if volume is not None:
+                landmark_logic.set_bone_volume(volume)
+            if display is not None:
+                display.SetVisibility(False)                       # the editor's copy stays, hidden
+            self._bone_baseline = None
+            self._invalidate_guide_surfaces()
+            if hasattr(self, "_set_bone_opacity") and hasattr(self, "opacity_slider"):
+                self._set_bone_opacity(self.opacity_slider.value)
+        finally:
+            if labelmap is not None and slicer.mrmlScene.IsNodePresent(labelmap):
+                slicer.mrmlScene.RemoveNode(labelmap)
+            qt.QApplication.restoreOverrideCursor()
+        self.segmentation_status.setText(
+            f"Bone segmentation taken over from '{source.GetName()}': " + ", ".join(names)
+            + ". Hidden segments were left out. The editor's segmentation is hidden (unchanged).")
+
     def _bone_labelmap_copy(self, segmentation_node):
         segment_id = segmentation_node.GetSegmentation().GetNthSegmentID(0)
         image = slicer.vtkOrientedImageData()
@@ -381,7 +490,8 @@ class SegmentationMixin:
         self._bone_baseline = self._bone_labelmap_copy(segmentation_node)
 
     def _bone_lasso_apply(self, polygon):
-        '''Keep only bone voxels whose projection lies inside the screen polygon (full depth).'''
+        '''Erase outside (keep only bone voxels whose projection lies inside the screen polygon) or
+        erase inside (remove them) - through the full depth.'''
         from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
         segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         if segmentation_node is None:
@@ -416,13 +526,17 @@ class SegmentationMixin:
             candidates = np.nonzero(box)[0]
             if len(candidates):
                 keep[candidates] = guide_logic.points_in_polygon(np.c_[xs[candidates], ys[candidates]], poly)
-            removed = int((~keep).sum())
-            voxels[kk[~keep], jj[~keep], ii[~keep]] = 0
+            inside_mode = getattr(self, "_bone_lasso_mode", "outside") == "inside"
+            drop = keep if inside_mode else ~keep          # keep = inside the lasso
+            removed = int(drop.sum())
+            voxels[kk[drop], jj[drop], ii[drop]] = 0
             image.GetPointData().GetScalars().Modified()
             image.Modified()
             self._bone_set_labelmap(segmentation_node, image)
+            self._invalidate_guide_surfaces()
+            spacing = float(abs(np.linalg.det(M[:3, :3])))
             self.segmentation_status.setText(
-                f"Lasso: {removed} voxels outside removed, {int(keep.sum())} kept. 'Delete' restores "
-                f"the segmentation from before the clean-up.")
+                f"Erase {'inside' if inside_mode else 'outside'}: {removed * spacing:.0f} mm\N{SUPERSCRIPT THREE} "
+                f"removed. 'Delete' restores the segmentation from before the clean-up.")
         finally:
             qt.QApplication.restoreOverrideCursor()

@@ -22,6 +22,85 @@ class CorrectionMixin:
                 return widget.measurement
         return None
 
+    def _moving_side_sign(self, cut_o, cut_n, moving_is_distal, side, bone):
+        """+1 / -1: on which side of the cut plane (normal cut_n) the MOVING fragment lies."""
+        panel = self.left_panel if side == "left" else self.right_panel
+        node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+        proximal_names = (["femur head", "femur neck", "Femur midpoint 30%"] if bone == "Femur"
+                          else ["intercondylar eminence", "proximal tibia midpoint", "condylus medialis tibiae"])
+        for name in proximal_names:
+            for landmark in panel.landmarks:
+                if landmark.name == name and landmark.placed and landmark._id is not None and node is not None:
+                    p = np.array(node.GetNthControlPointPositionWorld(landmark._id))
+                    proximal_sign = 1.0 if float((p - np.asarray(cut_o, float)) @ np.asarray(cut_n, float)) > 0 else -1.0
+                    return -proximal_sign if moving_is_distal else proximal_sign
+        return None
+
+    def _cwo_wedge_advice(self, side, bone):
+        """CWO with two (nearly) identical cutting planes: the wedge to be removed is thinner than about
+        two saw blades - the blade alone takes that much bone, the closing would be inexact. Returns a
+        warning text recommending an OWO, or ''."""
+        if not self.osteotomy_technique.currentText.startswith("CWO"):
+            return ""
+        proximal = slicer.mrmlScene.GetFirstNodeByName(self._plane_node_name(side, bone))
+        distal = slicer.mrmlScene.GetFirstNodeByName(self._distal_plane_node_name(side, bone))
+        bone_polydata = self._get_bone_polydata()
+        if proximal is None or distal is None or bone_polydata is None:
+            return ""
+        try:
+            o1, n1 = self._get_plane_origin_normal(proximal)
+            o2, n2 = self._get_plane_origin_normal(distal)
+            n1 = osteotomy_logic.normalize(np.asarray(n1, float))
+            n2 = osteotomy_logic.normalize(np.asarray(n2, float))
+            angle = float(np.degrees(np.arccos(np.clip(abs(float(n1 @ n2)), 0.0, 1.0))))
+            contour = guide_logic.section_contour(bone_polydata, o1, n1)
+            if contour is None or len(contour) < 3:
+                return ""
+            # wedge thickness across the bone: distance of the proximal cut's outline from the distal plane
+            thickness = np.abs((np.asarray(contour, float) - np.asarray(o2, float)) @ n2)
+            widest = float(thickness.max())
+        except Exception:
+            logging.exception("Doggybone: CWO wedge check failed (continuing)")
+            return ""
+        try:
+            blade = float(self.guide_blade.currentText.split()[0])
+        except Exception:
+            blade = 1.0
+        limit = max(1.5, 2.0 * blade)
+        if widest >= limit:
+            return ""
+        return (f"WARNING: the two cutting planes are almost identical (angle {angle:.1f}\N{DEGREE SIGN}, wedge at "
+                f"most {widest:.1f} mm thick across the bone - less than about two saw blades, {limit:.1f} mm). "
+                "The blade alone removes about this much bone, a closing wedge would be inexact - an OWO "
+                "(one cut, opened) is recommended.")
+
+    def _owo_hinge_contact(self, matrix, cut_o, cut_n, bone_polydata, moving_is_distal, side, bone):
+        """(matrix, note): the moved fragment shifted along the cut normal so that its cut face just
+        touches the fixed cut face at its deepest point (the hinge) - no overlap, no floating."""
+        try:
+            contour = guide_logic.section_contour(bone_polydata, cut_o, cut_n)
+            sign = self._moving_side_sign(cut_o, cut_n, moving_is_distal, side, bone)
+        except Exception:
+            logging.exception("Doggybone: OWO hinge contact check failed (continuing)")
+            return matrix, ""
+        if contour is None or sign is None or len(contour) < 3:
+            return matrix, ""
+        o = np.asarray(cut_o, float)
+        n = osteotomy_logic.normalize(np.asarray(cut_n, float))
+        M = osteotomy_logic.matrix_to_numpy(matrix) if not isinstance(matrix, np.ndarray) else np.asarray(matrix, float)
+        moved = (M @ np.c_[contour, np.ones(len(contour))].T).T[:, :3]
+        gap = sign * ((moved - o) @ n)                 # > 0: open, < 0: overlap with the fixed fragment
+        shift = -float(gap.min())
+        if abs(shift) < 0.01:
+            return matrix, (f"OWO: cut faces in contact at the hinge, opening up to {gap.max():.2f} mm.")
+        T = np.eye(4)
+        T[:3, 3] = sign * shift * n
+        deg = "\N{DEGREE SIGN}"
+        note = (f"OWO hinge contact: fragment moved {abs(shift):.2f} mm along the cut normal "
+                + ("(it overlapped the fixed fragment)" if shift > 0 else "(it floated above the cut)")
+                + f" - hinge cortex now in contact, opening up to {gap.max() + shift:.2f} mm.")
+        return osteotomy_logic.numpy_to_vtk_matrix(T @ M), note
+
     def _get_bone_polydata(self):
         segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         if segmentation_node is None:
@@ -66,6 +145,7 @@ class CorrectionMixin:
                 f"Doggybone {side} {bone.lower()} wedge REMOVE")
 
     def onPreviewCorrection(self):
+        self.correction_status.setStyleSheet("")
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         is_cwo = self.osteotomy_technique.currentText.startswith("CWO")
@@ -94,12 +174,13 @@ class CorrectionMixin:
 
         hinge_point, hinge_axis = osteotomy_logic.planes_intersection_line(
             proximal_origin, proximal_normal, distal_origin, distal_normal)
-        if hinge_point is None:
-            self.correction_status.setText(
-                "The proximal and distal planes are (nearly) parallel - no wedge defined yet. "
-                "Tilt the distal plane in the 3D view or slice views, or drag its border "
-                "rotation handles.")
-            return
+        planes_parallel = hinge_point is None
+        if planes_parallel:
+            # parallel planes: OWO (one real cut) or a pure derotation - the hinge is not defined by the
+            # planes; the centre of the cut stands in for it (OWO: the fragment is then set onto the
+            # hinge cortex by the hinge-contact step below)
+            master_is_proximal = self.reference_plane_selector.currentText == "Proximal"
+            hinge_point = np.asarray(proximal_origin if master_is_proximal else distal_origin, float)
 
         # The wedge MAGNITUDE always comes from the measured deformity vs. the target value
         # (like the rotation correction below) - not from however far apart the two planes
@@ -114,11 +195,25 @@ class CorrectionMixin:
             self.correction_status.setText(f"Measurement '{wedge_measurement_name}' not found.")
             return
         wedge_ready, wedge_value, wedge_value_description = wedge_measurement()
+        if not wedge_ready and bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode():
+            # tibia: the corrections come from the target table (solver) - the varus/valgus landmarks
+            # are only needed when a frontal row is checked; without them: no frontal correction
+            wedge_ready, wedge_value = True, float(self.target_wedge_value.value)
+            wedge_value_description = "not measured"
         if not wedge_ready:
             self.correction_status.setText(
                 f"Place the landmarks for '{wedge_measurement_name}' ({side}) first.")
             return
         wedge_magnitude = abs(wedge_value - self.target_wedge_value.value)
+        tibia_rows = bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode()
+        # OWO: only ONE cut - the second plane is a virtual target, parallel or not does not matter (the
+        # opening comes from the measured / target values; the hinge contact is set afterwards).
+        # CWO: the wedge between the two cuts IS the correction - parallel planes cannot remove one.
+        if planes_parallel and is_cwo and wedge_magnitude >= 0.3 and not tibia_rows:
+            self.correction_status.setText(
+                f"CWO: the two cutting planes are parallel, but a wedge of {wedge_magnitude:.1f}\N{DEGREE SIGN} "
+                "has to be removed - press 'Create/update SECOND plane from MASTER' (or tilt the distal plane).")
+            return
 
         # Direction comes from which way the distal plane is actually tilted relative to the
         # proximal one - reusing the plane geometry for direction only is robust even if its
@@ -136,6 +231,11 @@ class CorrectionMixin:
         wedge_delta = self.target_wedge_value.value - wedge_value
         wedge_deg = wedge_delta * (1.0 if moving_is_distal else -1.0)
         ok_rot, rotation_delta, rotation_message = self._calculated_rotation_delta(side, bone)
+        tibia_targets = bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode()
+        if not ok_rot and tibia_targets:
+            # tibia: the torsion comes from the target table (solver) - its landmarks are only
+            # needed when a torsion row is checked
+            ok_rot, rotation_delta = True, 0.0
         if not ok_rot:
             self.correction_status.setText(rotation_message)
             return
@@ -149,8 +249,11 @@ class CorrectionMixin:
         if axis_error:
             self.correction_status.setText(axis_error)
             return
+        # the MASTER plane is the fixed one and (OWO) the only real cut
+        master_origin, master_normal = ((proximal_origin, proximal_normal) if moving_is_distal
+                                        else (distal_origin, distal_normal))
         shaft_point_at_cut = osteotomy_logic.closest_point_on_line(
-            proximal_origin, anatomical_origin, shaft_axis_check)
+            master_origin, anatomical_origin, shaft_axis_check)
 
         alignment_report = ""
         if is_cwo and self._cwo_alignment_is_congruent():
@@ -158,6 +261,12 @@ class CorrectionMixin:
                                           else (distal_origin, distal_normal))
             desired_rotation, _desired_info = self._desired_correction_rotation(
                 side, bone, moving_is_distal, fixed_origin, fixed_normal)
+            if desired_rotation is None and tibia_rows:
+                # tibia: the torsion comes only from the solver - without it the preview would silently
+                # drop the torsion
+                self.correction_status.setStyleSheet(STATUS_WARN_STYLE)
+                self.correction_status.setText(str(_desired_info))
+                return
             matrix, alignment_report = self._contact_congruent_matrix(
                 proximal_origin, proximal_normal, distal_origin, distal_normal, hinge_point,
                 moving_is_distal, shaft_axis_check, anatomical_origin, rotation_deg,
@@ -167,26 +276,69 @@ class CorrectionMixin:
             matrix = osteotomy_logic.anatomical_correction_matrix(
                 shaft_point_at_cut, shaft_axis_check, rotation_deg,
                 hinge_point, ap_axis, wedge_deg, frontal_first=moving_is_distal)
-            if True:   # OWO (CWO always takes the contact-congruent branch above)
-                # OWO: the SAME verified correction as the SECOND-plane derivation
-                # (_desired_correction_rotation: signs checked on the landmarks, angles solved,
-                # derotation about the moving fragment's own axis) - so the moved cut face and the
-                # virtual SECOND plane always coincide. Wedge about the hinge, torsion about the
-                # true shaft line.
-                fixed_o, fixed_n = ((proximal_origin, proximal_normal) if moving_is_distal
-                                    else (distal_origin, distal_normal))
-                _R, info = self._desired_correction_rotation(side, bone, moving_is_distal, fixed_o, fixed_n)
-                if isinstance(info, dict):
-                    wedge_deg = info["frontal_signed"]
-                    rotation_deg = info["torsion_signed"]
-                    matrix = osteotomy_logic.anatomical_correction_matrix(
-                        shaft_point_at_cut, shaft_axis_check, rotation_deg, hinge_point, ap_axis, wedge_deg,
-                        frontal_first=moving_is_distal)
-                    alignment_report = (f"Correction verified on the landmarks: wedge {abs(wedge_deg):.1f}\N{DEGREE SIGN}, "
-                                        f"torsion {abs(rotation_deg):.1f}\N{DEGREE SIGN}"
-                                        + (": predicted " + self._format_prediction(bone, info["predicted"])
-                                           if info.get("predicted") else "") + "."
-                                        + (("\n" + info["warning"]) if info.get("warning") else ""))
+            # OWO (CWO always takes the contact-congruent branch above): the SAME verified correction
+            # as the SECOND-plane derivation (_desired_correction_rotation: signs checked on the
+            # landmarks, angles solved, derotation about the moving fragment's own axis) - so the moved
+            # cut face and the virtual SECOND plane always coincide. Wedge about the hinge, torsion
+            # about the true shaft line.
+            _R, info = self._desired_correction_rotation(side, bone, moving_is_distal, master_origin, master_normal)
+            if not isinstance(info, dict):
+                self.correction_status.setStyleSheet(STATUS_WARN_STYLE)
+                self.correction_status.setText(str(info))
+                return
+            wedge_deg = info["frontal_signed"]
+            rotation_deg = info["torsion_signed"]
+            matrix = osteotomy_logic.anatomical_correction_matrix(
+                shaft_point_at_cut, shaft_axis_check, rotation_deg, hinge_point, ap_axis, wedge_deg,
+                frontal_first=moving_is_distal, sagittal_axis=ml_axis,
+                sagittal_angle_deg=info.get("sagittal_signed", 0.0))
+            # the values really applied (solver), not the raw measurement-vs-target estimate
+            wedge_magnitude = abs(float(wedge_deg))
+            self.rotation_angle.setValue(abs(float(rotation_deg)))
+            alignment_report = (f"Correction verified on the landmarks: wedge {abs(wedge_deg):.1f}\N{DEGREE SIGN}"
+                                + (f", sagittal {abs(info.get('sagittal_signed', 0.0)):.1f}\N{DEGREE SIGN}"
+                                   if abs(info.get("sagittal_signed", 0.0)) >= 0.05 else "")
+                                + f", torsion {abs(rotation_deg):.1f}\N{DEGREE SIGN}"
+                                + (": predicted " + self._format_prediction(bone, info["predicted"])
+                                   if info.get("predicted") else "") + "."
+                                + (("\n" + info["warning"]) if info.get("warning") else ""))
+
+        if not is_cwo:
+            # OWO: the moved cut face must rest on the fixed one AT THE HINGE - no overlap of the
+            # fragments. A torsion about the shaft line (not perpendicular to an oblique cut) tilts
+            # the face slightly, and a wedge about a hinge inside the bone would push one side into
+            # the fixed fragment: the fragment is moved along the cut normal until the deepest point
+            # just touches (opening = wedge gap, hinge cortex in contact).
+            fixed_o, fixed_n = ((proximal_origin, proximal_normal) if moving_is_distal
+                                else (distal_origin, distal_normal))
+            matrix, hinge_report = self._owo_hinge_contact(matrix, fixed_o, fixed_n, bone_polydata,
+                                                           moving_is_distal, side, bone)
+            if hinge_report:
+                alignment_report = (alignment_report + "\n" if alignment_report else "") + hinge_report
+
+        # Reduction gap: the faces are now in contact (OWO: at the hinge, CWO: congruent). A small,
+        # adjustable gap avoids pre-load / tension when the fragments are reduced on the guide -
+        # the moved fragment is translated along the fixed cut normal, away from the fixed one.
+        # The reduction-guide pins sit on this pose, so their fragment rows end up exactly this
+        # much farther apart than in the cutting guide.
+        gap_mm = float(self.reduction_gap.value) if hasattr(self, "reduction_gap") else 0.0
+        if gap_mm > 0.0:
+            fixed_o, fixed_n = ((proximal_origin, proximal_normal) if moving_is_distal
+                                else (distal_origin, distal_normal))
+            sign = self._moving_side_sign(fixed_o, fixed_n, moving_is_distal, side, bone)
+            if sign is not None:
+                n_fix = osteotomy_logic.normalize(np.asarray(fixed_n, float))
+                M = (osteotomy_logic.matrix_to_numpy(matrix) if not isinstance(matrix, np.ndarray)
+                     else np.asarray(matrix, float))
+                T = np.eye(4)
+                T[:3, 3] = sign * gap_mm * n_fix
+                matrix = osteotomy_logic.numpy_to_vtk_matrix(T @ M)
+                alignment_report = ((alignment_report + "\n" if alignment_report else "")
+                                    + f"Reduction gap: {gap_mm:.2f} mm between the cut faces "
+                                      "(reduction-guide pins correspondingly farther apart).")
+            else:
+                alignment_report = ((alignment_report + "\n" if alignment_report else "")
+                                    + "Reduction gap not applied: proximal landmark missing.")
 
         # Optional clinical fine adjustment: translate the already-corrected fragment only
         # within the MASTER cutting plane.  X/Y are taken from the actual Markups plane frame,
@@ -214,9 +366,12 @@ class CorrectionMixin:
             technique_note = ""
         else:
             # OWO: one real cut; the second plane remains a virtual target.
+            # the one real cut is the MASTER plane (proximal or distal, whichever is selected)
             proximal_polydata, distal_polydata = osteotomy_logic.clip_fragments(
-                bone_polydata, proximal_origin, proximal_normal, shaft_axis)
-            technique_note = " (OWO - distal plane is a virtual target only, no bone removed)"
+                bone_polydata, master_origin, master_normal, shaft_axis)
+            technique_note = (" (OWO - one cut at the MASTER plane; the "
+                              + ("distal" if moving_is_distal else "proximal")
+                              + " plane is a virtual target only, no bone removed)")
 
         wedge_description = (
             f"{wedge_magnitude:.1f}\N{DEGREE SIGN} ('{wedge_measurement_name}': "
@@ -314,6 +469,9 @@ class CorrectionMixin:
             "looks wrong, tilt the distal plane differently or change the reference plane.")
         if alignment_report:
             self.correction_status.setText(self.correction_status.text + "\n" + alignment_report)
+        advice = self._cwo_wedge_advice(side, bone)
+        if advice:
+            self.correction_status.setText(self.correction_status.text + "\n" + advice)
         self._update_corrected_landmarks()
 
         # After the cut only the X/Y gizmo on the contact (master) face stays interactive; the
@@ -391,6 +549,8 @@ class CorrectionMixin:
                 ready, value, description = rotation_measurement()
                 if ready:
                     result["torsion"] = float(self._signed_rotation_value(bone, value, description))
+            if bone == "Tibia" and hasattr(self, "_tibia_metrics"):
+                result["tibia"] = self._tibia_metrics(panel)
         finally:
             for i, point in enumerate(originals):
                 fiducials.SetNthControlPointPositionWorld(i, *point)
@@ -482,6 +642,14 @@ class CorrectionMixin:
     def _format_prediction(self, bone, predicted):
         deg = "\N{DEGREE SIGN}"
         parts = []
+        tibia = predicted.get("tibia") if isinstance(predicted, dict) else None
+        if bone == "Tibia" and tibia and getattr(self, "tibia_target_rows", None):
+            names = {"tpa": "TPA", "ampta": "aMPTA", "amdta": "aMDTA", "torsion": "torsion", "tma": "tibia/metatarsus"}
+            for key, row in self.tibia_target_rows.items():
+                if key in tibia:
+                    parts.append(f"{names[key]} {tibia[key]:.1f}{deg} (target {row['target'].value:.1f}{deg}"
+                                 + ("" if row["use"].checked else ", not used") + ")")
+            return ", ".join(parts)
         if predicted.get("wedge") is not None:
             parts.append(f"{self.WEDGE_MEASUREMENT_NAME[bone]} {predicted['wedge']:.1f}{deg} "
                          f"(target {self.target_wedge_value.value:.1f}{deg})")
@@ -497,6 +665,9 @@ class CorrectionMixin:
         with the candidate rotation and checking which one brings the measurement to its target
         (no dependence on left/right mirroring or dataset orientation).
         Returns (R or None, info dict or error text).'''
+        if bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode():
+            # tibia: TPA, aMPTA, aMDTA, torsion(s) - frontal, sagittal and torsion solved together
+            return self._solve_tibia_correction(side, bone, moving_is_distal, plane_origin, plane_normal)
         shaft, ml, ap, frame_error = self._get_anatomical_frame(side, bone)
         if frame_error:
             return None, frame_error
@@ -713,6 +884,55 @@ class CorrectionMixin:
         finally:
             qt.QApplication.restoreOverrideCursor()
 
+    def onResetPlanningAndGuides(self):
+        """Planning reset + both guides deleted (saw and reduction guide) - after asking."""
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        answer = qt.QMessageBox.question(
+            slicer.util.mainWindow(), "Reset planning and guides",
+            f"Delete the osteotomy planning ({side} {bone.lower()}: preview, cutting planes) and BOTH guides "
+            "(saw guide and reduction guide: footprints, bodies, pins, sleeves, saw boxes)?\n\n"
+            "Landmarks, measurements, segmentation and target values are kept. This cannot be undone.",
+            qt.QMessageBox.Yes | qt.QMessageBox.No, qt.QMessageBox.No)
+        if answer != qt.QMessageBox.Yes:
+            return
+        # guide editing tools off, hidden things back
+        for name in ("_stop_guide_edit", "_restore_guide_hidden", "_remove_pin_gizmo", "_remove_pin_preview"):
+            method = getattr(self, name, None)
+            if method is not None:
+                try:
+                    method()
+                except Exception:
+                    logging.exception("Doggybone: reset step failed (continuing)")
+        removed = 0
+        prefixes = ("Doggybone guide", "Doggybone pin ", "Doggybone saw box", "Doggybone saw guide pin preview")
+        tibia = bone == "Tibia"
+        for node in list(slicer.util.getNodesByClass("vtkMRMLNode")):
+            name = node.GetName() or ""
+            if not name.startswith(prefixes) or node.IsA("vtkMRMLDisplayNode") or node.IsA("vtkMRMLStorageNode"):
+                continue
+            # only THIS bone's guide objects (tibia objects carry ' tibia' in the name); the shared
+            # bone surfaces for painting are rebuilt anyway
+            if (" tibia" in name) != tibia and not name.startswith("Doggybone guide bone surface"):
+                continue
+            slicer.mrmlScene.RemoveNode(node)
+            removed += 1
+        # guide state in the module
+        for attribute, value in (("_guide_undo_stack", []), ("_guide_undo_stacks", {}), ("_guide_body_before_clean", None),
+                                 ("_selected_pin_id", None), ("_pins_dirty", False), ("_pin_rows_active", False),
+                                 ("_saw_box_gizmo_tags", {}), ("_guide_saved_opacity", []),
+                                 ("_guide_locked_planes", []), ("_guide_hidden_preview", [])):
+            if hasattr(self, attribute):
+                setattr(self, attribute, value)
+        self.onResetOsteotomyPlanning()
+        self._ensure_segmentation_visible()
+        message = (f"Planning and guides reset ({side} {bone.lower()}): preview, cutting planes and both guides "
+                   f"removed ({removed} guide objects). Landmarks, segmentation and target values kept.")
+        self.osteotomy_status.setText(message)
+        if hasattr(self, "guide_status"):
+            self.guide_status.setStyleSheet("")
+            self.guide_status.setText("No guide - planning was reset.")
+
     def onResetOsteotomyPlanning(self):
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
@@ -746,9 +966,7 @@ class CorrectionMixin:
         # 4) re-read the CURRENT landmarks: measured values + calculated corrections
         self._on_target_values_changed()
 
-        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
-        if segmentation_node is not None and segmentation_node.GetDisplayNode() is not None:
-            segmentation_node.GetDisplayNode().SetVisibility3D(True)
+        self._ensure_segmentation_visible()
 
         message = (f"Planning reset ({side} {bone.lower()}): preview, gizmo and cutting planes "
                    f"removed; values re-read from the current landmarks - "
@@ -808,10 +1026,18 @@ class CorrectionMixin:
             moving_n, fixed_n, fixed_o = n_p, n_d, np.asarray(distal_origin, dtype=float)
 
         hinge_axis = np.cross(n_p, n_d)
-        hinge_axis = hinge_axis / np.linalg.norm(hinge_axis)
-        target_n = fixed_n if float(np.dot(moving_n, fixed_n)) >= 0.0 else -fixed_n
-        closure_deg = self._signed_angle_about(moving_n, target_n, hinge_axis)
-        H_close = self._rotation_about_line(hinge_axis, closure_deg, hinge_point)
+        if np.linalg.norm(hinge_axis) < 1e-6:
+            # parallel cuts: no hinge - the closure is a pure translation that sets the moving face
+            # onto the fixed one (removes the slab between the cuts)
+            moving_o = np.asarray(distal_origin if moving_is_distal else proximal_origin, dtype=float)
+            closure_deg = 0.0
+            H_close = np.eye(4)
+            H_close[:3, 3] = -float(np.dot(moving_o - fixed_o, fixed_n)) * fixed_n
+        else:
+            hinge_axis = hinge_axis / np.linalg.norm(hinge_axis)
+            target_n = fixed_n if float(np.dot(moving_n, fixed_n)) >= 0.0 else -fixed_n
+            closure_deg = self._signed_angle_about(moving_n, target_n, hinge_axis)
+            H_close = self._rotation_about_line(hinge_axis, closure_deg, hinge_point)
 
         shaft = np.asarray(shaft_axis, dtype=float); shaft = shaft / np.linalg.norm(shaft)
         contact_n = fixed_n if float(np.dot(fixed_n, shaft)) >= 0.0 else -fixed_n
@@ -1216,6 +1442,35 @@ class CorrectionMixin:
         self._hide_original_overlay(side)
         self._apply_segment_opacity()
 
+    def _ensure_segmentation_visible(self):
+        """Bone segmentation visible in 2D and 3D, the segment itself switched on, and a usable 3D
+        opacity: the 'Opacity' slider value, but at least 10 % (at 0 % it is set back to 100 %)."""
+        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+        if segmentation_node is None or segmentation_node.GetDisplayNode() is None:
+            return
+        display_node = segmentation_node.GetDisplayNode()
+        display_node.SetVisibility(True)
+        if hasattr(display_node, "SetVisibility3D"):
+            display_node.SetVisibility3D(True)
+        if hasattr(display_node, "SetVisibility2D"):
+            display_node.SetVisibility2D(True)
+        segmentation = segmentation_node.GetSegmentation()
+        for i in range(segmentation.GetNumberOfSegments()):
+            segment_id = segmentation.GetNthSegmentID(i)
+            display_node.SetSegmentVisibility(segment_id, True)
+            if display_node.GetSegmentOpacity3D(segment_id) < 0.1:
+                display_node.SetSegmentOpacity3D(segment_id, 1.0)
+        slider = getattr(self, "opacity_slider", None)
+        if slider is not None and slider.value < 10:
+            slider.setValue(100)                       # also applies the opacity (slider signal)
+        opacity = (slider.value / 100.0) if slider is not None else 1.0
+        if hasattr(display_node, "SetOpacity3D"):
+            display_node.SetOpacity3D(max(opacity, 0.1))
+        else:
+            display_node.SetOpacity(max(opacity, 0.1))
+        if hasattr(self, "_guide_saved_opacity"):
+            self._guide_saved_opacity = []             # nothing left to restore to a hidden state
+
     def onClearPreview(self):
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
@@ -1229,14 +1484,9 @@ class CorrectionMixin:
             if node is not None:
                 slicer.mrmlScene.RemoveNode(node)
                 removed_any = True
-        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         # without a preview the original bone must always be visible again - whatever hid it
         # (preview option, guide tools, a module reload that lost the remembered state)
-        if segmentation_node is not None and segmentation_node.GetDisplayNode() is not None:
-            display_node = segmentation_node.GetDisplayNode()
-            display_node.SetVisibility(True)
-            if hasattr(display_node, "SetVisibility3D"):
-                display_node.SetVisibility3D(True)
+        self._ensure_segmentation_visible()
         if hasattr(self, "_original_segmentation_visibility_3d"):
             del self._original_segmentation_visibility_3d
         self.correction_status.setText("Preview removed." if removed_any else "No preview to remove.")

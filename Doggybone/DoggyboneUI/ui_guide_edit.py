@@ -21,7 +21,13 @@ class GuideEditMixin:
     # Two guides share the whole painting/extrusion workflow: the SAW guide (on the bone as it is)
     # and the REDUCTION guide (on the fragments in the corrected position). Every guide node name
     # below depends on the active mode, so the tools work on the selected guide's own nodes.
+    def _bone_tag(self):
+        """Guide objects are kept per bone: the femur keeps the plain names, the tibia gets ' tibia'."""
+        box = getattr(self, "osteotomy_bone", None)
+        return " tibia" if box is not None and box.currentText == "Tibia" else ""
+
     def _mode_name(self, base):
+        base = base + self._bone_tag()
         return base if getattr(self, "_guide_mode", "saw") == "saw" else base + " (reduction)"
 
     def _guide_mode_is_reduction(self):
@@ -148,15 +154,16 @@ class GuideEditMixin:
             if old is not None and old.GetDisplayNode() is not None:
                 old.GetDisplayNode().SetVisibility(False)
             area = self._update_guide_footprint_display()
+            pin_note = "" if self._guide_mode_is_reduction() else self._show_saw_pin_preview()
             if empty:
                 self.guide_status.setText(
                     "Bone surface around the osteotomy prepared - paint the footprint with Brush + / "
-                    "Lasso + (rotate the view to reach every side).")
+                    "Lasso + (rotate the view to reach every side)." + (f"\n{pin_note}" if pin_note else ""))
                 return
             self.guide_status.setText(
                 f"Footprint suggested on the {self.guide_side_selector.currentText.lower()} side of the "
                 f"{side} {bone.lower()}: {int(selected.sum())} surface points, ~{area:.0f} mm\N{SUPERSCRIPT TWO}. "
-                f"Refine with brush / lasso, then 'Extrude guide body'.")
+                f"Refine with brush / lasso, then 'Extrude guide body'." + (f"\n{pin_note}" if pin_note else ""))
         finally:
             qt.QApplication.restoreOverrideCursor()
 
@@ -345,6 +352,15 @@ class GuideEditMixin:
                     and node.GetDisplayNode().GetVisibility():
                 node.GetDisplayNode().SetVisibility(False)
                 self._guide_hidden_preview.append(node.GetID())
+        # the measurement axes (shaft axis ...) run through the osteotomy and look like material in the
+        # cut while painting - hidden during editing, shown again afterwards
+        for node in slicer.util.getNodesByClass("vtkMRMLModelNode"):
+            name = node.GetName() or ""
+            display = node.GetDisplayNode()
+            if name.startswith(f"Doggybone {side} ") and name.endswith(" axis") and display is not None \
+                    and display.GetVisibility():
+                display.SetVisibility(False)
+                self._guide_hidden_preview.append(node.GetID())
         bone_segmentation = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         if self._guide_mode_is_reduction() and not bone_lasso:
             # paint on what the reduction guide sits on: the fragments in the corrected position
@@ -521,7 +537,7 @@ class GuideEditMixin:
                 self._abort_guide_event(caller, event)
                 if len(points) >= 3:
                     self._bone_lasso_apply(points)
-                qt.QTimer.singleShot(0, lambda: self.lasso_button.setChecked(False))
+                qt.QTimer.singleShot(0, self._stop_lasso)
                 return
             if tool.startswith("lasso"):
                 points = list(getattr(self, "_guide_lasso_points", []))
@@ -833,6 +849,9 @@ class GuideEditMixin:
             self.guide_status.setText("Reduction guide and its pins deleted. Place the pin rows again.")
         else:
             self.guide_status.setText("Footprint and guide body deleted. Paint again with Brush + / Lasso +.")
+        if not self._guide_mode_is_reduction():
+            self._show_saw_pin_preview()
+
     def _refresh_guide_body_if_present(self):
         '''After a footprint edit: an existing body is re-extruded so it always matches.'''
         if slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is not None:
@@ -882,6 +901,9 @@ class GuideEditMixin:
         if opacity is not None and body is not None and body.GetDisplayNode() is not None:
             body.GetDisplayNode().SetOpacity(opacity)
         self._guide_body_opacity = None
+        # back to the module-wide bone opacity (it may have been changed while painting)
+        if hasattr(self, "_set_bone_opacity") and getattr(self, "opacity_slider", None) is not None:
+            self._set_bone_opacity(self.opacity_slider.value)
 
     def _show_view_for_tool(self, key):
         if key == "brush_smooth":

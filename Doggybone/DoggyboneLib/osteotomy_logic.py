@@ -100,7 +100,8 @@ def closest_point_on_line(point, line_point, line_direction):
 
 
 def anatomical_correction_matrix(shaft_point, shaft_axis, rotation_angle_deg,
-                                  hinge_point, wedge_axis, wedge_angle_deg, frontal_first=True):
+                                  hinge_point, wedge_axis, wedge_angle_deg, frontal_first=True,
+                                  sagittal_axis=None, sagittal_angle_deg=0.0):
     """Build the rigid correction using two anatomically distinct rotation axes.
 
     1) Torsion/derotation is performed about the TRUE shaft line
@@ -127,11 +128,14 @@ def anatomical_correction_matrix(shaft_point, shaft_axis, rotation_angle_deg,
     The returned matrix maps the moving fragment from its scanned pose into its corrected pose.
     """
     torsion = rotation_matrix_about_line(shaft_point, shaft_axis, rotation_angle_deg)
-    wedge = rotation_matrix_about_line(hinge_point, wedge_axis, wedge_angle_deg)
+    wedge = matrix_to_numpy(rotation_matrix_about_line(hinge_point, wedge_axis, wedge_angle_deg))
+    if sagittal_axis is not None and abs(float(sagittal_angle_deg)) > 1e-9:
+        # sagittal part of the swing (tibia: TPA / procurvatum) about the hinge point
+        wedge = matrix_to_numpy(rotation_matrix_about_line(hinge_point, sagittal_axis, sagittal_angle_deg)) @ wedge
     if frontal_first:
-        H = matrix_to_numpy(torsion) @ matrix_to_numpy(wedge)
+        H = matrix_to_numpy(torsion) @ wedge
     else:
-        H = matrix_to_numpy(wedge) @ matrix_to_numpy(torsion)
+        H = wedge @ matrix_to_numpy(torsion)
     return numpy_to_vtk_matrix(H)
 
 

@@ -33,6 +33,8 @@ from DoggyboneLib.landmarks import LANDMARKS
 MODULE_PATH = osp.dirname(osp.dirname(osp.abspath(__file__)))   # the Doggybone module folder
 
 # Status colours used everywhere in the module (light pastel, dark text - readable in light and dark themes)
+BONE_OPACITY_TIP = ("3D opacity of the bone - the same value in every section (segmentation, measurements, "
+                    "osteotomy preview, guides). Lower it to see landmarks, spheres and axes inside the bone.")
 STATUS_OK_STYLE = "QLabel { background-color: #C6EFCE; color: #1B3D1F; padding: 2px 4px; }"
 # measured values: a light tint of their section's header colour
 MEASUREMENT_VALUE_STYLE = "QLabel { background-color: #E6DEF8; color: #322659; padding: 2px 4px; }"   # Measurements (#6b46c1)

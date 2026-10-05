@@ -75,7 +75,18 @@ class GuideBuildMixin:
             else:
                 slots, slot_notes, pin = self._plan_saw_slots(patch, gap)
                 self._place_saw_box_gizmos(slots)
-            if slots:
+            block = (getattr(self, "guide_saw_type", None) is not None
+                     and self.guide_saw_type.currentText == "Block" and not self._guide_mode_is_reduction())
+            block_side = None
+            if slots and block and len(slots) == 2:
+                patch = guide_logic.cut_wedge_window(patch, slots[0], slots[1], extra=1.0)
+            elif slots:
+                if block and len(slots) == 1:
+                    # single cut: the plate goes on the side of the cut where most of the guide sits
+                    from vtk.util.numpy_support import vtk_to_numpy
+                    side_values = (vtk_to_numpy(patch.GetPoints().GetData()).astype(float)
+                                   - np.asarray(slots[0]["centre"], float)) @ np.asarray(slots[0]["normal"], float)
+                    block_side = 1.0 if float(np.count_nonzero(side_values > 0)) >= 0.5 * len(side_values) else -1.0
                 patch = guide_logic.cut_slot_holes(patch, slots, extra=1.0)
             if self._guide_mode_is_reduction():
                 pins, pin_note = self._plan_reduction_pins(mesh, gap)
@@ -86,28 +97,85 @@ class GuideBuildMixin:
                 patch = guide_logic.cut_pin_holes(patch, pins)
             if slots or pins:
                 patch = guide_logic.make_patch_manifold(patch)
-            body = guide_logic.extrude_patch(patch, gap, thickness,
-                                             top_smoothing=float(self.guide_top_smoothing.value),
-                                             ribs=slots or None, outline_points=outline_points,
-                                             pins=pins or None)
-            body, islands = guide_logic.drop_small_regions(body, min_volume=15.0, min_fraction=0.0)
-            if slots:
+            volume_body = hasattr(self, "_guide_body_is_volume") and self._guide_body_is_volume()
+            if volume_body:
+                body, islands = None, 0          # built below, together with saw block and sleeves
+            else:
+                body = guide_logic.extrude_patch(patch, gap, thickness,
+                                                 top_smoothing=float(self.guide_top_smoothing.value),
+                                                 ribs=slots or None, outline_points=outline_points,
+                                                 pins=pins or None)
+                body, islands = guide_logic.drop_small_regions(body, min_volume=15.0, min_fraction=0.0)
+            if slots and body is not None and not volume_body:
                 # the body is extruded along the bone normals and leans into the kerfs - push it back
                 body, _pushed = guide_logic.push_out_of_kerfs(body, slots)
-            parts = [body]
+                if block and len(slots) == 2:
+                    body, _pushed = guide_logic.push_out_of_wedge(body, slots[0], slots[1])
+            parts = [body] if body is not None else []
             if len(slots) == 2:
                 # ONE block for both cuts: outer faces extended until they close, space between filled,
                 # both kerfs cut through - no crossing plates, no fragments
-                parts.append(guide_logic.saw_block_pair(slots[0], slots[1], self._pin_obb_tree(mesh), gap))
+                parts.append(guide_logic.saw_block_pair(slots[0], slots[1], self._pin_obb_tree(mesh), gap,
+                                                        block=block))
             else:
                 for slot in slots:
-                    parts += guide_logic.saw_block_shells(slot, None)
+                    parts += guide_logic.saw_block_shells(slot, None, block_side=block_side)
             n_block_end = len(parts)
             # (no tip bridge: both kerfs stay open from the bone to the top along the whole cut; the end
             #  caps at the slot ends and the body keep the guide in one piece)
             for planned_pin in pins:
-                parts.append(guide_logic.sleeve_shell(self._pin_obb_tree(mesh), planned_pin, gap))
+                if volume_body:                  # built inside the volume body (exact cylinders, bores cut through all)
+                    continue
+                else:                            # solid collar + positive fillet into the extruded body
+                    fillet = 1.5                     # ... but the collar never reaches a kerf
+                    for slot in slots:
+                        if "error" in slot:
+                            continue
+                        room = abs(float((np.asarray(planned_pin["entry"], float) - np.asarray(slot["centre"], float))
+                                         @ np.asarray(slot["normal"], float))) \
+                            - 0.5 * guide_logic.SLOT_WIDTH - 0.3 - float(planned_pin["r_out"])
+                        fillet = min(fillet, room)
+                    parts.append(guide_logic.sleeve_post(self._pin_obb_tree(mesh), planned_pin, gap,
+                                                         thickness, fillet=max(0.3, fillet)))
             self._set_pin_axes(guide_logic.pin_axis_polydata(pins) if pins else None)
+            volume_note = ""
+            if volume_body:
+                side_v = self.osteotomy_side.currentText.lower()
+                d_v, _s, _a, frame_error = self._guide_direction_frame(side_v, self.osteotomy_bone.currentText)
+                bone_v = self._guide_source_polydata()
+                if frame_error or bone_v is None:
+                    body, volume_info = None, {"error": frame_error or "no bone surface"}
+                else:
+                    body, volume_info = guide_logic.sdf_guide_body(
+                        bone_v, mesh, selection, d_v, gap, thickness, slots=slots, pins=pins, block=block,
+                        parts=parts[1:] if parts and parts[0] is None else parts,
+                        bridges=bool(self.guide_bridges.checked) and bool(slots),
+                        trim_undercut=bool(self.guide_trim_undercut.checked),
+                        rim_round=max(0.5, float(self.guide_rim_smoothing.value)),
+                        min_feature=float(self.guide_min_feature.value) if hasattr(self, "guide_min_feature") else 0.3,
+                        outer_smooth=max(0.3, 0.25 * float(self.guide_top_smoothing.value)),
+                        sleeves=True)
+                if body is None:
+                    self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+                    self.guide_status.setText("Volume guide: " + str(volume_info.get("error", "failed")))
+                    return
+                parts.insert(0, body)
+                volume_note = (f"Volume body {volume_info['volume_mm3']:.0f} mm\N{SUPERSCRIPT THREE}"
+                               + (f", {volume_info['bridges']} bridges across the cut" if volume_info.get("bridges") else "")
+                               + (f", undercut trimmed {volume_info['undercut_trimmed_mm3']:.0f} mm\N{SUPERSCRIPT THREE}"
+                                  if volume_info.get("undercut_trimmed_mm3", 0) >= 1 else "")
+                               + (f", thin edges < {float(self.guide_min_feature.value):.1f} mm removed "
+                                  f"({volume_info['thin_removed_mm3']:.1f} mm\N{SUPERSCRIPT THREE})"
+                                  if volume_info.get("thin_removed_mm3", 0) > 0 and hasattr(self, "guide_min_feature") else "")
+                               + (f", pits in the bone bridged ({volume_info['pits_closed_mm3']:.1f} mm\N{SUPERSCRIPT THREE})"
+                                  if volume_info.get("pits_closed_mm3", 0) >= 0.5 else "")
+                               + (f", {volume_info['islands_dropped']} loose piece(s) removed"
+                                  if volume_info.get("islands_dropped") else "")
+                               + f" ({volume_info.get('t_total', 0):.0f} s).")
+                if volume_info.get("pieces", 1) > 1:
+                    volume_note += (f"\nWARNING: the volume body is in {volume_info['pieces']} pieces - the "
+                                    "footprint does not reach around the kerf / the saw block. Paint further "
+                                    "towards the ends of the cut, or turn the bridges on.")
             open_edges = sum(guide_logic.open_edge_count(part) for part in parts)
             label_note = ""
             if not self._guide_mode_is_reduction() and self._label_wanted():
@@ -144,19 +212,23 @@ class GuideBuildMixin:
             guide = vtk.vtkPolyData()
             guide.DeepCopy(append.GetOutput())
             self._set_guide_body(guide)
+            if not self._guide_mode_is_reduction():
+                self._show_saw_pin_preview()           # the real sleeves are in the guide now - hide the preview
             closed = "all parts closed" if open_edges == 0 else f"NOT closed ({open_edges} open edges)"
             if islands:
                 closed += f", {islands} small free island(s) removed"
             if self._guide_mode_is_reduction():
                 self.guide_status.setText(
                     f"Reduction guide extruded on the corrected fragments: fit gap {gap:.2f} mm, "
-                    f"wall {thickness:.1f} mm, {closed}." + (f"\n{pin_note}" if pin_note else ""))
+                    f"wall {thickness:.1f} mm, {closed}." + (f"\n{pin_note}" if pin_note else "")
+                    + (f"\n{volume_note}" if volume_note else ""))
             else:
                 self.guide_status.setText(
                     f"Guide extruded: fit gap {gap:.2f} mm, wall {thickness:.1f} mm, {closed}.\n"
                     f"Saw slots {guide_logic.SLOT_WIDTH:.1f} mm (blade {guide_logic.BLADE_THICKNESS:.1f} mm), "
                     f"kerf inside the wedge: " + ("; ".join(slot_notes) if slot_notes else "none") +
-                    f".\nPins: {pin}" + (f"\n{pin_note}" if pin_note else "") + (f"\n{label_note}" if label_note else ""))
+                    f".\nPins: {pin}" + (f"\n{pin_note}" if pin_note else "") + (f"\n{label_note}" if label_note else "")
+                    + (f"\n{volume_note}" if volume_note else ""))
         finally:
             qt.QApplication.restoreOverrideCursor()
 
@@ -198,6 +270,65 @@ class GuideBuildMixin:
         self.guide_status.setText(
             f"Guide exported: {path}\nCentred at 0,0,0 (size {b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x "
             f"{b[5] - b[4]:.1f} mm; moved by {-centre[0]:.1f}, {-centre[1]:.1f}, {-centre[2]:.1f} mm).")
+
+    def _on_guide_bone_switched(self):
+        """Osteotomy bone changed (femur <-> tibia): the other bone's guides, pins and correction preview
+        are hidden (kept, never deleted), the original segmentation is shown, this bone's guide objects
+        (if any) come back. Guide objects are stored per bone, so planning the tibia never touches the
+        finished femur guides."""
+        new = self.osteotomy_bone.currentText
+        previous = getattr(self, "_guide_bone", "Femur")
+        if new == previous:
+            return
+        for name in ("_stop_guide_edit", "_restore_guide_hidden", "_remove_pin_gizmo", "_remove_pin_preview",
+                     "_remove_pin_picker_selection"):
+            method = getattr(self, name, None)
+            if method is not None:
+                try:
+                    method()
+                except Exception:
+                    logging.exception("Doggybone: bone switch step failed (continuing)")
+        self._selected_pin_id = None
+        self._pin_rows_active = False                 # the rows / handles of the other bone are not ours
+        self._pin_row_frames = None
+        stacks = getattr(self, "_guide_undo_stacks", {})
+        mode = getattr(self, "_guide_mode", "saw")
+        stacks[(previous, mode)] = getattr(self, "_guide_undo_stack", [])
+        self._guide_undo_stacks = stacks
+        self._guide_undo_stack = stacks.get((new, mode), [])
+        side = self.osteotomy_side.currentText.lower()
+        # every guide object of both bones off, then this bone's objects of the current mode on
+        for node in slicer.util.getNodesByClass("vtkMRMLDisplayableNode"):
+            name = node.GetName() or ""
+            if name.startswith(("Doggybone guide", "Doggybone saw guide pin preview", "Doggybone saw box",
+                                "Doggybone pin ")) and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(False)
+        for name in self._guide_nodes_of_mode(mode):
+            if name.startswith("Doggybone guide bone surface") or name.endswith("smooth marks"):
+                continue
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(True)
+        # correction preview of the previous bone off (fragments, combined bone, wedge, fine-shift gizmo)
+        for name in list(self._preview_node_names(side, previous)) + list(self._fine_shift_node_names(side, previous)):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(False)
+        self._guide_bone = new
+        self._ensure_segmentation_visible()
+        if mode == "saw":
+            try:
+                self._show_saw_pin_preview()
+            except Exception:
+                logging.exception("Doggybone: saw pin preview after bone switch failed (continuing)")
+        self._update_guide_tool_visibility()
+        if hasattr(self, "guide_status"):
+            self.guide_status.setStyleSheet("")
+            body = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
+            self.guide_status.setText(
+                f"{new}: " + ("its guide is shown." if body is not None else
+                              "no guide yet - the femur guides are kept (hidden)." if new == "Tibia" else
+                              "no guide yet - the tibia guides are kept (hidden)."))
 
     def _guide_nodes_of_mode(self, mode):
         saved = getattr(self, "_guide_mode", "saw")
@@ -381,6 +512,8 @@ class GuideBuildMixin:
         if pair is None or grid is None or getattr(self, "_reduction_diam_label", None) is None:
             return
         param_label, field = pair
+        if getattr(self, "_reduction_row_height", None):
+            field.setMinimumHeight(self._reduction_row_height)
         if self._guide_mode_is_reduction():
             grid.addWidget(field, 4, 1)
             param_label.setVisible(False)
@@ -405,12 +538,16 @@ class GuideBuildMixin:
         for key in self.PAINT_TOOLS:
             if key in buttons:
                 buttons[key].setVisible(full)
+        if getattr(self, "_brush_radius_widget", None) is not None:
+            self._brush_radius_widget.setVisible(full)
         if getattr(self, "guide_delete_button", None) is not None:
             # pin bar: 'Delete pins' next to 'Place pins' is the one delete button
             self.guide_delete_button.setVisible(full)
         reduction = self._guide_mode_is_reduction()
         if "pins" in buttons:
-            buttons["pins"].setVisible(reduction)             # pins are set after the reduction only
+            buttons["pins"].setVisible(False)                 # internal (manual placement); pins are clicked
+        if getattr(self, "guide_pin_delete_selected_button", None) is not None:
+            self.guide_pin_delete_selected_button.setVisible(reduction)
         if getattr(self, "guide_pins_delete_button", None) is not None:
             # footprint variant: remove only the pins, keep the painted footprint (pin bar: 'Delete')
             self.guide_pins_delete_button.setVisible(reduction and full)
@@ -438,10 +575,11 @@ class GuideBuildMixin:
         self._stop_guide_edit()
         self._restore_guide_hidden()
         stacks = getattr(self, "_guide_undo_stacks", {})
-        stacks[getattr(self, "_guide_mode", "saw")] = getattr(self, "_guide_undo_stack", [])
+        bone_key = self.osteotomy_bone.currentText
+        stacks[(bone_key, getattr(self, "_guide_mode", "saw"))] = getattr(self, "_guide_undo_stack", [])
         self._guide_undo_stacks = stacks
         self._guide_mode = mode
-        self._guide_undo_stack = stacks.get(mode, [])
+        self._guide_undo_stack = stacks.get((bone_key, mode), [])
         if getattr(self, "reduction_options_widget", None) is not None:
             self.reduction_options_widget.setVisible(mode == "reduction")
         self._update_guide_tool_visibility()
@@ -479,8 +617,10 @@ class GuideBuildMixin:
                 seg_display.SetVisibility3D(show_3d)
             if hasattr(seg_display, "SetVisibility2D"):
                 seg_display.SetVisibility2D(True)
+        note = self._show_saw_pin_preview()          # hidden in the reduction mode
         if mode == "saw":
-            self.guide_status.setText("Saw guide: paint / edit the cutting guide on the bone as it is.")
+            self.guide_status.setText("Saw guide: paint / edit the cutting guide on the bone as it is."
+                                      + (f"\n{note}" if note else ""))
             return
         if self._ensure_current_reduction_surface():
             return

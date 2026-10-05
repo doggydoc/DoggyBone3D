@@ -55,11 +55,10 @@ class PlanesMixin:
             if method is None:
                 continue
             try:
-                axes = vtk.vtkMatrix3x3()
-                method(axes)
-                x = np.array([axes.GetElement(r, 0) for r in range(3)], dtype=float)
-                y = np.array([axes.GetElement(r, 1) for r in range(3)], dtype=float)
-                z = np.array([axes.GetElement(r, 2) for r in range(3)], dtype=float)
+                # Slicer API: GetAxesWorld(x, y, z) / GetAxes(x, y, z) fill three 3-vectors
+                x, y, z = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+                method(x, y, z)
+                x, y, z = (np.array(v, dtype=float) for v in (x, y, z))
                 if np.linalg.norm(x) > 1e-6 and np.linalg.norm(y) > 1e-6 and np.linalg.norm(z) > 1e-6:
                     x = osteotomy_logic.normalize(x)
                     z = osteotomy_logic.normalize(z)
@@ -389,11 +388,27 @@ class PlanesMixin:
             node, created, message = self._create_plane_node_at_anatomical_axis(side, bone, node_name, label, color)
             self._update_plane_handle_interactivity()
             self.osteotomy_status.setText(message)
-            if created:
-                # bisecting principle as the fixed default; manual changes afterwards are kept
+            pending = node is not None and node.GetAttribute("Doggybone.bisectPending") == "1"
+            if created or pending:
+                # bisecting principle as the fixed default; manual changes afterwards are kept.
+                # Without the correction landmarks the plane stays perpendicular to the shaft and
+                # is aligned the next time 'Insert/update MASTER plane' is pressed.
+                side_panel = self.left_panel if side == "left" else self.right_panel
+                origin, _x, _y, n = self._get_plane_frame(node, side, bone)
+                R, info = self._desired_correction_rotation(side, bone, not distal, origin, n)
+                if R is None:
+                    node.SetAttribute("Doggybone.bisectPending", "1")
+                    self.osteotomy_status.setStyleSheet(STATUS_WARN_STYLE)
+                    self.osteotomy_status.setText(
+                        f"{label} master plane " + ("created" if created else "kept") + " perpendicular to the "
+                        f"shaft - NOT yet aligned (correction not known: {info}). Set the missing landmarks "
+                        "(or uncheck those targets), then press 'Insert/update MASTER plane' again to align it.")
+                    return
+                node.SetAttribute("Doggybone.bisectPending", "0")
                 self.onAlignMasterBisecting()
+                self.osteotomy_status.setStyleSheet("")
                 self.osteotomy_status.setText(
-                    f"{label} master plane created and aligned by the bisecting principle - move / "
+                    f"{label} master plane aligned by the bisecting principle - move / "
                     "rotate it by hand if needed, then create the second plane. "
                     + ("" if "aligned" in self.osteotomy_status.text else self.osteotomy_status.text))
         except Exception as exc:
@@ -423,6 +438,9 @@ class PlanesMixin:
         ok, message = self._sync_other_plane(side, bone)
         self._update_plane_handle_interactivity()
         self.osteotomy_status.setText(message)
+        advice = self._cwo_wedge_advice(side, bone) if hasattr(self, "_cwo_wedge_advice") else ""
+        if advice and hasattr(self, "correction_status"):
+            self.correction_status.setText(advice)
 
     def onInsertCuttingPlane(self):
         side = self.osteotomy_side.currentText.lower()
@@ -617,6 +635,8 @@ class PlanesMixin:
             return False, frame_error
 
         ok_rot, torsion_delta, rotation_message = self._calculated_rotation_delta(side, bone)
+        if not ok_rot and bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode():
+            ok_rot, torsion_delta = True, 0.0          # tibia: torsion from the target table
         if not ok_rot:
             return False, rotation_message
         self.rotation_angle.setValue(torsion_delta)

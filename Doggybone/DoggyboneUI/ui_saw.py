@@ -42,17 +42,71 @@ class SawMixin:
             pins.append(planned)
             lengths.append(planned["bone_length"])
             counts[pin["segment"]] = counts.get(pin["segment"], 0) + 1
+        touching = []
         for a_index in range(len(pins)):
             for b_index in range(a_index + 1, len(pins)):
                 a, b = pins[a_index], pins[b_index]
                 if np.linalg.norm(a["entry"] - b["entry"]) < a["r_out"] + b["r_out"]:
-                    rejected.append(f"{a['label']}/{b['label']}: sleeves overlap")
+                    touching.append(f"{a['label']}/{b['label']}")
         note = ("Pin sleeves from the pins set after the reduction: " + ", ".join(f"{v} {k}" for k, v in counts.items())
                 + (f", in bone {min(lengths):.1f}-{max(lengths):.1f} mm" if lengths else "")
                 + " - pre-angled, parallel after the reduction.")
+        if touching:
+            if self._guide_body_is_volume():
+                note += ("\nSleeves touching (" + ", ".join(touching) + "): merged into one block, every bore "
+                         "is cut through - no sleeve reaches into a neighbouring bore.")
+            else:
+                note += ("\nWARNING - sleeves overlap (" + ", ".join(touching) + "): with Body 'Extrude' a "
+                         "sleeve can reach into the neighbouring bore - use Body 'Volume' or move the pins apart.")
         if rejected:
             note += "\nNot built: " + "; ".join(rejected)
         return pins, note
+
+    SAW_PIN_PREVIEW_NAME = "Doggybone saw guide pin preview"
+
+    def _show_saw_pin_preview(self):
+        """Saw guide, before the guide exists: the sleeves of the pins set on the reduction guide,
+        shown on the bone as it is (pre-angled), so the footprint can be painted around them."""
+        node = slicer.mrmlScene.GetFirstNodeByName(self.SAW_PIN_PREVIEW_NAME)
+        body = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
+        has_body = body is not None and body.GetPolyData() is not None and body.GetPolyData().GetNumberOfPoints() > 0
+        if self._guide_mode_is_reduction() or has_body:
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(False)
+            return ""
+        mesh_node = self._guide_mesh_node()
+        mesh = mesh_node.GetPolyData() if mesh_node is not None else self._get_bone_polydata()
+        if mesh is None or mesh.GetNumberOfPoints() == 0:
+            return ""
+        marks = slicer.mrmlScene.GetFirstNodeByName(self.REDUCTION_PIN_MARKS)
+        if marks is None or marks.GetNumberOfControlPoints() == 0:
+            if node is not None:
+                slicer.mrmlScene.RemoveNode(node)
+            return "No pins yet - set them on the reduction guide first; they are then shown here before painting."
+        try:
+            pins, _note = self._plan_saw_pins_from_reduction(mesh, float(self.guide_gap.value))
+        except Exception:
+            logging.exception("Doggybone: saw pin preview failed")
+            return ""
+        if not pins:
+            return ""
+        append = vtk.vtkAppendPolyData()
+        obb = self._pin_obb_tree(mesh)
+        for pin in pins:
+            append.AddInputData(guide_logic.sleeve_shell(obb, pin, float(self.guide_gap.value)))
+        append.AddInputData(guide_logic.pin_axis_polydata(pins))
+        append.Update()
+        if node is None:
+            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", self.SAW_PIN_PREVIEW_NAME)
+            node.CreateDefaultDisplayNodes()
+            node.GetDisplayNode().SetColor(1.0, 0.55, 0.1)
+            node.GetDisplayNode().SetOpacity(0.7)
+        preview = vtk.vtkPolyData()
+        preview.DeepCopy(append.GetOutput())
+        node.SetAndObservePolyData(preview)
+        node.GetDisplayNode().SetVisibility(True)
+        return (f"Pin sleeves of the saw guide shown in orange ({len(pins)} pins, pre-angled) - paint the "
+                "footprint so that it reaches around them.")
 
     def _plan_pins(self, slots, mesh, gap):
         """Plan every pin of the pins node. Returns (pins, note)."""
@@ -123,23 +177,31 @@ class SawMixin:
             lengths.append(pin["bone_length"])
             counts[segment] = counts.get(segment, 0) + 1
         self._relabel_pins(node)
+        touching = []
         for a_index in range(len(pins)):
             for b_index in range(a_index + 1, len(pins)):
                 a, b = pins[a_index], pins[b_index]
                 if np.linalg.norm(a["entry"] - b["entry"]) < a["r_out"] + b["r_out"]:
-                    rejected.append(f"{a['label']}/{b['label']}: sleeves overlap")
+                    touching.append(f"{a['label']}/{b['label']}")
         note = (f"Pin sleeves: " + ", ".join(f"{v} {k}" for k, v in counts.items()) +
                 (f", \u00d8 {diameter:.1f} mm, in bone {min(lengths):.1f}-{max(lengths):.1f} mm" if lengths else ""))
         group_angle = float(np.degrees(np.arccos(np.clip(float(np.dot(condylar_direction, opposite_direction)), -1.0, 1.0))))
         note += (f"\n{condylar.capitalize()} (condylar) pins perpendicular to the condylar axis; {opposite} pins "
                  f"pre-angled {group_angle:.1f}\N{DEGREE SIGN} - parallel after the reduction.")
+        if touching:
+            if self._guide_body_is_volume():
+                note += ("\nSleeves touching (" + ", ".join(touching) + "): merged into one block, every bore "
+                         "is cut through - no sleeve reaches into a neighbouring bore.")
+            else:
+                note += ("\nWARNING - sleeves overlap (" + ", ".join(touching) + "): with Body 'Extrude' a "
+                         "sleeve can reach into the neighbouring bore - use Body 'Volume' or move the pins apart.")
         if rejected:
             note += "\nNot built: " + "; ".join(rejected)
         return pins, note
 
     # --- saw boxes: one gizmo per box, moving / turning it only WITHIN its cutting plane -------------
     def _saw_box_gizmo_name(self, label):
-        return f"Doggybone saw box {label}"
+        return f"Doggybone saw box{self._bone_tag()} {label}"        # per bone (femur: plain name)
 
     def _saw_box_adjustment(self, label):
         node = slicer.mrmlScene.GetFirstNodeByName(self._saw_box_gizmo_name(label))
@@ -219,6 +281,10 @@ class SawMixin:
         du = adj.get("du", 0.0) + float(np.dot(shift, u0))
         dv = adj.get("dv", 0.0) + float(np.dot(shift, v0))
         node.SetAttribute("Doggybone.adjust", f"{theta:.6f},{du:.4f},{dv:.4f}")
+        # the current pose becomes the new reference - a second drag adds only ITS own change
+        y_now = [0.0] * 3
+        node.GetAxesWorld([0.0] * 3, y_now, [0.0] * 3)
+        node.SetAttribute("Doggybone.ref", ",".join(f"{x:.6f}" for x in list(origin) + list(x_axis) + list(y_now)))
         self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
         self.guide_status.setText(
             f"Saw box {label} adjusted in its cutting plane: turned {np.degrees(theta):+.1f}\N{DEGREE SIGN}, "
@@ -231,8 +297,14 @@ class SawMixin:
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         planes = []
+        # opening wedge: only the MASTER plane is a real cut - the second plane is a virtual target
+        # and must never get a slot / saw face
+        owo = self.osteotomy_technique.currentText.startswith("OWO")
+        master = self.reference_plane_selector.currentText.lower()
         for label, name in (("proximal", self._plane_node_name(side, bone)),
                             ("distal", self._distal_plane_node_name(side, bone))):
+            if owo and label != master:
+                continue
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is not None:
                 origin, normal = self._get_plane_origin_normal(node)
@@ -256,6 +328,13 @@ class SawMixin:
         for _label, origin_, normal_ in planes:
             near_any |= np.abs((patch_points - origin_) @ normal_) <= 4.0
         common_v = patch_normals[near_any].mean(axis=0) if near_any.any() else None
+        # saw direction = the chosen guide side (projected into each cutting plane). The mean normal of
+        # the footprint was used before - with a footprint reaching round the bone it tilted the saw
+        # direction by up to ~70 deg, the slot then ran along the long diagonal of the cross-section and
+        # stuck out far beyond the bone. Turn it with the saw box gizmo if needed.
+        d_side, _shaft, _across, frame_error = self._guide_direction_frame(side, bone)
+        if not frame_error and d_side is not None:
+            common_v = np.asarray(d_side, float)
         for index, (label, origin, normal) in enumerate(planes):
             other = (planes[1 - index][1], planes[1 - index][2]) if len(planes) == 2 else None
             strip = np.abs((patch_points - origin) @ normal) <= 4.0
@@ -268,7 +347,12 @@ class SawMixin:
                 diameters.append(diameter)
             slot = guide_logic.plan_slot(bone_points, contour, origin, normal, other,
                                          common_v if common_v is not None else patch_normals[strip].mean(axis=0), gap,
-                                         adjust=self._saw_box_adjustment(label))
+                                         adjust=self._saw_box_adjustment(label),
+                                         margin=float(self.guide_slot_margin.value)
+                                         if getattr(self, "guide_slot_margin", None) is not None else None,
+                                         near_fraction=0.5 if (getattr(self, "guide_slot_extent", None) is not None
+                                                               and self.guide_slot_extent.currentText.startswith("Guide"))
+                                         else None)
             if "error" in slot:
                 notes.append(f"{label}: {slot['error']}")
                 continue

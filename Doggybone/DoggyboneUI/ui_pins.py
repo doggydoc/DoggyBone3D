@@ -236,7 +236,7 @@ class PinsMixin:
             out.append(q)
         return out, moved, None
 
-    SAW_PINS_NAME = "Doggybone guide pins"
+    SAW_PINS_NAME = property(lambda self: "Doggybone guide pins" + self._bone_tag())
     # reduction mode: pins set on the corrected bone ("... (reduction)"), saw mode: legacy marks
     GUIDE_PINS_NAME = property(lambda self: self._mode_name("Doggybone guide pins"))
     GUIDE_PIN_AXES_NAME = property(lambda self: self._mode_name("Doggybone guide pin axes"))
@@ -253,8 +253,36 @@ class PinsMixin:
     def _pin_diameter(self):
         chosen = self.guide_pin.currentText
         if chosen.startswith("Auto"):
-            return guide_logic.auto_pin_diameter(getattr(self, "_last_bone_diameter", None))
+            return guide_logic.auto_pin_diameter(self._bone_diameter_at_cuts())
         return float(chosen.split()[0])
+
+    def _bone_diameter_at_cuts(self):
+        """Smallest bone diameter at the cutting planes of the CURRENT bone, measured on demand (cached
+        per bone and plane pose) - the same value for the reduction guide (pins set first) and the
+        saw guide, independent of which guide was built before."""
+        bone_polydata = self._get_bone_polydata() if hasattr(self, "_get_bone_polydata") else None
+        planes = self._cut_planes()
+        if bone_polydata is None or not planes:
+            return None
+        key = (self.osteotomy_bone.currentText, bone_polydata.GetNumberOfPoints(),
+               tuple(round(float(x), 2) for _l, o, n in planes for x in list(o) + list(n)))
+        cache = getattr(self, "_bone_diameter_cache", {})
+        if key in cache:
+            return cache[key]
+        diameters = []
+        for _label, origin, normal in planes:
+            try:
+                contour = guide_logic.section_contour(bone_polydata, origin, normal)
+                d = guide_logic.contour_diameter(contour, normal) if contour is not None else None
+            except Exception:
+                logging.exception("Doggybone: bone diameter at the cut failed (continuing)")
+                d = None
+            if d is not None:
+                diameters.append(float(d))
+        value = min(diameters) if diameters else None
+        cache[key] = value
+        self._bone_diameter_cache = cache
+        return value
 
     def _cut_planes(self):
         """[(label, origin, unit normal)] of the existing cutting planes."""
@@ -380,7 +408,7 @@ class PinsMixin:
             self._place_pin_gizmo()
 
     # --- automatic pin rows (reduction mode) -------------------------------------------------
-    PIN_ROW_HANDLES = "Doggybone pin row handles"
+    PIN_ROW_HANDLES = property(lambda self: "Doggybone pin row handles" + self._bone_tag())
 
     def _pin_row_defaults(self):
         """(first-pin distance from the cut, spacing) from the pin diameter."""
@@ -589,6 +617,8 @@ class PinsMixin:
                 + ("staggered to both sides of the bone centre" if self._pin_row_staggered() else "centred")
                 + ", parallel to each other and to the cut plane(s). Drag the row handles along the bone to "
                 "adjust, then 'Extrude guide body'.")
+        if getattr(self, "_pin_tilt_note", ""):
+            text += "\n" + self._pin_tilt_note
         moved_on = [f"{k} +{v:.1f} mm" for k, v in shifted.items() if v > 0.0]
         if moved_on:
             text += ("\nMoved further from the (oblique) cut so the saw-guide sleeves keep their distance: "
@@ -647,6 +677,7 @@ class PinsMixin:
         elif getattr(self, "_pin_row_handle_tag", None) is None:
             self._pin_row_handle_tag = node.AddObserver(slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
                                                         lambda caller, event: self._on_pin_row_handle_moved())
+        self._pin_row_handle_node_id = node.GetID()      # for releasing the observer on reload
         self._pin_row_frames = frames
         self._updating_handles = True
         try:
@@ -687,7 +718,7 @@ class PinsMixin:
             qt.QTimer.singleShot(0, self._place_pin_rows)
 
     # --- pins set AFTER the reduction (on the corrected bone) --------------------------------
-    REDUCTION_PIN_MARKS = "Doggybone guide pins (reduction)"
+    REDUCTION_PIN_MARKS = property(lambda self: "Doggybone guide pins" + self._bone_tag() + " (reduction)")
 
     def _correction_state(self):
         """(4x4 correction incl. fine shift, moved segment) or (None, None)."""
@@ -810,6 +841,24 @@ class PinsMixin:
             direction = guide_logic.unit(direction)
         if float(np.dot(direction, guide_side)) < 0.0:
             direction = -direction
+        # Pin tilt: the pins are turned WITHIN the cutting plane (about its normal) - they stay parallel
+        # to the cut, so they can never meet the saw blade, but reach the bone from a better angle.
+        # The axis is the cut of the condylar (unmoved) fragment; positive = towards proximal.
+        tilt = float(self.pin_tilt.value) if getattr(self, "pin_tilt", None) is not None else 0.0
+        self._pin_tilt_note = ""
+        if abs(tilt) > 1e-6:
+            axis = normals[0] if condylar == "proximal" else normals[-1]
+            proximal_dir = -shafts["distal"] if shafts.get("distal") is not None else shafts["proximal"]
+            if float(np.dot(np.cross(axis, direction), proximal_dir)) < 0.0:
+                axis = -axis                                       # + tilts the pin heads proximally
+            t = np.radians(tilt)
+            direction = guide_logic.unit(direction * np.cos(t) + np.cross(axis, direction) * np.sin(t))
+            other = normals[-1] if condylar == "proximal" else normals[0]
+            oblique = float(np.degrees(np.arcsin(min(1.0, abs(float(np.dot(direction, other)))))))
+            self._pin_tilt_note = (f"Pins tilted {tilt:+.0f}\N{DEGREE SIGN} within the cutting plane"
+                                   + (f" (oblique {oblique:.1f}\N{DEGREE SIGN} to the other fragment's cut - "
+                                      "distance from the cut is checked along the whole pin)" if oblique > 0.5 else "")
+                                   + ".")
         return direction, shafts, None
 
     @staticmethod
@@ -975,10 +1024,74 @@ class PinsMixin:
         index = self._selected_pin_index()
         if index is None:
             self.guide_status.setStyleSheet("")
-            self.guide_status.setText("No pin selected - switch 'Pins' on and click the pin you want to delete.")
+            self.guide_status.setText("No pin selected - click the pin in the 3D view first.")
             return
         self._remove_pin(index)
         self._select_reduction_pin(None)
+        self._rebuild_after_pin_change()
+
+    # --- reduction guide: pins are selected by clicking them (no tool button needed) ----------------
+    def _install_pin_picker(self):
+        self._remove_pin_picker()
+        try:
+            view = slicer.app.layoutManager().threeDWidget(0).threeDView()
+        except Exception:
+            return
+        interactor = view.interactor()
+        if getattr(self, "_guide_view", None) is None:
+            self._guide_view = view
+        tags = [interactor.AddObserver(event, self._on_pin_picker, 0.9)
+                for event in ("LeftButtonPressEvent", "LeftButtonReleaseEvent", "KeyPressEvent")]
+        self._pin_picker = (interactor, tags)
+
+    def _remove_pin_picker(self):
+        entry = getattr(self, "_pin_picker", None)
+        if entry:
+            interactor, tags = entry
+            for tag in tags:
+                try:
+                    interactor.RemoveObserver(tag)
+                except Exception:
+                    pass
+        self._pin_picker = None
+
+    def _on_pin_picker(self, caller, event):
+        """Click (no drag) on a pin of the reduction guide: select it - the gizmo appears, drag it to move
+        the pin (it stays parallel). Click elsewhere: deselect. Delete / Backspace: delete the selected
+        pin. A drag rotates the view as usual."""
+        try:
+            if not self._guide_mode_is_reduction() or getattr(self, "_guide_active_tool", None) is not None:
+                return
+            if event == "KeyPressEvent":
+                if caller.GetKeySym() in ("Delete", "BackSpace") and self._selected_pin_index() is not None:
+                    qt.QTimer.singleShot(0, self.onDeleteSelectedPin)
+                return
+            x, y = caller.GetEventPosition()
+            if event == "LeftButtonPressEvent":
+                self._pin_press = None
+                if caller.GetShiftKey() or caller.GetControlKey() or caller.GetAltKey() or self._pin_gizmo_hovered():
+                    return
+                self._pin_press = (x, y)
+                return
+            press, self._pin_press = getattr(self, "_pin_press", None), None
+            if press is None or abs(x - press[0]) + abs(y - press[1]) > 4:
+                return
+            node = slicer.mrmlScene.GetFirstNodeByName(self.REDUCTION_PIN_MARKS)
+            if node is None or node.GetNumberOfControlPoints() == 0:
+                return
+            mark = self._pin_under_mouse(x, y)
+            if mark is not None:
+                qt.QTimer.singleShot(0, lambda i=mark: self._select_reduction_pin(i, announce=True))
+            elif self._selected_pin_index() is not None:
+                qt.QTimer.singleShot(0, lambda: self._select_reduction_pin(None))
+        except Exception:
+            logging.exception("Doggybone: pin picker failed (continuing)")
+
+    def _rebuild_after_pin_change(self):
+        """An existing reduction guide follows the moved / deleted pin right away."""
+        self._pins_dirty = False
+        if slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is not None:
+            qt.QTimer.singleShot(0, lambda: self._extrude_guide_body(push_undo=True))
 
     def _keep_clear_of_cut(self, pin, fragments, direction, centred=False):
         """A pin too close to its cut (the saw guide could not take it) is moved away from the cut along
@@ -1036,7 +1149,8 @@ class PinsMixin:
             self.guide_status.setStyleSheet("")
             self.guide_status.setText(
                 f"Pin {node.GetNthControlPointLabel(index)} selected - move it with the gizmo above it (it "
-                "stays parallel); a click on the pin deletes it.")
+                "stays parallel); 'Delete selected pin' or the Delete key removes it, a click elsewhere "
+                "deselects it.")
 
     def _pin_gizmo_axes(self, segment):
         M, moved = self._correction_state()
@@ -1070,6 +1184,12 @@ class PinsMixin:
             self._remove_pin_gizmo()
             return
         gizmo = slicer.mrmlScene.GetFirstNodeByName(self.PIN_GIZMO)
+        tags = getattr(self, "_pin_gizmo_tags", None)
+        if gizmo is not None and (tags is None or tags[0] != gizmo.GetID()):
+            # left over from an earlier widget (module reload): its observers would move THAT widget's
+            # selected pin as well - always start with a fresh gizmo
+            slicer.mrmlScene.RemoveNode(gizmo)
+            gizmo = None
         if gizmo is None:
             gizmo = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsPlaneNode", self.PIN_GIZMO)
             gizmo.CreateDefaultDisplayNodes()
@@ -1221,6 +1341,8 @@ class PinsMixin:
         else:
             self.guide_status.setStyleSheet("")
             self.guide_status.setText(text)
+        if getattr(self, "_guide_active_tool", None) != "pins":
+            self._rebuild_after_pin_change()
 
     def _show_reduction_pin_axes(self):
         """Axes of the pins set after the reduction (corrected pose) - ALWAYS into the reduction node,

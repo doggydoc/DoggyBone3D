@@ -10,6 +10,10 @@ import numpy as np
 from DoggyboneLib.helpers import *
 
 ALDFA_REFERENCE_DEG = 94.0   # canine reference aLDFA used for the varus/valgus label
+# canine tibial mechanical joint angles (frontal plane), Dismukes et al. 2007: mMPTA 93.3 +/- 1.8 deg;
+# mMDTA value to be checked against the paper
+TIBIA_MPTA_REF_DEG = 93.3
+TIBIA_MDTA_REF_DEG = 95.8
 
 def sphere_landmark(point_dict, radius_dict, label):
     '''
@@ -146,36 +150,131 @@ class TibiaTorsionMeasurement(BaseMeasurement):
             raise ValueError(f"Unknown side {self.side}")
 
 class VarusValgusTibiaMeasurement(BaseMeasurement):
-    AXIS_LABELS = ["Tibial shaft axis", "Proximal tibial condylar axis", "Cochlear articulation axis", "Condylar articulation axis"]
+    """Frontal-plane alignment of the tibia, independent of the tibial torsion.
+
+    Each joint line is measured against the tibial axis in ITS OWN frontal plane (the plane that
+    contains the axis and that joint line): the angle between a line and an axis does not change
+    when the line turns about the axis, so a torsion of the proximal against the distal tibia
+    cannot leak into the varus/valgus value.
+      mMPTA: proximal joint line (lateral -> medial articulation point) vs. the mechanical axis
+             (intercondylar eminence -> talus centre), medial-proximal angle
+      mMDTA: distal joint line (lateral -> medial cochlea articulation point) vs. the mechanical
+             axis, medial-distal angle
+    The value used by the osteotomy planner is the frontal angle between the two joint lines on
+    the anatomical axis, aMPTA + aMDTA - 180 deg (0 = parallel joint lines; normal ~ MPTA_REF + MDTA_REF - 180).
+    Smaller than normal = varus, larger = valgus. The anatomical angles (shaft axis through the two
+    diaphyseal midpoints) are shown as well."""
+    AXIS_LABELS = ["Tibial mechanical axis", "Tibial shaft axis", "Proximal tibial axis", "Proximal joint line",
+                   "Distal joint line"]
+    LANDMARK_ORDER = ["intercondylar eminence", "Talus centre", "proximal tibia midpoint", "distal tibia midpoint",
+                      "lateral condyle articulation point tibia", "medial condyle articulation point tibia",
+                      "lateral cochlea articulation point tibia", "medial cochlea articulation point tibia"]
 
     def __init__(self):
         super().__init__('Varus Valgus Tibia')
-        self.description = "TEST"
-    
-    def _measure(self, point_dict, radius_dict):
-        normal = np.cross((vector_with_two_points(point_dict["distal tibia midpoint"], point_dict["proximal tibia midpoint"])),(vector_with_two_points(point_dict["condylus medialis tibiae"], point_dict["condylus lateralis tibiae"])))
-        vector_proximal_tibia_vv = vector_with_two_points(point_dict["lateral cochlea articulation point tibia"], point_dict["medial cochlea articulation point tibia"])
-        vector_distal_tibia_vv = vector_with_two_points(point_dict["lateral condyle articulation point tibia"], point_dict["medial condyle articulation point tibia"])
-        self.axes = {
-            "Tibial shaft axis": (point_dict["distal tibia midpoint"], point_dict["proximal tibia midpoint"]),
-            "Proximal tibial condylar axis": (point_dict["condylus medialis tibiae"], point_dict["condylus lateralis tibiae"]),
-            "Cochlear articulation axis": (point_dict["lateral cochlea articulation point tibia"], point_dict["medial cochlea articulation point tibia"]),
-            "Condylar articulation axis": (point_dict["lateral condyle articulation point tibia"], point_dict["medial condyle articulation point tibia"]),
-        }
+        self.display_name = "Varus/Valgus Tibia (mMPTA / mMDTA)"
+        self._angles = None
 
-        # This is a bending angle (not a rotation/torsion), so - same reasoning as the femur
-        # varus/valgus fix - the raw 3D angle is used directly rather than first projecting onto
-        # a plane. normal is still used below for the side-direction check.
-        a = angle(vector_proximal_tibia_vv, vector_distal_tibia_vv)*180/math.pi
-        
-        t = np.cross(vector_proximal_tibia_vv, vector_distal_tibia_vv)
-        q = np.dot(t,normal)
-        if self.side.lower() == "right":
-            return a, "Varus" if q > 0 else "Valgus"
-        elif self.side.lower() == "left":
-            return a, "Valgus" if q > 0 else "Varus"
-        else:
-            raise ValueError(f"Unknown side {self.side}")
+    def result_lines(self, value, description):
+        if self._angles is None:
+            return None
+        m_mpta, m_mdta, a_mpta, a_mdta = self._angles
+        p_mpta, p_axis = getattr(self, "_proximal_axis_angles", (None, None))
+        deg = "\N{DEGREE SIGN}"
+        reference = TIBIA_MPTA_REF_DEG + TIBIA_MDTA_REF_DEG - 180.0
+        return [
+            f"Joint lines (aMPTA + aMDTA - 180, torsion-free): {value:.2f}{deg} ({description}; normal ~{reference:.1f}{deg})",
+            f"mMPTA: {m_mpta:.2f}{deg} ({self._label(m_mpta, TIBIA_MPTA_REF_DEG)} proximal; ref. {TIBIA_MPTA_REF_DEG:.1f}{deg})",
+            f"mMDTA: {m_mdta:.2f}{deg} ({self._label(m_mdta, TIBIA_MDTA_REF_DEG)} distal; ref. {TIBIA_MDTA_REF_DEG:.1f}{deg})",
+            f"aMPTA / aMDTA (shaft axis): {a_mpta:.2f}{deg} ({self._label(a_mpta, TIBIA_MPTA_REF_DEG)}) / "
+            f"{a_mdta:.2f}{deg} ({self._label(a_mdta, TIBIA_MDTA_REF_DEG)})",
+        ] + ([f"Proximal tibial axis (eminence - proximal midpoint): MPTA {p_mpta:.2f}{deg}, "
+              f"{p_axis:.2f}{deg} to the shaft axis"] if p_mpta is not None else [])
+
+    @staticmethod
+    def _label(value, reference, tolerance=0.5):
+        if value < reference - tolerance:
+            return "varus"
+        if value > reference + tolerance:
+            return "valgus"
+        return "normal"
+
+    def _measure(self, point_dict, radius_dict):
+        eminence = np.asarray(point_dict["intercondylar eminence"], dtype=float)
+        talus = np.asarray(point_dict["Talus centre"], dtype=float)
+        shaft_proximal = np.asarray(point_dict["proximal tibia midpoint"], dtype=float)
+        shaft_distal = np.asarray(point_dict["distal tibia midpoint"], dtype=float)
+        prox_lat = np.asarray(point_dict["lateral condyle articulation point tibia"], dtype=float)
+        prox_med = np.asarray(point_dict["medial condyle articulation point tibia"], dtype=float)
+        dist_lat = np.asarray(point_dict["lateral cochlea articulation point tibia"], dtype=float)
+        dist_med = np.asarray(point_dict["medial cochlea articulation point tibia"], dtype=float)
+        self.axes = {
+            "Tibial mechanical axis": (eminence, talus),
+            "Tibial shaft axis": (shaft_distal, shaft_proximal),
+            "Proximal tibial axis": (eminence, shaft_proximal),
+            "Proximal joint line": (prox_lat, prox_med),
+            "Distal joint line": (dist_lat, dist_med),
+        }
+        proximal_line = prox_med - prox_lat            # lateral -> medial
+        distal_line = dist_med - dist_lat
+        mech_down = talus - eminence                   # proximal -> distal
+        shaft_down = shaft_distal - shaft_proximal
+        deg = 180.0 / math.pi
+        # angle between a line and the axis: invariant under rotation about the axis (torsion-free)
+        m_mpta = angle(proximal_line, mech_down) * deg
+        m_mdta = angle(distal_line, -mech_down) * deg
+        a_mpta = angle(proximal_line, shaft_down) * deg
+        a_mdta = angle(distal_line, -shaft_down) * deg
+        self._angles = (m_mpta, m_mdta, a_mpta, a_mdta)
+        # proximal tibial axis: intercondylar eminence -> proximal diaphyseal midpoint (proximal
+        # segment; with the shaft axis it shows a proximal angulation / CORA)
+        proximal_down = shaft_proximal - eminence
+        self._proximal_axis_angles = (angle(proximal_line, proximal_down) * deg,
+                                      angle(proximal_down, shaft_down) * deg)
+        # planner value: frontal angle between the joint lines on the ANATOMICAL axis
+        joint_lines = a_mpta + a_mdta - 180.0
+        reference = TIBIA_MPTA_REF_DEG + TIBIA_MDTA_REF_DEG - 180.0
+        return joint_lines, "Varus" if joint_lines < reference else "Valgus"
+
+
+class TibialPlateauAngleMeasurement(BaseMeasurement):
+    """Tibial plateau angle (TPA): slope of the medial tibial plateau (caudal -> cranial point of the
+    medial condyle's articular surface) against the perpendicular to the functional axis
+    (intercondylar eminence -> talus centre), measured in the tibia's own sagittal plane (the plane
+    through the functional axis perpendicular to the proximal condylar axis) - independent of how
+    the tibia lies in the scanner and of the tibial torsion. Positive = plateau slopes caudally."""
+    AXIS_LABELS = ["Functional axis", "Medial plateau line"]
+    LANDMARK_ORDER = ["cranial medial tibial plateau", "caudal medial tibial plateau", "intercondylar eminence",
+                      "Talus centre", "condylus medialis tibiae", "condylus lateralis tibiae"]
+
+    def __init__(self):
+        super().__init__("Tibial Plateau Angle")
+        self.display_name = "Tibial Plateau Angle (TPA)"
+
+    def _measure(self, point_dict, radius_dict):
+        cranial = np.asarray(point_dict["cranial medial tibial plateau"], dtype=float)
+        caudal = np.asarray(point_dict["caudal medial tibial plateau"], dtype=float)
+        eminence = np.asarray(point_dict["intercondylar eminence"], dtype=float)
+        talus = np.asarray(point_dict["Talus centre"], dtype=float)
+        medial = np.asarray(point_dict["condylus medialis tibiae"], dtype=float)
+        lateral = np.asarray(point_dict["condylus lateralis tibiae"], dtype=float)
+        self.axes = {
+            "Functional axis": (eminence, talus),
+            "Medial plateau line": (caudal, cranial),
+        }
+        up = eminence - talus
+        up = up / max(np.linalg.norm(up), 1e-9)
+        ml = lateral - medial
+        ml = ml - np.dot(ml, up) * up                  # sagittal plane normal, perpendicular to the axis
+        plateau = cranial - caudal
+        if np.linalg.norm(ml) > 1e-9:
+            ml = ml / np.linalg.norm(ml)
+            plateau = plateau - np.dot(plateau, ml) * ml
+        rise = float(np.dot(plateau, up))              # > 0: cranial point more proximal
+        run = float(np.linalg.norm(plateau - rise * up))
+        tpa = math.degrees(math.atan2(rise, max(run, 1e-9)))
+        return abs(tpa), "TPA (plateau slopes caudally)" if tpa >= 0 else "TPA (plateau slopes cranially)"
+
 
 class TibiotalarRotationMeasurement(BaseMeasurement):
     AXIS_LABELS = ["Distal tibial axis", "Talar axis"]
