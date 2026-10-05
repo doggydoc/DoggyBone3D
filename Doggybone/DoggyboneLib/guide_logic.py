@@ -2174,9 +2174,54 @@ def _remove_thin_features(F, r, voxel):
     return F, removed
 
 
+def _smooth_keep_fit_faces(surface, bone_samples, gap, pins, slots, block, R, half, iterations=25):
+    """Windowed-sinc smoothing of the extracted guide surface (local frame): removes voxel steps
+    and ripples on the outside, rims and sleeve edges without shrinking the part. Vertices of the
+    FITTING faces - the bone contact (within the fit gap), the pin bores and the kerf faces - keep
+    their exact original position."""
+    from scipy.spatial import cKDTree
+    V = vtk_to_numpy(surface.GetPoints().GetData()).astype(float)
+    protect = np.zeros(len(V), dtype=bool)
+    d_bone = cKDTree(bone_samples).query(V, distance_upper_bound=float(gap) + 1.0, workers=-1)[0]
+    protect |= d_bone <= float(gap) + 0.3
+    for pin in pins:
+        if "error" in pin:
+            continue
+        a = R @ unit(np.asarray(pin["axis"], float))
+        E = R @ np.asarray(pin["entry"], float)
+        r = V - E
+        along = r @ a
+        radial = np.linalg.norm(r - np.outer(along, a), axis=1)
+        protect |= radial <= float(pin["r_in"]) + 0.25
+    for s in slots:
+        C = R @ np.asarray(s["centre"], float)
+        n = R @ np.asarray(s["normal"], float)
+        protect |= np.abs((V - C) @ n) <= half + 0.25
+    smoother = vtk.vtkWindowedSincPolyDataFilter()
+    smoother.SetInputData(surface)
+    smoother.SetNumberOfIterations(int(iterations))
+    smoother.SetPassBand(0.05)
+    smoother.BoundarySmoothingOff()
+    smoother.FeatureEdgeSmoothingOff()
+    smoother.NonManifoldSmoothingOn()
+    smoother.NormalizeCoordinatesOn()
+    smoother.Update()
+    smoothed = vtk.vtkPolyData()
+    smoothed.DeepCopy(smoother.GetOutput())
+    if smoothed.GetNumberOfPoints() != len(V):
+        return surface                                    # (never expected) keep the unsmoothed one
+    W = vtk_to_numpy(smoothed.GetPoints().GetData()).astype(float).copy()
+    W[protect] = V[protect]
+    points = vtk.vtkPoints()
+    points.SetData(numpy_to_vtk(np.ascontiguousarray(W), deep=True))
+    smoothed.SetPoints(points)
+    return smoothed
+
+
 def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=None, block=False,
-                   parts=None, bridges=True, bridge_radius=1.75, voxel=0.25, rim_round=1.0, fillet=1.0,
-                   trim_undercut=True, min_feature=0.3, outer_smooth=0.75, pit_close=1.0, sleeves=False):
+                   parts=None, bridges=True, bridge_radius=1.75, voxel=None, rim_round=1.0, fillet=1.0,
+                   trim_undercut=True, min_feature=0.3, outer_smooth=0.75, pit_close=1.0, sleeves=False,
+                   smooth_surface=True):
     """Guide body from the distance field of the bone.
     bone: closed bone surface (whole bone or the fragments); mesh + selected: the painted contact
     region (bool per vertex of the bone-surface ROI mesh); direction: the guide side (insertion
@@ -2199,6 +2244,10 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
       bottom keeps the same fit gap to the bone as the body (normal distance), they are fused with a
       fillet, and every bore is cut through everything - a sleeve standing close to another pin can
       never reach into its bore.
+    - voxel: grid spacing (mm); None = 0.25 mm, coarser only when the region is very large.
+    - smooth_surface: the extracted surface is smoothed (no voxel steps / ripples on the outside,
+      rims and sleeve edges); the fitting faces - bone contact, bores, kerfs - keep their exact
+      positions.
     - min_feature: everything thinner than this (mm) - thin edges, slivers, feathered rims - is
       removed (morphological opening of the field; material is only removed, never added).
     Returns (polydata or None, info)."""
@@ -2228,6 +2277,12 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     lo = allp.min(axis=0) - margin
     hi = allp.max(axis=0) + margin
     origin = lo
+    if voxel is None:
+        # fine grid for a clean surface; coarser only for very large guides (memory / time)
+        voxel = 0.25
+        while np.prod(np.ceil((hi - lo) / voxel) + 1) > 25e6 and voxel < 0.35:
+            voxel += 0.05
+    voxel = float(voxel)
     dims = np.ceil((hi - lo) / voxel).astype(int) + 1
     if np.prod(dims) > 45e6:
         return None, {"error": f"region too large for the voxel grid ({dims.tolist()}) - make the footprint smaller"}
@@ -2276,11 +2331,15 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     pit_mask = None
     if pit_close and pit_close > 0:
         rk = max(1, int(round(float(pit_close) / voxel)))
-        zz, yy, xx = np.mgrid[-rk:rk + 1, -rk:rk + 1, -rk:rk + 1]
-        ball = (xx ** 2 + yy ** 2 + zz ** 2) <= rk * rk
+        # closing with a ball by two distance transforms (much faster than binary dilation /
+        # erosion with an 11^3 ball): dilate = within rk of the bone, erode = farther than rk from
+        # outside the dilated set
         padded = np.pad(bone_mask, rk + 1)
-        closed = ndi.binary_erosion(ndi.binary_dilation(padded, ball), ball)[
+        dilated = ndi.distance_transform_edt(~padded) <= rk
+        closed = (ndi.distance_transform_edt(dilated) > rk)[
             rk + 1:-(rk + 1), rk + 1:-(rk + 1), rk + 1:-(rk + 1)]
+        del dilated
+        closed |= bone_mask
         pit_mask = closed & ~bone_mask
         # only REAL pits: the closing also fills the voxel steps of every oblique surface - those are
         # at most ~1 voxel deep; a pit counts when it reaches >= 0.5 mm below the bridged surface
@@ -2505,7 +2564,10 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     iso.SetValue(0, 0.0)
     iso.ComputeNormalsOff()
     iso.Update()
-    out = _poly_to_local(iso.GetOutput(), R.T)                         # back to world
+    surface = iso.GetOutput()
+    if smooth_surface and surface.GetNumberOfPoints() > 0:
+        surface = _smooth_keep_fit_faces(surface, D, gap, pins or [], good, block, R, half)
+    out = _poly_to_local(surface, R.T)                                # back to world
     regions = vtk.vtkPolyDataConnectivityFilter()
     regions.SetInputData(out)
     regions.SetExtractionModeToAllRegions()
