@@ -87,7 +87,12 @@ class GuideBuildMixin:
             if len(slots) == 2:
                 # ONE block for both cuts: outer faces extended until they close, space between filled,
                 # both kerfs cut through - no crossing plates, no fragments
-                parts.append(guide_logic.saw_block_pair(slots[0], slots[1], self._pin_obb_tree(mesh), gap,
+                # the seat of the block follows the WHOLE bone - the footprint ROI mesh is cropped and the block
+                # reaches beyond it (a seat guessed there ran into the bone and left ragged ends)
+                bone_seat = self._get_bone_polydata()
+                if bone_seat is None or bone_seat.GetNumberOfPoints() == 0:
+                    bone_seat = mesh
+                parts.append(guide_logic.saw_block_pair(slots[0], slots[1], self._pin_obb_tree(bone_seat), gap,
                                                         block=block))
             else:
                 for slot in slots:

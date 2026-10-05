@@ -1380,6 +1380,9 @@ def _seat_heights(bone_obb, origin, e_u, e_v, e_w, lo, hi, step, gap):
     return coarse + float(gap)
 
 
+BLOCK_FRAME_ARRAY = "DoggyboneBlockFrame"
+
+
 def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, block=False):
     """ONE saw block for both cuts (closing wedge): the outer faces of the two blocks are extended until
     they close each other (no crossing plates, no mirrored remnants), the space between the blocks is
@@ -1440,6 +1443,15 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
     from scipy.ndimage import maximum_filter
     coarse = maximum_filter(coarse, size=2 * max(1, int(round(0.3 / seat_step))) + 1, mode="nearest")
     seat = map_coordinates(coarse, [(CC - lo[2]) / seat_step, (AA - lo[0]) / seat_step], order=1, mode="nearest")
+    # even ends: in each end zone (corner bridge + 1 mm) both halves end at ONE flat level - the highest
+    # seat in that zone - no strips of one half reaching further down the bone flank than the other
+    w_lo_b, w_hi_b = float(local[:, 2].min()), float(local[:, 2].max())
+    in_w = (CC >= w_lo_b) & (CC <= w_hi_b)
+    for end in (AA <= a_lo + BRIDGE_WIDTH + 1.0, AA >= a_hi - BRIDGE_WIDTH - 1.0):
+        zone = end & in_w
+        if zone.any():
+            level = float(seat[zone].max())
+            seat = np.where(end, np.maximum(seat, level), seat)
     sdf = np.empty((nc, nb, na), dtype=np.float32)
     for jb, b in enumerate(Bs):
         X = origin + AA[..., None] * e_u + b * e_v + CC[..., None] * e_w       # (nc, na, 3)
@@ -1521,6 +1533,12 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
     nrm.Update()
     out = vtk.vtkPolyData()
     out.DeepCopy(nrm.GetOutput())
+    # block frame for the guide body: its end faces (along e_u) trim the body flush (see sdf_guide_body)
+    frame = vtk.vtkDoubleArray()
+    frame.SetName(BLOCK_FRAME_ARRAY)
+    for value in np.concatenate([origin, e_u, e_w]):
+        frame.InsertNextValue(float(value))
+    out.GetFieldData().AddArray(frame)
     return out
 
 
@@ -2596,6 +2614,24 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
         F = _smin(F, psdf.astype(np.float32), fillet)
         keep_across |= pmask
         del psdf, pmask
+        # saw block ends: everything within the thickness of the block is trimmed flush with its two
+        # end faces - the body following the bone does not stick out unevenly beyond them
+        for p_world, p_loc in zip(parts, parts_local):
+            fr = p_world.GetFieldData().GetArray(BLOCK_FRAME_ARRAY) if p_world.GetFieldData() else None
+            if fr is None or fr.GetNumberOfTuples() < 9:
+                continue
+            vals = np.array([fr.GetValue(k) for k in range(9)], float)
+            o_l, eu_l, ew_l = R @ vals[0:3], R @ vals[3:6], R @ vals[6:9]
+            PL = vtk_to_numpy(p_loc.GetPoints().GetData()).astype(float) - o_l
+            a_lo_, a_hi_ = float((PL @ eu_l).min()), float((PL @ eu_l).max())
+            w_lo_, w_hi_ = float((PL @ ew_l).min()), float((PL @ ew_l).max())
+            o32, eu32, ew32 = o_l.astype(np.float32), eu_l.astype(np.float32), ew_l.astype(np.float32)
+            aa = (X - o32[0]) * eu32[0] + (Y - o32[1]) * eu32[1] + (Z - o32[2]) * eu32[2]
+            ww = (X - o32[0]) * ew32[0] + (Y - o32[1]) * ew32[1] + (Z - o32[2]) * ew32[2]
+            beyond = np.maximum(np.float32(a_lo_) - aa, aa - np.float32(a_hi_))
+            in_slab = np.maximum(np.float32(w_lo_) - ww, ww - np.float32(w_hi_)) <= 0.0
+            F = np.where(in_slab, np.maximum(F, beyond), F).astype(np.float32)
+            del aa, ww, beyond, in_slab
     # --- pin sleeves as exact cylinders (bottom trimmed below by the fit gap) ------------------------
     n_sleeves = 0
     if sleeves:

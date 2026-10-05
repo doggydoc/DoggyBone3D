@@ -240,13 +240,20 @@ class PinsMixin:
     GUIDE_PIN_AXES_NAME = property(lambda self: self._mode_name("Doggybone guide pin axes"))
 
     def _pin_obb_tree(self, mesh):
+        """Ray locator of a surface, cached per surface (the footprint ROI mesh and the whole bone are
+        both in use - two entries, no rebuilding when they alternate)."""
         key = (id(mesh), mesh.GetMTime())
-        if getattr(self, "_pin_obb_key", None) != key:
+        cache = getattr(self, "_obb_cache", None)
+        if cache is None:
+            cache = self._obb_cache = {}
+        if key not in cache:
             obb = vtk.vtkOBBTree()
             obb.SetDataSet(mesh)
             obb.BuildLocator()
-            self._pin_obb, self._pin_obb_key = obb, key
-        return self._pin_obb
+            if len(cache) >= 3:
+                cache.pop(next(iter(cache)))
+            cache[key] = obb
+        return cache[key]
 
     def _pin_diameter(self):
         chosen = self.guide_pin.currentText
