@@ -75,7 +75,10 @@ class BoneAngleMeterModuleWidget(ScriptedLoadableModuleWidget):
     # already a deviation-from-straight angle). The rotation targets are placeholders (0°) - this
     # module has no reliable breed/bone-specific reference for normal antetorsion/tibial torsion,
     # so these MUST be reviewed and set by the vet rather than trusted as clinical defaults.
-    WEDGE_TARGET_DEFAULT = {"Femur": 90.0, "Tibia": 0.0}
+    # Same measurement methods as Doggybone 3D: aLDFA against the canine reference (~94 deg); tibia =
+    # frontal angle between the joint lines aMPTA + aMDTA - 180 (normal ~ MPTA_REF + MDTA_REF - 180).
+    WEDGE_TARGET_DEFAULT = {"Femur": measurement_logic.ALDFA_REFERENCE_DEG,
+                            "Tibia": round(measurement_logic.TIBIA_MPTA_REF_DEG + measurement_logic.TIBIA_MDTA_REF_DEG - 180.0, 1)}
     ROTATION_TARGET_DEFAULT = {"Femur": 0.0, "Tibia": 0.0}
     # Landmark pair used as the medial->lateral reference direction at the osteotomy level -
     # reuses landmarks already placed for the angle measurements rather than adding new ones.
@@ -3415,7 +3418,7 @@ class MeasurementsPanel(qt.QWidget):
             m.set_side(self.side)
             m.register_landmarks(self.landmarks)
             self.measurement_stack.addWidget(MeasurementWidget(m, self))
-            self.measurement_list.addItem(m.name)
+            self.measurement_list.addItem(getattr(m, "display_name", m.name))
         
         self.measurement_list.setMaximumHeight(140)
 
@@ -3740,7 +3743,7 @@ class MeasurementWidget(qt.QWidget):
         landmark_layout.addWidget(self.landmark_stack)
         self.landmark_group_box.setLayout(landmark_layout)
 
-        self.name_label = qt.QLabel(f"<big>{self.measurement.name}</big>")
+        self.name_label = qt.QLabel(f"<big>{getattr(self.measurement, 'display_name', self.measurement.name)}</big>")
         self.name_label.setWordWrap(True)
         self.description_label = qt.QLabel(self.measurement.description)
         self.description_label.setWordWrap(True)
@@ -3825,7 +3828,10 @@ class MeasurementWidget(qt.QWidget):
             try:
                 result_ready, result_value, result_string = self.measurement()
                 if result_ready:
-                    self.measurement_label.setText(f"{result_value:.2f}\N{DEGREE SIGN} {result_string}")
+                    lines = self.measurement.result_lines(result_value, result_string) \
+                        if hasattr(self.measurement, "result_lines") else None
+                    self.measurement_label.setText("<br>".join(lines) if lines else
+                                                   f"{result_value:.2f}\N{DEGREE SIGN} {result_string}")
                     self.measurement_label.setStyleSheet("QLabel { background-color : green}")
                     for label, (center, radius) in self.measurement.get_spheres().items():
                         self.dialog.show_sphere(label, center, radius)

@@ -1,3 +1,8 @@
+# Measurement methods shared with Doggybone 3D (Matthias Frank, Kleintierklinik Frank & Partner, Freiburg)
+# Based on BoneAngleMeter, Copyright (c) 2022 Juliette Burg Personnaz, Andreas Voigt
+# (CTK, LMU Munich) - https://github.com/jburgp/BoneAngleMeter_public
+# Licensed under the MIT License.
+
 from Resources.landmark_logic import SimpleLandmark, SphereLandmark
 
 LANDMARKS = [
@@ -37,6 +42,15 @@ LANDMARKS = [
     SimpleLandmark('lateral talus',
                    "Choose the most dorsal point on the trochlea tali.",
                    r"Resources/descriptions/lateraltalus.png"),
+    SimpleLandmark('intercondylar eminence',
+                   "Choose the centre between the medial and lateral intercondylar tubercles (proximal point of the tibial mechanical / functional axis).",
+                   r""),
+    SimpleLandmark('cranial medial tibial plateau',
+                   "Choose the most cranial point of the articular surface of the medial tibial condyle (cranial end of the plateau line).",
+                   r""),
+    SimpleLandmark('caudal medial tibial plateau',
+                   "Choose the most caudal point of the articular surface of the medial tibial condyle (caudal end of the plateau line).",
+                   r""),
     SimpleLandmark('Talus centre',
                    "Choose the center of the talus.",
                    r"Resources/descriptions/taluscentre.png"),
