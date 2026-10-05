@@ -61,7 +61,8 @@ class GuideBuildMixin:
             thickness = float(self.guide_thickness.value)
             guide_logic.configure_slots(
                 blade_thickness=float(self.guide_blade.currentText.split()[0]),
-                block_height=float(self.guide_block_height.currentText.split()[0]))
+                block_height=float(self.guide_block_height.currentText.split()[0]),
+                bridge_size=self._bridge_size())
             if self._guide_mode_is_reduction():
                 slots, slot_notes, pin = [], [], ""          # no saw slots on the reduction guide
             else:

@@ -465,20 +465,25 @@ BLADE_THICKNESS = 1.0
 SLOT_CLEARANCE = 0.2
 SLOT_WIDTH = BLADE_THICKNESS + SLOT_CLEARANCE
 SLOT_WALL = 2.5          # plate thickness on each side of the slot
-SLOT_MARGIN = 1.5        # slot longer than the bone on each side
+SLOT_MARGIN = 1.0        # slot longer than the bone on each side (fixed; then the end caps)
 BLOCK_HEIGHT = 10.0      # top of the saw block above the highest bone point under it
 BLOCK_MAX_DEPTH = 22.0   # block never reaches further down than this below its top
-BRIDGE_WIDTH = 2.0       # closed slot ends / break-off bridges (along the slot)
+BRIDGE_WIDTH = 3.0       # closed slot ends / corner bridges along the slot (UI: Corner bridges)
 BLOCK_WALL = 3.5         # block guide (open face instead of a slot): wall thickness behind the cutting face
-BREAK_BRIDGE_LENGTH = 1.5   # saw block pair: break-off bridge at each END of each kerf, along the kerf (mm)
-BREAK_BRIDGE_HEIGHT = 1.5   # ... and its height below the top of the block (mm) - snaps off with pliers
+BREAK_BRIDGE_LENGTH = 2.5   # saw block pair: corner bridge at each END of each kerf, along the kerf (mm)
+BREAK_BRIDGE_HEIGHT = 2.5   # ... and its height below the top of the block (mm) - snaps off with pliers
+                            # both = BRIDGE_WIDTH - 0.5 (the kerf is kept free 0.5 mm beyond the slot end)
 BRIDGE_HEIGHT = 3.0          # minimum height of a bridge (mm)
 BRIDGE_FRACTION = 0.30       # bridges close the top 30 % of the local block height; below open to the bone
 
 
-def configure_slots(blade_thickness=None, block_height=None):
-    """Set blade thickness (slot = blade + clearance) and saw block height from the UI."""
-    global BLADE_THICKNESS, SLOT_WIDTH, BLOCK_HEIGHT
+def configure_slots(blade_thickness=None, block_height=None, bridge_size=None):
+    """Set blade thickness (slot = blade + clearance), saw block height and the size of the corner
+    bridges (end caps of the slots, mm along the slot; the block grows sideways by the same amount)."""
+    global BLADE_THICKNESS, SLOT_WIDTH, BLOCK_HEIGHT, BRIDGE_WIDTH, BREAK_BRIDGE_LENGTH, BREAK_BRIDGE_HEIGHT
+    if bridge_size is not None:
+        BRIDGE_WIDTH = max(1.5, float(bridge_size))
+        BREAK_BRIDGE_LENGTH = BREAK_BRIDGE_HEIGHT = BRIDGE_WIDTH - 0.5
     if blade_thickness is not None:
         BLADE_THICKNESS = float(blade_thickness)
         SLOT_WIDTH = BLADE_THICKNESS + SLOT_CLEARANCE
@@ -1327,7 +1332,55 @@ def reduction_web(pins, axis, bone_obb, height=15.0, web_width=6.0, wall=2.0, ga
     return out, info
 
 
-def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.3, block=False):
+def _seat_heights(bone_obb, origin, e_u, e_v, e_w, lo, hi, step, gap):
+    """Highest bone surface (+gap) along e_v over the (e_w, e_u) lattice lo .. hi with `step` - a
+    z-buffer of densely sampled bone triangles (vectorised; replaces one ray per lattice node).
+    Every sample counts for the lattice node it lies within step/2 of, so the height of a node is the
+    highest bone in its cell (conservative). NaN where no bone lies below."""
+    sa = lo[0] + step * np.arange(int(np.ceil((hi[0] - lo[0]) / step)) + 1)
+    sc = lo[2] + step * np.arange(int(np.ceil((hi[2] - lo[2]) / step)) + 1)
+    coarse = np.full((len(sc), len(sa)), -np.inf)
+    poly = bone_obb.GetDataSet()
+    if poly is None or poly.GetNumberOfPoints() == 0:
+        return np.full(coarse.shape, np.nan)
+    P = vtk_to_numpy(poly.GetPoints().GetData()).astype(float) - origin
+    L = np.stack([P @ e_u, P @ e_v, P @ e_w], axis=1)
+    polys = poly.GetPolys()
+    off = vtk_to_numpy(polys.GetOffsetsArray()).astype(np.int64)
+    if len(off) < 2 or not np.all(np.diff(off) == 3):
+        tf = vtk.vtkTriangleFilter()
+        tf.SetInputData(poly)
+        tf.Update()
+        polys = tf.GetOutput().GetPolys()
+    T = vtk_to_numpy(polys.GetConnectivityArray()).astype(np.int64).reshape(-1, 3)
+    m = 0.5 * step + 0.01
+    inb = ((L[:, 0] >= lo[0] - m) & (L[:, 0] <= hi[0] + m) & (L[:, 2] >= lo[2] - m) & (L[:, 2] <= hi[2] + m)
+           & (L[:, 1] >= lo[1] - 25.0) & (L[:, 1] <= hi[1] + 5.0))
+    T = T[inb[T].any(axis=1)]
+    if len(T) == 0:
+        return np.full(coarse.shape, np.nan)
+    A, Bv, Cv = L[T[:, 0]], L[T[:, 1]], L[T[:, 2]]
+    edge = np.max([np.linalg.norm((Bv - A)[:, [0, 2]], axis=1), np.linalg.norm((Cv - Bv)[:, [0, 2]], axis=1),
+                   np.linalg.norm((A - Cv)[:, [0, 2]], axis=1)], axis=0)
+    # subdivide each triangle so that the samples lie <= step/2 apart in the (u, w) plane
+    k_tri = np.clip(np.ceil(edge / (0.5 * step)).astype(int), 1, 40)
+    for k in np.unique(k_tri):
+        sel = k_tri == k
+        i, j = np.meshgrid(np.arange(k + 1), np.arange(k + 1), indexing="ij")
+        ok = i + j <= k
+        w1, w2 = (i[ok] / k)[None, :, None], (j[ok] / k)[None, :, None]
+        a, b, c = A[sel][:, None, :], Bv[sel][:, None, :], Cv[sel][:, None, :]
+        S = (a + w1 * (b - a) + w2 * (c - a)).reshape(-1, 3)
+        ia = np.rint((S[:, 0] - lo[0]) / step).astype(int)
+        ic = np.rint((S[:, 2] - lo[2]) / step).astype(int)
+        good = ((ia >= 0) & (ia < len(sa)) & (ic >= 0) & (ic < len(sc))
+                & (S[:, 1] >= lo[1] - 25.0) & (S[:, 1] <= hi[1] + 5.0))
+        np.maximum.at(coarse, (ic[good], ia[good]), S[good, 1])
+    coarse[np.isinf(coarse)] = np.nan
+    return coarse + float(gap)
+
+
+def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, block=False):
     """ONE saw block for both cuts (closing wedge): the outer faces of the two blocks are extended until
     they close each other (no crossing plates, no mirrored remnants), the space between the blocks is
     filled, the underside follows the bone (+gap). Both kerfs run through the whole block (open at the
@@ -1375,21 +1428,7 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.3, blo
     CC, AA = np.meshgrid(Cs, As, indexing="ij")               # (nc, na) columns
     # underside: bone surface seen from above (+gap), sampled on a coarser grid and interpolated
     from scipy.ndimage import map_coordinates
-    sa = lo[0] + seat_step * np.arange(int(np.ceil((hi[0] - lo[0]) / seat_step)) + 1)
-    sc = lo[2] + seat_step * np.arange(int(np.ceil((hi[2] - lo[2]) / seat_step)) + 1)
-    coarse = np.full((len(sc), len(sa)), np.nan)
-    hit_points = vtk.vtkPoints()
-    hit_cells = vtk.vtkIdList()
-    for jc, c in enumerate(sc):
-        for ja, a in enumerate(sa):
-            base = origin + a * e_u + c * e_w
-            hit_points.Reset()
-            hit_cells.Reset()
-            bone_obb.IntersectWithLine((base + (hi[1] + 5.0) * e_v).tolist(), (base + (lo[1] - 25.0) * e_v).tolist(),
-                                       hit_points, hit_cells)
-            if hit_points.GetNumberOfPoints():
-                coarse[jc, ja] = max(float(np.dot(np.asarray(hit_points.GetPoint(k)) - origin, e_v))
-                                     for k in range(hit_points.GetNumberOfPoints())) + float(gap)
+    coarse = _seat_heights(bone_obb, origin, e_u, e_v, e_w, lo, hi, seat_step, gap)
     if np.all(np.isnan(coarse)):
         coarse[:] = lo[1]
     else:                                                     # beyond the bone: continue the nearest seat
@@ -1397,9 +1436,9 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.3, blo
         if missing.any():
             _d, (ic, ia) = distance_transform_edt(missing, return_indices=True)
             coarse = coarse[ic, ia]
-    # conservative on slopes: highest bone of the neighbouring samples, then interpolate
+    # conservative on slopes: highest bone within ~0.3 mm, then interpolate
     from scipy.ndimage import maximum_filter
-    coarse = maximum_filter(coarse, size=3, mode="nearest")
+    coarse = maximum_filter(coarse, size=2 * max(1, int(round(0.3 / seat_step))) + 1, mode="nearest")
     seat = map_coordinates(coarse, [(CC - lo[2]) / seat_step, (AA - lo[0]) / seat_step], order=1, mode="nearest")
     sdf = np.empty((nc, nb, na), dtype=np.float32)
     for jb, b in enumerate(Bs):
@@ -2218,6 +2257,173 @@ def _smooth_keep_fit_faces(surface, bone_samples, gap, pins, slots, block, R, ha
     return smoothed
 
 
+# --- bone fields of the SDF guide body: cached between builds --------------------------------------
+# The expensive part of a guide build (bone stencil, pit closing, distance transforms, exact band
+# distances, smoothed outer distance) depends only on the bone, the guide side and gap / wall - not on
+# the painted region, the pins, the saw block or the kerfs. It is computed once on a slightly larger
+# lattice block and reused by every later build whose grid lies inside it (pins moved, saw box
+# dragged, region brushed a little).
+_BONE_FIELDS = []                 # [(key, lattice index of the first voxel, shape, fields)] - newest first
+_BONE_FIELDS_MAX = 2              # saw guide + reduction guide
+_BONE_FIELD_PAD_MM = 3.0
+
+
+def clear_bone_field_cache():
+    del _BONE_FIELDS[:]
+
+
+def _poly_fingerprint(poly):
+    pts = vtk_to_numpy(poly.GetPoints().GetData()).astype(np.float64)
+    return (int(poly.GetNumberOfPoints()), int(poly.GetNumberOfCells()),
+            round(float(pts.sum()), 3), round(float((pts * pts).sum()), 1))
+
+
+def _bone_fields_cached(bone, R, voxel, i_lo, shape, gap, reach, rim_round, outer_smooth, pit_close):
+    """-> (fields, offset of the requested block inside the cached block, from_cache)."""
+    key = (_poly_fingerprint(bone), tuple(np.round(R, 6).ravel().tolist()), round(float(voxel), 4),
+           round(float(gap), 4), round(float(reach), 4), round(float(rim_round), 4),
+           round(float(outer_smooth or 0.0), 4), round(float(pit_close or 0.0), 4))
+    i_lo = np.asarray(i_lo, int)
+    shp = np.asarray(shape, int)
+    for k, c_lo, c_shape, fields in _BONE_FIELDS:
+        if k == key and np.all(i_lo >= c_lo) and np.all(i_lo + shp <= c_lo + c_shape):
+            return fields, i_lo - c_lo, True
+    _BONE_FIELDS[:] = [e for e in _BONE_FIELDS if e[0] != key]          # free the memory first
+    del _BONE_FIELDS[max(0, _BONE_FIELDS_MAX - 1):]
+    pad = int(round(_BONE_FIELD_PAD_MM / voxel))
+    c_lo, c_shape = i_lo - pad, shp + 2 * pad
+    if np.prod(c_shape.astype(float)) > 45e6:
+        c_lo, c_shape = i_lo, shp
+    fields = _bone_fields(bone, R, voxel, c_lo, c_shape, gap, reach, rim_round, outer_smooth, pit_close)
+    if fields is None:
+        return None, None, False
+    _BONE_FIELDS.insert(0, (key, c_lo, c_shape, fields))
+    return fields, i_lo - c_lo, False
+
+
+def _bone_fields(bone, R, voxel, i_lo, dims, gap, reach, rim_round, outer_smooth, pit_close):
+    """Selection-independent fields of the bone on the lattice block i_lo .. i_lo + dims - 1 (local
+    frame R, voxel mm): filled bone mask, signed bone distance db (exact in the band around the
+    shell), band voxels with exact / smoothed distances, dense surface samples + normals."""
+    from scipy import ndimage as ndi
+    from scipy.spatial import cKDTree
+    dims = np.asarray(dims, int)
+    origin = np.asarray(i_lo, float) * voxel
+    lo, hi = origin, origin + voxel * (dims - 1)
+    shape = tuple(int(v) for v in dims)
+    gx, gy, gz = ((origin[a] + voxel * np.arange(shape[a])).astype(np.float32) for a in range(3))
+    bone_local = _poly_to_local(bone, R)
+    box = vtk.vtkBox()
+    box.SetBounds(lo[0] - 4, hi[0] + 4, lo[1] - 4, hi[1] + 4, lo[2] - 4, hi[2] + 4)
+    crop = vtk.vtkExtractPolyDataGeometry()
+    crop.SetInputData(bone_local)
+    crop.SetImplicitFunction(box)
+    crop.ExtractInsideOn()
+    crop.ExtractBoundaryCellsOn()
+    tri = vtk.vtkTriangleFilter()
+    tri.SetInputConnection(crop.GetOutputPort())
+    tri.Update()
+    bone_crop = vtk.vtkPolyData()
+    bone_crop.DeepCopy(tri.GetOutput())
+    if bone_crop.GetNumberOfPoints() == 0:
+        return None
+    bone_mask = _rasterize_closed(bone_local, origin, voxel, dims)
+    # the medullary canal leaves the grid at its faces - cap the faces first, then fill cavities
+    for ax in range(3):
+        for end in (0, -1):
+            sl = [slice(None)] * 3
+            sl[ax] = end
+            bone_mask[tuple(sl)] = ndi.binary_fill_holes(bone_mask[tuple(sl)])
+    bone_mask = ndi.binary_fill_holes(bone_mask)
+    # pits / pores of the bone surface: closed with a ball of radius pit_close
+    pit_mask = None
+    pit_db = None
+    if pit_close and pit_close > 0:
+        rk = max(1, int(round(float(pit_close) / voxel)))
+        # closing with a ball by two distance transforms (much faster than binary dilation /
+        # erosion with an 11^3 ball)
+        padded = np.pad(bone_mask, rk + 1)
+        dilated = ndi.distance_transform_edt(~padded) <= rk
+        closed = (ndi.distance_transform_edt(dilated) > rk)[
+            rk + 1:-(rk + 1), rk + 1:-(rk + 1), rk + 1:-(rk + 1)]
+        del dilated, padded
+        closed |= bone_mask
+        pit_mask = closed & ~bone_mask
+        # only REAL pits: the closing also fills the voxel steps of every oblique surface - those are
+        # at most ~1 voxel deep; a pit counts when it reaches >= 0.5 mm below the bridged surface
+        if pit_mask.any():
+            depth_c = ndi.distance_transform_edt(closed) * voxel
+            lab, n_lab = ndi.label(pit_mask)
+            if n_lab:
+                deep = ndi.maximum(depth_c, lab, index=np.arange(1, n_lab + 1))
+                keep_lab = np.flatnonzero(np.asarray(deep) >= 0.5) + 1
+                pit_mask = np.isin(lab, keep_lab) if len(keep_lab) else np.zeros_like(pit_mask)
+                closed = bone_mask | pit_mask
+            del depth_c, lab
+        if pit_mask.any():
+            near = ndi.distance_transform_edt(~pit_mask) * voxel <= float(gap) + float(pit_close) + 1.0
+            out_c = np.maximum(ndi.distance_transform_edt(~closed) * voxel - 0.5 * voxel, 0.0)
+            pit_db = np.full(shape, np.inf, dtype=np.float32)
+            pit_db[near] = out_c[near]
+            pit_db[pit_mask] = -voxel
+            del near, out_c
+        else:
+            pit_mask = None
+        del closed
+    outside = ndi.distance_transform_edt(~bone_mask) * voxel
+    depth = ndi.distance_transform_edt(bone_mask) * voxel
+    db = np.where(bone_mask, -depth, outside).astype(np.float32)          # approx. signed distance
+    del depth
+    band = (~bone_mask) & (outside >= max(0.0, gap - 0.8)) & (outside <= reach + rim_round + 0.8)
+    del outside
+    band_idx = np.flatnonzero(band)
+    del band
+    ii, jj, kk = np.unravel_index(band_idx, shape)
+    Q = np.stack([gx[ii], gy[jj], gz[kk]], axis=1).astype(float)
+    # distance to the bone surface: densely resampled surface (<= 0.2 mm edges) + its normals; the
+    # distance to the tangent plane of the nearest sample (exact on smooth bone, no voxel steps)
+    dense = vtk.vtkAdaptiveSubdivisionFilter()
+    dense.SetInputData(bone_crop)
+    dense.SetMaximumEdgeLength(0.2)
+    dense.SetMaximumNumberOfPasses(12)
+    nrm_b = vtk.vtkPolyDataNormals()
+    nrm_b.SetInputConnection(dense.GetOutputPort())
+    nrm_b.ComputePointNormalsOn()
+    nrm_b.SplittingOff()
+    nrm_b.ConsistencyOn()
+    nrm_b.AutoOrientNormalsOff()
+    nrm_b.Update()
+    D = vtk_to_numpy(nrm_b.GetOutput().GetPoints().GetData()).astype(float)
+    Dn = vtk_to_numpy(nrm_b.GetOutput().GetPointData().GetNormals()).astype(float)
+    cap_d = reach + rim_round + 1.5
+    dist_v, near = cKDTree(D).query(Q, distance_upper_bound=cap_d, workers=-1)
+    found = near < len(D)
+    plane = np.full(len(Q), cap_d)
+    plane[found] = np.abs(np.einsum("ij,ij->i", Q[found] - D[near[found]], Dn[near[found]]))
+    dist_v = np.where(found, dist_v, cap_d)
+    db_band = np.maximum(plane, dist_v - 0.15).astype(np.float32)
+    del Q, plane, dist_v, near, found
+    pits_closed = 0.0
+    if pit_mask is not None:
+        # over a pit the distance to the bridged surface; elsewhere (difference < 0.15 mm: only the
+        # voxel quantisation of the bridged distance) the exact distance stays
+        pit_band = pit_db.ravel()[band_idx]
+        db_band = np.where(pit_band < db_band - 0.15, pit_band, db_band).astype(np.float32)
+        db = np.where(pit_db < db - 0.15, pit_db, db).astype(np.float32)
+        pits_closed = float(pit_mask.sum()) * voxel ** 3
+        del pit_db, pit_band
+    db.ravel()[band_idx] = db_band
+    # outer surface: from a smoothed distance (the nearest-sample distance ripples a little far from
+    # the bone; the bone surface itself has small steps) - the inner fit surface keeps db_band
+    if outer_smooth and outer_smooth > 0:
+        db_outer = ndi.gaussian_filter(db, float(outer_smooth) / voxel).ravel()[band_idx].astype(np.float32)
+    else:
+        db_outer = db_band
+    return dict(bone_mask=bone_mask, db=db, band_ijk=np.stack([ii, jj, kk], axis=1).astype(np.int32),
+                db_band=db_band, db_outer=db_outer, D=D, Dn=Dn,
+                B=vtk_to_numpy(bone_crop.GetPoints().GetData()).astype(float), pits_closed=pits_closed)
+
+
 def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=None, block=False,
                    parts=None, bridges=True, bridge_radius=1.75, voxel=None, rim_round=1.0, fillet=1.0,
                    trim_undercut=True, min_feature=0.3, outer_smooth=0.75, pit_close=1.0, sleeves=False,
@@ -2276,14 +2482,17 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     margin = reach + rim_round + bridge_radius + 2.0
     lo = allp.min(axis=0) - margin
     hi = allp.max(axis=0) + margin
-    origin = lo
     if voxel is None:
         # fine grid for a clean surface; coarser only for very large guides (memory / time)
         voxel = 0.25
         while np.prod(np.ceil((hi - lo) / voxel) + 1) > 25e6 and voxel < 0.35:
             voxel += 0.05
     voxel = float(voxel)
-    dims = np.ceil((hi - lo) / voxel).astype(int) + 1
+    # the grid sits on a fixed lattice (multiples of voxel in the local frame): a later build whose
+    # box lies inside an earlier one reuses its bone fields on exactly the same voxels
+    i_lo = np.floor(lo / voxel).astype(int)
+    origin = i_lo * voxel
+    dims = np.ceil((hi - origin) / voxel).astype(int) + 1
     if np.prod(dims) > 45e6:
         return None, {"error": f"region too large for the voxel grid ({dims.tolist()}) - make the footprint smaller"}
     shape = tuple(int(v) for v in dims)
@@ -2302,127 +2511,33 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
             return None
         return tuple(slice(int(l), int(h)) for l, h in zip(lo_i, hi_i))
     # --- bone: filled solid (cavities closed) + exact distance in the band around the shell -----
-    bone_local = _poly_to_local(bone, R)
-    box = vtk.vtkBox()
-    box.SetBounds(lo[0] - 4, hi[0] + 4, lo[1] - 4, hi[1] + 4, lo[2] - 4, hi[2] + 4)
-    crop = vtk.vtkExtractPolyDataGeometry()
-    crop.SetInputData(bone_local)
-    crop.SetImplicitFunction(box)
-    crop.ExtractInsideOn()
-    crop.ExtractBoundaryCellsOn()
-    tri = vtk.vtkTriangleFilter()
-    tri.SetInputConnection(crop.GetOutputPort())
-    tri.Update()
-    bone_crop = vtk.vtkPolyData()
-    bone_crop.DeepCopy(tri.GetOutput())
-    if bone_crop.GetNumberOfPoints() == 0:
+    bf, off, from_cache = _bone_fields_cached(bone, R, voxel, i_lo, shape, gap, reach, rim_round,
+                                              outer_smooth, pit_close)
+    if bf is None:
         return None, {"error": "no bone surface around the footprint"}
-    _tm['crop'] = round(time.time() - t_start, 1)
-    bone_mask = _rasterize_closed(bone_local, origin, voxel, dims)
-    # the medullary canal leaves the grid at its faces - cap the faces first, then fill cavities
-    for ax in range(3):
-        for end in (0, -1):
-            sl = [slice(None)] * 3
-            sl[ax] = end
-            bone_mask[tuple(sl)] = ndi.binary_fill_holes(bone_mask[tuple(sl)])
-    bone_mask = ndi.binary_fill_holes(bone_mask)
-    _tm['stencil'] = round(time.time() - t_start, 1)
-    # pits / pores of the bone surface: closed with a ball of radius pit_close
-    pit_mask = None
-    if pit_close and pit_close > 0:
-        rk = max(1, int(round(float(pit_close) / voxel)))
-        # closing with a ball by two distance transforms (much faster than binary dilation /
-        # erosion with an 11^3 ball): dilate = within rk of the bone, erode = farther than rk from
-        # outside the dilated set
-        padded = np.pad(bone_mask, rk + 1)
-        dilated = ndi.distance_transform_edt(~padded) <= rk
-        closed = (ndi.distance_transform_edt(dilated) > rk)[
-            rk + 1:-(rk + 1), rk + 1:-(rk + 1), rk + 1:-(rk + 1)]
-        del dilated
-        closed |= bone_mask
-        pit_mask = closed & ~bone_mask
-        # only REAL pits: the closing also fills the voxel steps of every oblique surface - those are
-        # at most ~1 voxel deep; a pit counts when it reaches >= 0.5 mm below the bridged surface
-        if pit_mask.any():
-            depth_c = ndi.distance_transform_edt(closed) * voxel
-            lab, n_lab = ndi.label(pit_mask)
-            if n_lab:
-                deep = ndi.maximum(depth_c, lab, index=np.arange(1, n_lab + 1))
-                keep_lab = np.flatnonzero(np.asarray(deep) >= 0.5) + 1
-                pit_mask = np.isin(lab, keep_lab) if len(keep_lab) else np.zeros_like(pit_mask)
-                closed = bone_mask | pit_mask
-            del depth_c, lab
-        if pit_mask.any():
-            near = ndi.distance_transform_edt(~pit_mask) * voxel <= float(gap) + float(pit_close) + 1.0
-            out_c = np.maximum(ndi.distance_transform_edt(~closed) * voxel - 0.5 * voxel, 0.0)
-            pit_db = np.full(shape, np.inf, dtype=np.float32)
-            pit_db[near] = out_c[near]
-            pit_db[pit_mask] = -voxel
-            del near, out_c
-        else:
-            pit_mask = None
-        del closed, padded
-    outside = ndi.distance_transform_edt(~bone_mask) * voxel
-    depth = ndi.distance_transform_edt(bone_mask) * voxel
-    db = np.where(bone_mask, -depth, outside).astype(np.float32)          # approx. signed distance
-    del depth
-    _tm['edt'] = round(time.time() - t_start, 1)
-    band = (~bone_mask) & (outside >= max(0.0, gap - 0.8)) & (outside <= reach + rim_round + 0.8)
-    del outside
-    band_idx = np.flatnonzero(band)
-    del band
-    ii, jj, kk = np.unravel_index(band_idx, shape)
-    Q = np.stack([gx[ii], gy[jj], gz[kk]], axis=1)
-    # only the band around the painted region needs exact distances
+    _tm['bone_fields'] = round(time.time() - t_start, 1)
+    _tm['cached'] = from_cache
+    sl = tuple(slice(int(o), int(o) + s) for o, s in zip(off, shape))
+    bone_mask = bf["bone_mask"][sl]
+    db = bf["db"][sl]
+    ijk = bf["band_ijk"] - off.astype(np.int32)
+    inside = np.all((ijk >= 0) & (ijk < np.array(shape)), axis=1)
+    ii, jj, kk = ijk[inside, 0], ijk[inside, 1], ijk[inside, 2]
+    Q = np.stack([gx[ii], gy[jj], gz[kk]], axis=1).astype(float)
+    # only the band around the painted region is needed
     tree_s = cKDTree(S_local)
     dS = tree_s.query(Q, distance_upper_bound=reach + rim_round + 3.0, workers=-1)[0]
     keep = np.isfinite(dS)
-    band_idx, Q, dS = band_idx[keep], Q[keep], dS[keep]
-    # distance to the bone surface: densely resampled surface (<= 0.2 mm edges) + its normals; the
-    # distance to the tangent plane of the nearest sample (exact on smooth bone, no voxel steps)
-    _tm['band_ds'] = round(time.time() - t_start, 1)
-    dense = vtk.vtkAdaptiveSubdivisionFilter()
-    dense.SetInputData(bone_crop)
-    dense.SetMaximumEdgeLength(0.2)
-    dense.SetMaximumNumberOfPasses(12)
-    nrm_b = vtk.vtkPolyDataNormals()
-    nrm_b.SetInputConnection(dense.GetOutputPort())
-    nrm_b.ComputePointNormalsOn()
-    nrm_b.SplittingOff()
-    nrm_b.ConsistencyOn()
-    nrm_b.AutoOrientNormalsOff()
-    nrm_b.Update()
-    _tm['dense'] = round(time.time() - t_start, 1)
-    D = vtk_to_numpy(nrm_b.GetOutput().GetPoints().GetData()).astype(float)
-    Dn = vtk_to_numpy(nrm_b.GetOutput().GetPointData().GetNormals()).astype(float)
-    cap_d = reach + rim_round + 1.5
-    dist_v, near = cKDTree(D).query(Q, distance_upper_bound=cap_d, workers=-1)
-    found = near < len(D)
-    plane = np.full(len(Q), cap_d)
-    plane[found] = np.abs(np.einsum("ij,ij->i", Q[found] - D[near[found]], Dn[near[found]]))
-    dist_v = np.where(found, dist_v, cap_d)
-    db_band = np.maximum(plane, dist_v - 0.15).astype(np.float32)
-    _tm['dist_query'] = round(time.time() - t_start, 1)
-    pits_closed = 0.0
-    if pit_mask is not None:
-        # over a pit the distance to the bridged surface; elsewhere (difference < 0.15 mm: only the
-        # voxel quantisation of the bridged distance) the exact distance stays
-        pit_band = pit_db.ravel()[band_idx]
-        db_band = np.where(pit_band < db_band - 0.15, pit_band, db_band).astype(np.float32)
-        db = np.where(pit_db < db - 0.15, pit_db, db).astype(np.float32)
-        pits_closed = float(pit_mask.sum()) * voxel ** 3
-        del pit_db, pit_band
-    db.ravel()[band_idx] = db_band
-    # outer surface: from a smoothed distance (the nearest-sample distance ripples a little far from
-    # the bone; the bone surface itself has small steps) - the inner fit surface keeps db_band
-    if outer_smooth and outer_smooth > 0:
-        db_outer = ndi.gaussian_filter(db, float(outer_smooth) / voxel).ravel()[band_idx]
-    else:
-        db_outer = db_band
+    band_idx = np.ravel_multi_index((ii[keep], jj[keep], kk[keep]), shape)
+    Q, dS = Q[keep], dS[keep]
+    db_band = bf["db_band"][inside][keep]
+    db_outer = bf["db_outer"][inside][keep]
+    D, B = bf["D"], bf["B"]
+    pits_closed = bf["pits_closed"]
+    del ijk, inside, ii, jj, kk, keep
     t_dist = time.time() - t_start
     # --- painted region: is the nearest bone point painted? ------------------------------------
     spacing = float(np.median(tree_s.query(S_local, k=2)[0][:, 1])) if len(S_local) > 2 else 0.5
-    B = vtk_to_numpy(bone_crop.GetPoints().GetData()).astype(float)
     near_sel = tree_s.query(B, distance_upper_bound=2.0 * spacing + 0.3, workers=-1)[0] < np.inf
     U = np.vstack([B[~near_sel], P[~sel] @ R.T])
     tree_u = cKDTree(U) if len(U) else None

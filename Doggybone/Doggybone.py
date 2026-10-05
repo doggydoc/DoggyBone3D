@@ -952,11 +952,14 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                                        "sits on - narrower guide; the far part of the cut is finished along the "
                                        "plane without the slot.")
         guide_fields.append(("Slot length", self.guide_slot_extent))
-        self.guide_slot_margin = spin(0.0, 3.0, 1.0, 0.25, " mm",
-                                      "Slot longer than the bone on each side (then the 2 mm end caps).",
-                                      decimals=2)
-        self.guide_slot_margin.valueChanged.connect(lambda _v: self._refresh_guide_body_if_present())
-        guide_fields.append(("Slot margin", self.guide_slot_margin))
+        self.guide_bridge_size = spin(2.0, 6.0, 3.0, 0.5, " mm",
+                                      "Corner bridges: size of the closed ends of the saw slots (mm along the "
+                                      "slot). Larger = stiffer corners of the saw block; the block grows "
+                                      "sideways by the same amount. The slot itself always reaches 1 mm "
+                                      "beyond the bone.",
+                                      decimals=1)
+        self.guide_bridge_size.valueChanged.connect(lambda _v: self._on_bridge_size_changed())
+        guide_fields.append(("Corner bridges", self.guide_bridge_size))
         self.guide_saw_type = combo(["Slot", "Block"], "Slot",
                                     "Slot: the blade runs in a closed slot (guided on both sides).\n"
                                     "Block: no slot - the guide ends exactly at the cutting plane and the blade "

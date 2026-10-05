@@ -283,8 +283,18 @@ class SawMixin:
             f"extended {du:+.1f} mm along the kerf, height {dv:+.1f} mm - press 'Extrude guide body' to "
             "rebuild the guide. The kerf stays exactly in the planned cut.")
 
+    def _bridge_size(self):
+        """Corner bridge size (mm) from the UI - closed slot ends / break-off corners of the saw block."""
+        spin = getattr(self, "guide_bridge_size", None)
+        return float(spin.value) if spin is not None else guide_logic.BRIDGE_WIDTH
+
+    def _on_bridge_size_changed(self):
+        guide_logic.configure_slots(bridge_size=self._bridge_size())
+        self._refresh_guide_body_if_present()
+
     def _plan_saw_slots(self, patch, gap):
         """Slots for the cutting planes that exist. Returns (slots, notes, pin text)."""
+        guide_logic.configure_slots(bridge_size=self._bridge_size())
         from vtk.util.numpy_support import vtk_to_numpy
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
@@ -340,8 +350,6 @@ class SawMixin:
             slot = guide_logic.plan_slot(bone_points, contour, origin, normal, other,
                                          common_v if common_v is not None else patch_normals[strip].mean(axis=0), gap,
                                          adjust=self._saw_box_adjustment(label),
-                                         margin=float(self.guide_slot_margin.value)
-                                         if getattr(self, "guide_slot_margin", None) is not None else None,
                                          near_fraction=0.5 if (getattr(self, "guide_slot_extent", None) is not None
                                                                and self.guide_slot_extent.currentText.startswith("Guide"))
                                          else None)
