@@ -366,14 +366,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # the shown current values / calculated corrections follow the landmarks: refresh (debounced)
         # whenever a landmark is placed, moved or deleted - and once after the module is (re)loaded
         self._landmark_observers = []
-        for panel in (self.left_panel, self.right_panel):
-            node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
-            if node is None:
-                continue
-            for event in (slicer.vtkMRMLMarkupsNode.PointPositionDefinedEvent,
-                          slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
-                          slicer.vtkMRMLMarkupsNode.PointRemovedEvent):
-                self._landmark_observers.append((node, node.AddObserver(event, self._schedule_values_refresh)))
+        self._ensure_landmark_observers()
 
         self.side_stack = qt.QStackedWidget()
         self.side_stack.addWidget(self.left_panel)
@@ -437,6 +430,9 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.osteotomy_side = qt.QComboBox()
         self.osteotomy_side.addItems(["Left", "Right"])
         self.osteotomy_side.currentIndexChanged.connect(self._update_plane_handle_interactivity)
+        # the other side's landmarks -> its current values / calculated corrections
+        self.osteotomy_side.currentIndexChanged.connect(
+            lambda _i: (self._ensure_landmark_observers(), self._schedule_values_refresh()))
         osteotomy_form_layout.addRow("Side", self.osteotomy_side)
 
         self.osteotomy_bone = qt.QComboBox()
@@ -1059,6 +1055,25 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         except Exception as e:
             self.correction_status.setText(f"Screenshot failed: {e}")
 
+    def _ensure_landmark_observers(self):
+        """Observe the landmark node of BOTH sides - also a node that was created later (new case,
+        imported landmarks, scene reload): placing / moving / importing a landmark refreshes the
+        current values and the calculated corrections."""
+        observed = {node.GetID() for node, _tag in getattr(self, "_landmark_observers", [])
+                    if node is not None and slicer.mrmlScene.IsNodePresent(node)}
+        self._landmark_observers = [(n, t) for n, t in getattr(self, "_landmark_observers", [])
+                                    if n is not None and slicer.mrmlScene.IsNodePresent(n)]
+        for panel in (getattr(self, "left_panel", None), getattr(self, "right_panel", None)):
+            node = slicer.mrmlScene.GetNodeByID(getattr(panel, "markup_node_id", "") or "") if panel else None
+            if node is None or node.GetID() in observed:
+                continue
+            for event in (slicer.vtkMRMLMarkupsNode.PointPositionDefinedEvent,
+                          slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
+                          slicer.vtkMRMLMarkupsNode.PointModifiedEvent,
+                          slicer.vtkMRMLMarkupsNode.PointRemovedEvent):
+                self._landmark_observers.append((node, node.AddObserver(event, self._schedule_values_refresh)))
+            observed.add(node.GetID())
+
     def _schedule_values_refresh(self, caller=None, event=None):
         if getattr(self, "_values_refresh_pending", False):
             return
@@ -1121,6 +1136,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if hasattr(ScriptedLoadableModuleWidget, "enter"):
             ScriptedLoadableModuleWidget.enter(self)
         self._current_panel().activate()
+        self._ensure_landmark_observers()        # a new case / new landmark node is observed too
         self._schedule_values_refresh()          # current values / calculated corrections up to date
         self._install_pin_picker()               # reduction guide: click a pin to select / move it
         # The embedded clean-up editor observes the views while this module is shown, so its
@@ -1205,6 +1221,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             old_panel.deactivate()
         self.side_stack.setCurrentIndex(index)
         self._current_panel().activate()
+        self._ensure_landmark_observers()
+        self._schedule_values_refresh()
 
     def _on_osteotomy_bone_changed(self, index):
         bone = self.osteotomy_bone.currentText
