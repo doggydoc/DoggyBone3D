@@ -52,12 +52,8 @@ class SawMixin:
                 + (f", in bone {min(lengths):.1f}-{max(lengths):.1f} mm" if lengths else "")
                 + " - pre-angled, parallel after the reduction.")
         if touching:
-            if self._guide_body_is_volume():
-                note += ("\nSleeves touching (" + ", ".join(touching) + "): merged into one block, every bore "
-                         "is cut through - no sleeve reaches into a neighbouring bore.")
-            else:
-                note += ("\nWARNING - sleeves overlap (" + ", ".join(touching) + "): with Body 'Extrude' a "
-                         "sleeve can reach into the neighbouring bore - use Body 'Volume' or move the pins apart.")
+            note += ("\nSleeves touching (" + ", ".join(touching) + "): merged into one block, every bore "
+                     "is cut through - no sleeve reaches into a neighbouring bore.")
         if rejected:
             note += "\nNot built: " + "; ".join(rejected)
         return pins, note
@@ -189,12 +185,8 @@ class SawMixin:
         note += (f"\n{condylar.capitalize()} (condylar) pins perpendicular to the condylar axis; {opposite} pins "
                  f"pre-angled {group_angle:.1f}\N{DEGREE SIGN} - parallel after the reduction.")
         if touching:
-            if self._guide_body_is_volume():
-                note += ("\nSleeves touching (" + ", ".join(touching) + "): merged into one block, every bore "
-                         "is cut through - no sleeve reaches into a neighbouring bore.")
-            else:
-                note += ("\nWARNING - sleeves overlap (" + ", ".join(touching) + "): with Body 'Extrude' a "
-                         "sleeve can reach into the neighbouring bore - use Body 'Volume' or move the pins apart.")
+            note += ("\nSleeves touching (" + ", ".join(touching) + "): merged into one block, every bore "
+                     "is cut through - no sleeve reaches into a neighbouring bore.")
         if rejected:
             note += "\nNot built: " + "; ".join(rejected)
         return pins, note
@@ -361,7 +353,6 @@ class SawMixin:
             notes.append(f"{label} {slot['length']:.1f} mm long (bone {slot['bone_width']:.1f} mm)")
         chosen = self.guide_pin.currentText
         d = min(diameters) if diameters else None
-        self._last_bone_diameter = d
         if not chosen.startswith("Auto"):
             pin = chosen + (f" (chosen; bone \u00d8 {d:.1f} mm)" if d is not None else " (chosen)")
         elif d is not None:

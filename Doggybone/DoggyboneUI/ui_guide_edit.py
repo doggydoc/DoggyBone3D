@@ -148,7 +148,6 @@ class GuideEditMixin:
             mesh_node.SetAndObservePolyData(mesh)
             mesh_node.GetDisplayNode().SetVisibility(False)   # computation only; you see the bone
             mesh_node.SetAttribute("Doggybone.CorrectionSignature", self._correction_signature())
-            self._guide_undo_stack = []
             self._set_guide_body(None)   # an old body does not match the new footprint
             old = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_SEGMENTATION_NAME)
             if old is not None and old.GetDisplayNode() is not None:
@@ -167,32 +166,11 @@ class GuideEditMixin:
         finally:
             qt.QApplication.restoreOverrideCursor()
 
-    GUIDE_RELIEF_NAME = property(lambda self: self._mode_name("Doggybone guide smooth marks"))
-
-    @staticmethod
-    def _guide_relief(mesh):
-        if mesh.GetPointData().GetArray("Relief") is None:
-            return np.zeros(mesh.GetNumberOfPoints(), dtype=bool)
-        return guide_logic.get_selection(mesh, name="Relief").copy()
-
-    def _update_guide_relief_display(self, mesh):
-        marks = self._guide_relief(mesh) & guide_logic.get_selection(mesh)
-        patch = guide_logic.patch_from_selection(mesh, marks, lift=0.14)
-        node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_RELIEF_NAME)
-        if node is None:
-            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", self.GUIDE_RELIEF_NAME)
-            node.CreateDefaultDisplayNodes()
-            node.GetDisplayNode().SetColor(1.0, 0.9, 0.1)
-            node.GetDisplayNode().SetScalarVisibility(False)
-        node.SetAndObservePolyData(patch)
-        node.GetDisplayNode().SetVisibility(True)
-
     def _update_guide_footprint_display(self):
         mesh_node = self._guide_mesh_node()
         if mesh_node is None:
             return 0.0
         mesh = mesh_node.GetPolyData()
-        self._update_guide_relief_display(mesh)
         patch = guide_logic.patch_from_selection(mesh, guide_logic.get_selection(mesh) & self._guide_external(mesh), lift=0.08)
         node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_FOOTPRINT_NAME)
         if node is None:
@@ -270,13 +248,6 @@ class GuideEditMixin:
             self.guide_status.setText("Pins are set AFTER the reduction: switch to 'Reduction guide' and click "
                                       "on the corrected bone - the saw guide gets its (pre-angled) sleeves from them.")
             return
-        if key == "brush_smooth" and slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is None:
-            button = self._guide_tool_buttons[key]
-            was_blocked = button.blockSignals(True)
-            button.setChecked(False)
-            button.blockSignals(was_blocked)
-            self.guide_status.setText("This tool works on the finished guide - Extrude guide body first.")
-            return
         for other, button in self._guide_tool_buttons.items():
             if other != key and button.checked:
                 was_blocked = button.blockSignals(True)
@@ -286,19 +257,13 @@ class GuideEditMixin:
         if previous in (None, "bone_lasso"):
             self._stop_lasso()
             self._pause_landmark_placement()   # no landmark placement while editing
-            self._show_view_for_tool(key)
-        elif (previous == "brush_smooth") != (key == "brush_smooth"):
-            self._restore_guide_hidden()
-            self._show_view_for_tool(key)
+            self._hide_preview_for_guide_edit()
         self._guide_active_tool = key
         self._install_guide_observers()
         texts = {"brush_add": "Brush +: hold the left mouse button and move over the bone surface to colour it.",
                  "brush_remove": "Brush -: hold the left mouse button and move over the coloured area to remove it.",
                  "pins": "Pins: click on the guide to mark where a pin should go (click a mark again to remove "
                         "it). Not in the wedge and not in the saw blocks. 'Finish pins' (or Extrude) builds them.",
-                 "brush_smooth": "Smooth: only the guide is shown. Turn it to see its inner (contact) side and "
-                                 "paint over irregular spots (yellow) - they are bridged, never moved into the bone. "
-                                 "A stroke that starts on yellow erases.",
                  "lasso_add": "Lasso +: draw around the area to colour (only the visible surface is affected).",
                  "lasso_remove": "Lasso -: draw around the area to uncolour (only the visible surface is affected)."}
         hint = (" Drag on the background to rotate." if key.startswith("brush") or key == "pins"
@@ -414,34 +379,9 @@ class GuideEditMixin:
         self._guide_cell_locator.SetDataSet(mesh)
         self._guide_cell_locator.BuildLocator()
         self._guide_bone_locator = self._guide_cell_locator
-        if self._guide_active_tool == "brush_smooth" or (
-                self._guide_active_tool == "pins" and not self._guide_mode_is_reduction()):
-            self._build_guide_body_locator()          # reduction pins: picked on the corrected bone
         self._guide_point_locator = vtk.vtkPointLocator()
         self._guide_point_locator.SetDataSet(mesh)
         self._guide_point_locator.BuildLocator()
-
-    def _build_guide_body_locator(self):
-        """Smooth tool: picking happens on the finished guide, not on the bone."""
-        body = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
-        if body is None or body.GetPolyData() is None:
-            return
-        self._guide_body_polydata_for_pick = body.GetPolyData()
-        self._guide_cell_locator = vtk.vtkCellLocator()
-        self._guide_cell_locator.SetDataSet(self._guide_body_polydata_for_pick)
-        self._guide_cell_locator.BuildLocator()
-
-    def _smooth_contact_hit(self, x, y):
-        """Point on the guide's CONTACT side under the mouse (within 1.5 mm of the bone) or None."""
-        hit = self._guide_pick(x, y)
-        if hit is None:
-            return None
-        closest = [0.0, 0.0, 0.0]
-        cell_id = vtk.reference(0)
-        sub_id = vtk.reference(0)
-        dist2 = vtk.reference(0.0)
-        self._guide_bone_locator.FindClosestPoint(hit, closest, cell_id, sub_id, dist2)
-        return hit if float(dist2) ** 0.5 <= 1.5 else None
 
     def _remove_guide_observers(self):
         for interactor, tag in getattr(self, "_guide_observers", []):
@@ -494,20 +434,13 @@ class GuideEditMixin:
                     qt.QTimer.singleShot(0, lambda h=list(hit): self._toggle_pin(h))
                 return
             if tool.startswith("brush"):
-                hit = self._smooth_contact_hit(x, y) if tool == "brush_smooth" else self._guide_pick(x, y)
+                hit = self._guide_pick(x, y)
                 if hit is None:
                     self._guide_drag = False      # drag started on the background: rotate the view
                     return
-                if tool == "brush_smooth":
-                    mesh = self._guide_mesh_node().GetPolyData()
-                    nearest = self._guide_point_locator.FindClosestPoint(hit)
-                    self._smooth_erase = bool(self._guide_relief(mesh)[nearest])
-                self._guide_push_undo()
                 self._guide_drag = True
                 self._guide_brush_at(x, y, tool == "brush_add", hit=hit)
             else:
-                if tool != "bone_lasso":
-                    self._guide_push_undo()
                 self._guide_drag = True
                 self._guide_lasso_points = [(x, y)]
                 self._update_lasso_feedback()
@@ -515,11 +448,7 @@ class GuideEditMixin:
         elif event == "MouseMoveEvent":
             if not self._guide_drag:
                 return
-            if tool == "brush_smooth":
-                hit = self._smooth_contact_hit(x, y)
-                if hit is not None:
-                    self._guide_brush_at(x, y, False, hit=hit)
-            elif tool.startswith("brush"):
+            if tool.startswith("brush"):
                 self._guide_brush_at(x, y, tool == "brush_add")
             else:
                 last = self._guide_lasso_points[-1]
@@ -545,8 +474,6 @@ class GuideEditMixin:
                 if len(points) >= 3:
                     self._guide_apply_lasso(points, tool == "lasso_add")
             self._refresh_guide_body_if_present()
-            if tool == "brush_smooth":
-                self._build_guide_body_locator()
             self._abort_guide_event(caller, event)
             if tool.startswith("lasso"):
                 # One lasso per click: switch the tool off so the view can be rotated/panned again.
@@ -581,20 +508,11 @@ class GuideEditMixin:
                 return
         ids = vtk.vtkIdList()
         radius = float(self.guide_brush_radius.value)
-        if getattr(self, "_guide_active_tool", None) == "brush_smooth":
-            radius += 1.0      # the hit lies on the guide, up to ~1 mm off the bone
         self._guide_point_locator.FindPointsWithinRadius(radius, hit, ids)
         if ids.GetNumberOfIds() == 0:
             return
         idx = np.array([ids.GetId(i) for i in range(ids.GetNumberOfIds())], dtype=np.int64)
         mesh = self._guide_mesh_node().GetPolyData()
-        if getattr(self, "_guide_active_tool", None) == "brush_smooth":
-            idx = idx[guide_logic.get_selection(mesh)[idx]]          # only inside the footprint
-            relief = self._guide_relief(mesh)
-            relief[idx] = not getattr(self, "_smooth_erase", False)
-            guide_logic.set_selection(mesh, relief, name="Relief")
-            self._update_guide_relief_display(mesh)
-            return
         P, N = guide_logic.points_and_normals(mesh)
         camera = np.asarray(renderer.GetActiveCamera().GetPosition(), dtype=float)
         facing = np.sum(N[idx] * (camera - P[idx]), axis=1) > 0.0
@@ -614,19 +532,9 @@ class GuideEditMixin:
             end = P[i] - direction / length * 0.3
             if self._guide_cell_locator.IntersectWithLine(camera.tolist(), end.tolist(), 0.0, t, hit_point, pc, sub_id):
                 keep[n] = False
-        tool = getattr(self, "_guide_active_tool", None)
-        if tool == "brush_smooth":
-            relief = self._guide_relief(mesh)
-            relief[idx[keep]] = True
-            guide_logic.set_selection(mesh, relief, name="Relief")
-        else:
-            selection = guide_logic.get_selection(mesh)
-            selection[idx[keep]] = add
-            guide_logic.set_selection(mesh, selection)
-            if not add:
-                relief = self._guide_relief(mesh)
-                relief[idx[keep]] = False
-                guide_logic.set_selection(mesh, relief, name="Relief")
+        selection = guide_logic.get_selection(mesh)
+        selection[idx[keep]] = add
+        guide_logic.set_selection(mesh, selection)
         self._update_guide_footprint_display()
 
     def _guide_apply_lasso(self, polygon, add):
@@ -732,13 +640,6 @@ class GuideEditMixin:
                 logging.exception("Doggybone: non-critical step failed (continuing)")
         self._guide_lasso_actor = None
 
-    def _guide_body_polydata(self):
-        node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
-        if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfCells() == 0:
-            return None
-        copy = vtk.vtkPolyData()
-        copy.DeepCopy(node.GetPolyData())
-        return copy
 
     def _set_guide_body(self, polydata):
         node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
@@ -752,30 +653,7 @@ class GuideEditMixin:
             node.GetDisplayNode().SetColor(0.35, 0.7, 0.95)
             node.GetDisplayNode().SetOpacity(0.85)
         node.SetAndObservePolyData(polydata)
-        if getattr(self, "_guide_active_tool", None) == "brush_smooth" or (
-                getattr(self, "_guide_active_tool", None) == "pins" and not self._guide_mode_is_reduction()):
-            self._build_guide_body_locator()      # always pick on the current guide
 
-    def _guide_push_undo(self):
-        '''One undo step = footprint selection AND guide body (None if there was none).'''
-        mesh_node = self._guide_mesh_node()
-        if mesh_node is None:
-            return
-        self._guide_undo_stack.append((guide_logic.get_selection(mesh_node.GetPolyData()).copy(),
-                                       self._guide_body_polydata()))
-        del self._guide_undo_stack[:-20]
-
-    def onGuideUndo(self):
-        mesh_node = self._guide_mesh_node()
-        if mesh_node is None or not getattr(self, "_guide_undo_stack", []):
-            self.guide_status.setText("Nothing to undo.")
-            return
-        selection, body = self._guide_undo_stack.pop()
-        guide_logic.set_selection(mesh_node.GetPolyData(), selection)
-        area = self._update_guide_footprint_display()
-        self._set_guide_body(body)
-        self.guide_status.setText(f"Undone; footprint ~{area:.0f} mm\N{SUPERSCRIPT TWO}"
-                                  f"{', guide body restored' if body is not None else ', no guide body'}.")
 
     def onCleanGuide(self):
         body_node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
@@ -810,8 +688,6 @@ class GuideEditMixin:
             return
         finally:
             qt.QApplication.restoreOverrideCursor()
-        self._guide_body_before_clean = vtk.vtkPolyData()
-        self._guide_body_before_clean.DeepCopy(body_node.GetPolyData())
         self._set_guide_body(cleaned)
         self.guide_status.setStyleSheet(STATUS_OK_STYLE if info["open_edges"] == 0 and info["bodies_after"] == 1
                                         else STATUS_WARN_STYLE)
@@ -834,7 +710,6 @@ class GuideEditMixin:
         if mesh_node is not None and mesh_node.GetPolyData() is not None:
             mesh = mesh_node.GetPolyData()
             guide_logic.set_selection(mesh, np.zeros(mesh.GetNumberOfPoints(), dtype=bool))
-            guide_logic.set_selection(mesh, np.zeros(mesh.GetNumberOfPoints(), dtype=bool), name="Relief")
             self._update_guide_footprint_display()
         pins_node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_PINS_NAME)
         if pins_node is not None:
@@ -848,7 +723,6 @@ class GuideEditMixin:
         self._pins_dirty = False
         self._set_pin_axes(None)
         self._set_guide_body(None)
-        self._guide_undo_stack = []
         if self._guide_mode_is_reduction():
             self.guide_status.setText("Reduction guide and its pins deleted. Place the pin rows again.")
         else:
@@ -877,7 +751,7 @@ class GuideEditMixin:
                                                            self.osteotomy_bone.currentText):
             return
         if slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is not None:
-            self._extrude_guide_body(push_undo=False)
+            self._extrude_guide_body()
 
     def _stop_guide_edit(self):
         self._remove_guide_observers()
@@ -921,38 +795,6 @@ class GuideEditMixin:
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetVisibility(True)
         self._guide_hidden_preview = []
-        opacity = getattr(self, "_guide_body_opacity", None)
-        body = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
-        if opacity is not None and body is not None and body.GetDisplayNode() is not None:
-            body.GetDisplayNode().SetOpacity(opacity)
-        self._guide_body_opacity = None
         # back to the module-wide bone opacity (it may have been changed while painting)
         if hasattr(self, "_set_bone_opacity") and getattr(self, "opacity_slider", None) is not None:
             self._set_bone_opacity(self.opacity_slider.value)
-
-    def _show_view_for_tool(self, key):
-        if key == "brush_smooth":
-            self._hide_all_but_guide()
-        else:
-            self._hide_preview_for_guide_edit()
-
-    def _hide_all_but_guide(self):
-        """Contact retouch: only the guide (and the yellow marks) stay visible in 3D."""
-        keep = {self.GUIDE_BODY_NAME, self.GUIDE_RELIEF_NAME}
-        self._guide_hidden_preview = []
-        for class_name in ("vtkMRMLModelNode", "vtkMRMLSegmentationNode", "vtkMRMLMarkupsNode"):
-            for node in slicer.util.getNodesByClass(class_name):
-                if node.GetName() in keep or node.GetHideFromEditors():
-                    continue
-                display = node.GetDisplayNode()
-                if display is not None and display.GetVisibility():
-                    display.SetVisibility(False)
-                    self._guide_hidden_preview.append(node.GetID())
-        body = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
-        if body is not None and body.GetDisplayNode() is not None:
-            self._guide_body_opacity = body.GetDisplayNode().GetOpacity()
-            body.GetDisplayNode().SetOpacity(1.0)
-            body.GetDisplayNode().SetVisibility(True)
-        marks = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_RELIEF_NAME)
-        if marks is not None and marks.GetDisplayNode() is not None:
-            marks.GetDisplayNode().SetVisibility(True)

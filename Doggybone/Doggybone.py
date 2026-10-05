@@ -80,7 +80,6 @@ importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_build'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_pins'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_saw'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_tibia'))
-importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_volume'))
 from DoggyboneUI.ui_planes import PlanesMixin
 from DoggyboneUI.ui_correction import CorrectionMixin
 from DoggyboneUI.ui_segmentation import SegmentationMixin
@@ -89,7 +88,6 @@ from DoggyboneUI.ui_guide_build import GuideBuildMixin
 from DoggyboneUI.ui_pins import PinsMixin
 from DoggyboneUI.ui_saw import SawMixin
 from DoggyboneUI.ui_tibia import TibiaTargetsMixin
-from DoggyboneUI.ui_guide_volume import GuideVolumeMixin
 
 #
 # Doggybone
@@ -126,7 +124,7 @@ MIT License.
       self.parent.icon = qt.QIcon(iconPath)
 
 
-class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
+class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
                       ScriptedLoadableModuleWidget):
     """
     Base widget that manages the measurement groups
@@ -459,7 +457,6 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         self.reference_plane_selector.addItems(["Proximal", "Distal"])
         self.reference_plane_selector.currentIndexChanged.connect(self._on_master_plane_changed)
         osteotomy_form_layout.addRow("Master cutting plane", self.reference_plane_selector)
-        self.active_plane_selector = self.reference_plane_selector
 
         # (kept for the status text it receives, not shown in the panel)
         self.actual_plane_angle_label = qt.QLabel("Master/SECOND angle: --")
@@ -521,12 +518,6 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         self.insert_distal_plane_button.clicked.connect(self.onCreateDerivedPlane)
         osteotomy_form_layout.addRow(self.insert_distal_plane_button)
 
-        # Legacy controls remain as hidden compatibility objects because older helper methods
-        # still write status text, but they no longer clutter the clinical workflow.
-        self.show_hinge_button = qt.QPushButton()
-        self.show_hinge_button.setVisible(False)
-        self.sync_other_plane_button = qt.QPushButton()
-        self.sync_other_plane_button.setVisible(False)
         # ONE visible status line for the whole osteotomy section (planes and correction preview);
         # both names point to it (older code writes to either)
         self.correction_status = qt.QLabel()
@@ -537,10 +528,6 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         #############################
         # Corrective osteotomy (wedge + rotation, with live preview)
         #############################
-        self.rotation_invert = qt.QCheckBox()
-        self.rotation_invert.setVisible(False)
-        self.rotation_suggest_button = qt.QPushButton()
-        self.rotation_suggest_button.setVisible(False)
 
         osteotomy_form_layout.addRow(qt.QLabel("<b>Preview</b>"))
 
@@ -583,8 +570,6 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         self.fragment_shift_y.setToolTip("Fine translation of the corrected fragment along local Y of the MASTER cutting plane.")
         # (not shown in the panel - holds the X/Y gizmo's shift)
 
-        self.reset_fragment_shift_button = qt.QPushButton("Reset X/Y shift")
-        self.reset_fragment_shift_button.clicked.connect(self.onResetFragmentShift)
         # (reset button not shown in the panel)
         self.fragment_shift_x.valueChanged.connect(self._on_fragment_shift_changed)
         self.fragment_shift_y.valueChanged.connect(self._on_fragment_shift_changed)
@@ -661,7 +646,6 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
             "ctkCollapsibleButton { background-color: #718096; color: white; font-weight: bold; }")
         guide_collapsible_button.collapsed = True
         guide_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
-        self._guide_collapsible_button = guide_collapsible_button
         self.layout.addWidget(guide_collapsible_button)
         guide_layout = qt.QVBoxLayout(guide_collapsible_button)
         guide_info_label = qt.QLabel(
@@ -882,7 +866,7 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         tool_positions = {"brush_add": (0, 0), "brush_remove": (0, 1), "lasso_add": (1, 0),
                           "lasso_remove": (1, 1), "pins": (3, 0)}
         for key, label, tip in (("brush_add", "Brush +", "Colour the surface under the mouse (drag)."),
-                                ("brush_remove", "Brush -", "Uncolour the surface under the mouse (drag) - removes footprint and Smooth marks."),
+                                ("brush_remove", "Brush -", "Uncolour the surface under the mouse (drag)."),
                                 ("pins", "Edit pins", "Pins on the corrected bone: click on the bone to add a pin (parallel "
                                  "to the others), click a pin to delete it, Cmd/Ctrl + click a pin to move it with the "
                                  "gizmo. The saw guide takes the pins over, pre-angled."),
@@ -947,21 +931,7 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         guide_fields.append(("Fit gap", self.guide_gap))
         self.guide_thickness = spin(1.0, 10.0, 3.0, 0.5, " mm", "Wall thickness of the guide body.")
         guide_fields.append(("Wall thickness", self.guide_thickness))
-        self.guide_rim_smoothing = spin(0.0, 3.0, 1.0, 0.2, " mm",
-                                        "Smooths the outline of the footprint (fringes, notches) before extrusion.")
-        # (not shown any more - fixed 1.0 mm: rounded rim of the volume body)
-        self.guide_top_smoothing = qt.QDoubleSpinBox()
-        self.guide_top_smoothing.setRange(0.0, 15.0)
-        self.guide_top_smoothing.setSingleStep(0.5)
-        self.guide_top_smoothing.setDecimals(1)
-        self.guide_top_smoothing.setSuffix(" mm")
-        self.guide_top_smoothing.setValue(3.0)
-        self.guide_top_smoothing.setToolTip(
-            "Smoothing radius of the OUTER guide surface in mm (0 = follows the bone). The bone-contact "
-            "side stays exact; bone bumps are filled in; the wall never gets thinner than 80 % of the "
-            "wall thickness.")
-        # (not shown any more - fixed 3.0 mm: smoothing of the outer surface of the volume body)
-        for control in (self.guide_rim_smoothing, self.guide_top_smoothing, self.guide_gap, self.guide_thickness):
+        for control in (self.guide_gap, self.guide_thickness):
             control.valueChanged.connect(lambda _v: self._refresh_guide_body_if_present())
 
         def combo(items, default, tip):
@@ -997,42 +967,6 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
                                     "runs along its flat face. Closing wedge: the whole wedge between the two "
                                     "faces stays open. Smaller guide, easier to use on small bones.")
         guide_fields.append(("Saw guide", self.guide_saw_type))
-        self.guide_body_method = combo(["Extrude", "Volume"], "Volume",
-                                       "Extrude: the painted surface is lifted along the bone normals (classic).\n"
-                                       "Volume: the guide is built from the distance field of the bone - it grows "
-                                       "away from the bone in every direction, so it can lie on several sides of "
-                                       "the bone at once. Inner surface = bone + fit gap (exact), outer surface = "
-                                       "fit gap + wall thickness, rounded rim, always closed. Saw block and "
-                                       "sleeves are fused with it.")
-        # (not shown any more - always 'Volume')
-        self.guide_bridges = qt.QCheckBox("4 at the cut")
-        self.guide_bridges.checked = False
-        self.guide_bridges.setToolTip(
-            "Body: Volume - four round bridges across the cut (both ends of the kerf, close to the bone and "
-            "near the top of the saw block), fused into the guide on both sides: the two halves cannot "
-            "twist or bend at the cut. The kerfs stay open.")
-        self.guide_bridges.toggled.connect(lambda _c: self._refresh_guide_body_if_present())
-        # (not shown any more - off: the saw block holds the two halves together)
-        self.guide_trim_undercut = qt.QCheckBox("trim")
-        self.guide_trim_undercut.checked = True
-        self.guide_trim_undercut.setToolTip(
-            "Body: Volume - parts of the guide lying UNDER the bone as seen from the guide side (beyond the "
-            "widest point of the bone) would block placing the guide; they are cut away.")
-        self.guide_trim_undercut.toggled.connect(lambda _c: self._refresh_guide_body_if_present())
-        # (not shown any more - always on: nothing below the bone as seen from the guide side)
-        self.guide_min_feature = qt.QDoubleSpinBox()
-        self.guide_min_feature.setRange(0.0, 1.0)
-        self.guide_min_feature.setDecimals(2)
-        self.guide_min_feature.setSingleStep(0.05)
-        self.guide_min_feature.setValue(0.3)
-        self.guide_min_feature.setSuffix(" mm")
-        self.guide_min_feature.setSpecialValueText("off")
-        self.guide_min_feature.setToolTip(
-            "Body: Volume - parts of the guide thinner than this (thin edges, slivers, feathered rims) are "
-            "removed - they would break off or print badly. Material is only removed, never added; the fit "
-            "surface, kerfs and bores are not changed. 0 = off.")
-        self.guide_min_feature.editingFinished.connect(lambda: self._refresh_guide_body_if_present())
-        # (not shown any more - fixed 0.3 mm: thinner parts of the guide are removed)
         self.guide_pin = combo(["Auto (bone size)", "1.2 mm", "1.6 mm", "2.0 mm"], "Auto (bone size)",
                                "Fixation pin diameter. Auto: bone up to 15 mm -> 1.2 mm, larger -> 1.6 mm.")
         guide_fields.insert(0, ("Pin size", self.guide_pin))        # pin diameter first (top left)
@@ -1094,7 +1028,6 @@ class DoggyboneWidget(GuideVolumeMixin, TibiaTargetsMixin, PlanesMixin, Correcti
         self.guide_status.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         guide_form.addRow("Status", self.guide_status)
         self._guide_observers = []
-        self._guide_undo_stack = []
         self._guide_drag = False
         self._guide_active_tool = None
 

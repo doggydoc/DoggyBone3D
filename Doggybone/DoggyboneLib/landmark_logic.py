@@ -306,10 +306,6 @@ class SphereLandmark(SimpleLandmark):
         for cb in self.change_callbacks:
             cb()
 
-    def get_sphere(self):
-        if not self.placed:
-            return None
-        return self.get_position(), self.radius
 
     # --- radius handle: an orange point ON the sphere - drag it in any slice (MPR) or 3D view ---------
     RADIUS_HANDLE = "Doggybone sphere radius"

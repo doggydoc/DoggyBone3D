@@ -125,27 +125,6 @@ class CorrectionMixin:
             return None
         return polydata
 
-    def onSuggestRotation(self):
-        side = self.osteotomy_side.currentText.lower()
-        bone = self.osteotomy_bone.currentText
-        panel = self.left_panel if side == "left" else self.right_panel
-        measurement_name = self.ROTATION_MEASUREMENT_NAME[bone]
-        measurement = self._get_measurement_by_name(panel, measurement_name)
-        if measurement is None:
-            self.correction_status.setText(f"Measurement '{measurement_name}' not found.")
-            return
-        ready, value, description = measurement()
-        if not ready:
-            self.correction_status.setText(
-                f"Place the landmarks for '{measurement_name}' ({side}) first.")
-            return
-        target = self.target_rotation_value.value
-        magnitude = abs(value - target)
-        self.rotation_angle.setValue(magnitude)
-        self.correction_status.setText(
-            f"Suggestion from '{measurement_name}': {value:.1f}\N{DEGREE SIGN} ({description}), "
-            f"target {target:.1f}\N{DEGREE SIGN} -> correction {magnitude:.1f}\N{DEGREE SIGN}. "
-            "Check with the preview - adjust invert as needed.")
 
     def _preview_node_names(self, side, bone):
         return (f"Doggybone {side} {bone.lower()} proximal fragment",
@@ -505,14 +484,6 @@ class CorrectionMixin:
         if any(slicer.mrmlScene.GetFirstNodeByName(name) is not None for name in names):
             self.onPreviewCorrection()
 
-    def onResetFragmentShift(self):
-        old_x = self.fragment_shift_x.blockSignals(True)
-        old_y = self.fragment_shift_y.blockSignals(True)
-        self.fragment_shift_x.setValue(0.0)
-        self.fragment_shift_y.setValue(0.0)
-        self.fragment_shift_x.blockSignals(old_x)
-        self.fragment_shift_y.blockSignals(old_y)
-        self._on_fragment_shift_changed()
 
     # ------------------------------------------------------------------
     # CWO contact-congruent alignment
@@ -928,7 +899,7 @@ class CorrectionMixin:
             slicer.mrmlScene.RemoveNode(node)
             removed += 1
         # guide state in the module
-        for attribute, value in (("_guide_undo_stack", []), ("_guide_undo_stacks", {}), ("_guide_body_before_clean", None),
+        for attribute, value in (
                                  ("_selected_pin_id", None), ("_pins_dirty", False), ("_pin_rows_active", False),
                                  ("_saw_box_gizmo_tags", {}), ("_guide_saved_opacity", []),
                                  ("_guide_locked_planes", []), ("_guide_hidden_preview", [])):

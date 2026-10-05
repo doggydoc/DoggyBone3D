@@ -139,12 +139,6 @@ def anatomical_correction_matrix(shaft_point, shaft_axis, rotation_angle_deg,
     return numpy_to_vtk_matrix(H)
 
 
-def transform_direction(matrix, vector):
-    """Transform a direction by the rotational part of a homogeneous matrix."""
-    H = matrix_to_numpy(matrix)
-    return normalize(H[:3, :3] @ np.asarray(vector, dtype=float))
-
-
 def correction_matrix(hinge_point, ap_axis, wedge_angle_deg, shaft_axis, rotation_angle_deg):
     """Backward-compatible wrapper for old callers.
 
@@ -244,7 +238,6 @@ def clip_fragments(bone_polydata, plane_origin, plane_normal, proximal_to_distal
     return b, a
 
 
-
 def split_bone_three_regions(bone_polydata, proximal_origin, proximal_normal,
                              distal_origin, distal_normal, proximal_to_distal_axis):
     """Split a CWO bone into three disjoint anatomical regions.
@@ -270,60 +263,6 @@ def split_bone_three_regions(bone_polydata, proximal_origin, proximal_normal,
         remainder, distal_origin, distal_normal, proximal_to_distal_axis)
 
     return proximal_fragment, wedge_to_remove, distal_fragment
-
-def cross_section_centroid(bone_polydata, plane_origin, plane_normal):
-    '''
-    The area-weighted centroid of the bone's cross-section where `plane` cuts through it - i.e.
-    "the middle of the bone" at that exact level, computed from the actual segmented anatomy
-    rather than eyeballed in the 3D view. Cuts the closed bone surface with the plane (vtkCutter),
-    joins the resulting boundary into closed contours (vtkStripper), fills them
-    (vtkContourTriangulator) and area-weights each triangle's centroid - this is the correct
-    2D-in-3D area centroid, not just an average of boundary points (which would be biased toward
-    however densely the surface mesh happens to be triangulated at the edge).
-
-    Returns a numpy point, or None if the plane doesn't actually intersect the bone (e.g. it's
-    been dragged outside the segmented volume) or the cut produced no fillable contour.
-    '''
-    plane = vtk.vtkPlane()
-    plane.SetOrigin(*plane_origin)
-    plane.SetNormal(*plane_normal)
-
-    cutter = vtk.vtkCutter()
-    cutter.SetInputData(bone_polydata)
-    cutter.SetCutFunction(plane)
-    cutter.Update()
-    if cutter.GetOutput().GetNumberOfPoints() == 0:
-        return None
-
-    stripper = vtk.vtkStripper()
-    stripper.SetInputConnection(cutter.GetOutputPort())
-    stripper.JoinContiguousSegmentsOn()
-    stripper.Update()
-
-    triangulator = vtk.vtkContourTriangulator()
-    triangulator.SetInputConnection(stripper.GetOutputPort())
-    triangulator.Update()
-    filled = triangulator.GetOutput()
-    if filled.GetNumberOfCells() == 0:
-        return None
-
-    points = filled.GetPoints()
-    total_area = 0.0
-    weighted_centroid = np.zeros(3)
-    for i in range(filled.GetNumberOfCells()):
-        cell = filled.GetCell(i)
-        if cell.GetNumberOfPoints() != 3:
-            continue
-        p0 = np.array(points.GetPoint(cell.GetPointId(0)))
-        p1 = np.array(points.GetPoint(cell.GetPointId(1)))
-        p2 = np.array(points.GetPoint(cell.GetPointId(2)))
-        area = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0))
-        weighted_centroid += area * (p0 + p1 + p2) / 3.0
-        total_area += area
-
-    if total_area < 1e-9:
-        return None
-    return weighted_centroid / total_area
 
 
 def planes_intersection_line(origin1, normal1, origin2, normal2):

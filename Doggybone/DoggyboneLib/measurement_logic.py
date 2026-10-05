@@ -497,23 +497,3 @@ class TibialMetatarsalAngleMeasurement(BaseMeasurement):
         return deviation, "Outward rotation" if is_outward else "Inward rotation"
 
 
-class ExampleMeasurement(BaseMeasurement):
-    '''
-    This class SHOULD NOT BE USED, it is just provided as a example that shows how
-    child classes should be implemented.
-    '''
-    def __init__(self, display_name):
-        super().__init__(display_name)
-    
-    def _measure(self, point_dict, radius_dict):
-        p = point_dict['landmark name'] # access landmarks
-        m = 42 # calculate float measurement
-        
-        # Potentially return different descriptions for each side
-        if self.side.lower() == "right":
-            return m, "Some description"
-        elif self.side.lower() == "left":
-            return m, "Another description"
-        else:
-            raise ValueError(f"Unknown side {self.side}")
-

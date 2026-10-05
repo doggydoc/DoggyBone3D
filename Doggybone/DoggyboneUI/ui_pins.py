@@ -71,8 +71,6 @@ class PinsMixin:
         wall = float(getattr(guide_logic, "SLEEVE_WALL", 2.0))
         qt.QApplication.setOverrideCursor(qt.Qt.WaitCursor)
         try:
-            if self._guide_mesh_node() is not None:
-                self._guide_push_undo()
             side = self.osteotomy_side.currentText.lower()
             bone = self.osteotomy_bone.currentText
             combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
@@ -367,7 +365,7 @@ class PinsMixin:
             self._pin_rows_active = False
             self._select_reduction_pin(None)
         elif count and slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is not None:
-            self._extrude_guide_body(push_undo=False)
+            self._extrude_guide_body()
         self.guide_status.setText(f"{count} pin(s) deleted." if count else "No pins to delete.")
 
     def _pin_under_mouse(self, x, y, tolerance=2.5):
@@ -1105,7 +1103,7 @@ class PinsMixin:
         """An existing reduction guide follows the moved / deleted pin right away."""
         self._pins_dirty = False
         if slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME) is not None:
-            qt.QTimer.singleShot(0, lambda: self._extrude_guide_body(push_undo=True))
+            qt.QTimer.singleShot(0, self._extrude_guide_body)
 
     def _keep_clear_of_cut(self, pin, fragments, direction, centred=False):
         """A pin too close to its cut (the saw guide could not take it) is moved away from the cut along
