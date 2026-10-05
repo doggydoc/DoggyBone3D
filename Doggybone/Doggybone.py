@@ -105,7 +105,10 @@ class Doggybone(ScriptedLoadableModule):
     self.parent.dependencies = []
     self.parent.contributors = ["Matthias Frank (Kleintierklinik Frank & Partner, Freiburg)",
                                 "Juliette Burg Personnaz, Andreas Voigt (CTK, LMU Munich; BoneAngleMeter)"]
-    self.parent.helpText = """
+    logoPath = os.path.join(os.path.dirname(__file__), "Resources", "Icons", "Doggybone_help_logo.png")
+    logoHtml = (f'<p><img src="{qt.QUrl.fromLocalFile(logoPath).toString()}" width="120" height="120"></p>'
+                if os.path.exists(logoPath) else "")
+    self.parent.helpText = logoHtml + """
 Doggybone 3D: landmark-based angle measurement of the canine hind limb, corrective osteotomy planning
 (closing / opening wedge, bisecting principle, contact-congruent alignment, torsion) and
 patient-specific cutting-guide design.
