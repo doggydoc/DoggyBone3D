@@ -436,6 +436,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # the other side's landmarks -> its current values / calculated corrections
         self.osteotomy_side.currentIndexChanged.connect(
             lambda _i: (self._ensure_landmark_observers(), self._schedule_values_refresh()))
+        # the measurement panel shows the side that is planned (its landmarks feed the corrections)
+        self.osteotomy_side.currentIndexChanged.connect(self._sync_measurement_side)
         osteotomy_form_layout.addRow("Side", self.osteotomy_side)
 
         self.osteotomy_bone = qt.QComboBox()
@@ -1228,7 +1230,20 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.side_stack.setCurrentIndex(index)
         self._current_panel().activate()
         self._ensure_landmark_observers()
+        # measuring a leg whose side has nothing planned yet: the osteotomy side follows, so the
+        # landmarks placed here feed the calculated corrections (the other side keeps its plan when
+        # it already has landmarks - comparing with the contralateral leg does not switch the plan)
+        side_osteo = getattr(self, "osteotomy_side", None)
+        if side_osteo is not None and side_osteo.currentIndex != index:
+            planned = self.left_panel if side_osteo.currentText == "Left" else self.right_panel
+            node = slicer.mrmlScene.GetNodeByID(getattr(planned, "markup_node_id", "") or "")
+            if node is None or node.GetNumberOfDefinedControlPoints() == 0:
+                side_osteo.setCurrentIndex(index)
         self._schedule_values_refresh()
+
+    def _sync_measurement_side(self, index):
+        if hasattr(self, "side_selector") and self.side_selector.currentIndex != index:
+            self.side_selector.setCurrentIndex(index)
 
     def _on_osteotomy_bone_changed(self, index):
         bone = self.osteotomy_bone.currentText
@@ -1315,9 +1330,15 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             self.rotation_angle.setValue(0.0)
 
         if hasattr(self, "current_values_label"):
+            other_side = "right" if side == "left" else "left"
+            other_panel = self.right_panel if side == "left" else self.left_panel
+            other_wedge = self._get_measurement_by_name(other_panel, self.WEDGE_MEASUREMENT_NAME[bone])
+            other_ready = bool(other_wedge is not None and other_wedge()[0])
             self.current_values_label.setText(
                 " | ".join(current_parts) if current_parts else
-                "Current anatomy: place the required landmarks")
+                (f"No landmarks on the {side.upper()} side - they are placed on the {other_side.upper()} "
+                 f"side. Set 'Side' to {other_side.capitalize()} (or measure the {side} leg)."
+                 if other_ready else "Current anatomy: place the required landmarks"))
             # same colour code as the measurement tool: green = measured, orange = landmarks missing
             self.current_values_label.setStyleSheet(
                 OSTEOTOMY_VALUE_STYLE if current_parts else STATUS_WARN_STYLE)
