@@ -1123,6 +1123,16 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         except Exception as e:
             self.correction_status.setText(f"Screenshot failed: {e}")
 
+    def _export_file_name(self, *parts):
+        """Default STL file name: patient name - patient number - parts ('fem' / 'tib', 'red' / 'cut'),
+        e.g. 'Bello-1234-fem-cut.stl'; the bone alone: 'Bello-1234.stl'. Empty fields are left out,
+        characters not allowed in file names are replaced."""
+        name = self.patient_name.text.strip() if getattr(self, "patient_name", None) else ""
+        number = self.patient_number.text.strip() if getattr(self, "patient_number", None) else ""
+        fields = [re.sub(r'[\\/:*?"<>|]+', "_", field).strip() for field in (name, number) + parts]
+        fields = [field for field in fields if field]
+        return "-".join(fields or ["Doggybone"]) + ".stl"
+
     def onExportBoneStl(self, status=None):
         """Binary STL of the segmented bone (the closed surface of the Doggybone segmentation) in mm,
         in the CT coordinates. status: the label for the result (segmentation or guide panel)."""
@@ -1132,10 +1142,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if polydata is None or polydata.GetNumberOfPoints() == 0:
             status.setText("No bone segmentation to export - segment the bone first.")
             return
-        number = self.patient_number.text.strip() if getattr(self, "patient_number", None) else ""
-        name = self.patient_name.text.strip() if getattr(self, "patient_name", None) else ""
-        prefix = "_".join(part for part in (number, name) if part)
-        default_name = (f"{prefix}_" if prefix else "") + "Doggybone_bone.stl"
+        default_name = self._export_file_name()                   # name-number.stl
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
         path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export segmented bone",
                                               os.path.join(start_dir, default_name), "STL (*.stl)")

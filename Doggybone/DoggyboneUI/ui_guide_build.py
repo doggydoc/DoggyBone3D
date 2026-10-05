@@ -190,11 +190,9 @@ class GuideBuildMixin:
         if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
             self.guide_status.setText("No guide body yet - press Extrude first.")
             return
-        side = self.osteotomy_side.currentText.lower()
-        bone = self.osteotomy_bone.currentText.lower()
-        kind = "reduction_guide" if self._guide_mode_is_reduction() else "guide"
-        number = self.patient_number.text.strip() if getattr(self, "patient_number", None) else ""
-        default_name = (f"{number}_" if number else "") + f"Doggybone_{kind}_{side}_{bone}.stl"
+        bone = "fem" if self.osteotomy_bone.currentText == "Femur" else "tib"
+        kind = "red" if self._guide_mode_is_reduction() else "cut"
+        default_name = self._export_file_name(bone, kind)          # name-number-fem/tib-red/cut.stl
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
         path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export cutting guide",
                                               os.path.join(start_dir, default_name), "STL (*.stl)")
