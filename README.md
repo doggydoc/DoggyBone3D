@@ -1,8 +1,8 @@
 <img src="Doggybone/Resources/Icons/Doggybone_help_logo.png" alt="Doggybone 3D logo" width="200"/>
 
-# Doggybone 3D
+# DoggyBone 3D
 
-**Doggybone 3D** is a 3D Slicer module for the canine hind limb. It contains the canine hind-limb
+**DoggyBone 3D** is a 3D Slicer module for the canine hind limb. It contains the canine hind-limb
 angle measurements of BoneAngleMeter and extends them with
 
 - corrective osteotomy planning: closing / opening wedge, bisecting principle, contact-congruent
@@ -12,9 +12,9 @@ angle measurements of BoneAngleMeter and extends them with
   lasso), extrusion into the guide body with fit gap and wall thickness,
 - segmentation clean-up in 3D (lasso, removal of small islands).
 
-In Slicer it appears under **Orthopedics > Doggybone 3D**.
+In Slicer it appears under **Orthopedics > DoggyBone 3D**.
 
-> **For research use only.** Doggybone 3D is not a certified medical device. All measurements and
+> **For research use only.** DoggyBone 3D is not a certified medical device. All measurements and
 > planning results must be verified by the surgeon.
 
 **Author:** Matthias Frank, Kleintierklinik Frank & Partner, Freiburg, Germany
