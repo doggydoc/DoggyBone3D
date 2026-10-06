@@ -1,15 +1,16 @@
 cmake_minimum_required(VERSION 3.13.4)
 
-project(BoneAngleMeter)
+project(Doggybone3D)
 
 #-----------------------------------------------------------------------------
 # Extension meta-information
-set(EXTENSION_HOMEPAGE "https://www.slicer.org/wiki/Documentation/Nightly/Extensions/BoneAngleMeter")
+# TODO before submitting to the Extension Index: replace the GitHub URLs below with the real repository
+set(EXTENSION_HOMEPAGE "https://github.com/GITHUB_USER/Doggybone3D")
 set(EXTENSION_CATEGORY "Orthopedics")
 set(EXTENSION_CONTRIBUTORS "Juliette Burg Personnaz, Andreas Voigt (CTK, LMU Munich), Matthias Frank (Kleintierklinik Frank & Partner, Freiburg)")
-set(EXTENSION_DESCRIPTION "Canine hind-limb angle measurement (BoneAngleMeter) and corrective osteotomy planning with patient-specific cutting guides (Doggybone 3D). For research use only.")
-set(EXTENSION_ICONURL "http://www.example.com/Slicer/Extensions/BoneAngleMeter.png")
-set(EXTENSION_SCREENSHOTURLS "http://www.example.com/Slicer/Extensions/BoneAngleMeter/Screenshots/1.png")
+set(EXTENSION_DESCRIPTION "Canine hind-limb angle measurement, corrective osteotomy planning and patient-specific cutting guides. Based on BoneAngleMeter (Burg Personnaz, Voigt). For research use only.")
+set(EXTENSION_ICONURL "https://raw.githubusercontent.com/GITHUB_USER/Doggybone3D/main/Doggybone/Resources/Icons/Doggybone.png")
+set(EXTENSION_SCREENSHOTURLS "")
 set(EXTENSION_DEPENDS "NA") # Specified as a list or "NA" if no dependencies
 
 #-----------------------------------------------------------------------------
@@ -19,7 +20,6 @@ include(${Slicer_USE_FILE})
 
 #-----------------------------------------------------------------------------
 # Extension modules
-add_subdirectory(BoneAngleMeterModule)
 add_subdirectory(Doggybone)
 ## NEXT_MODULE
 

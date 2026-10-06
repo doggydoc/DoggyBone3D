@@ -6,3 +6,8 @@ __pycache__/
 *.nrrd
 *.dcm
 *.stl
+
+# local development files
+.claude_*
+.guide_panel*.png
+_to_delete/

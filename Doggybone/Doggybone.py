@@ -4,7 +4,6 @@
 # (CTK, LMU Munich) - https://github.com/jburgp/BoneAngleMeter_public
 # Licensed under the MIT License, see LICENSE in the repository root.
 
-import json
 import logging
 import re
 import os

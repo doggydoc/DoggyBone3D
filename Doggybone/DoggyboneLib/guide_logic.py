@@ -2286,10 +2286,6 @@ _BONE_FIELDS_MAX = 2              # saw guide + reduction guide
 _BONE_FIELD_PAD_MM = 3.0
 
 
-def clear_bone_field_cache():
-    del _BONE_FIELDS[:]
-
-
 def _poly_fingerprint(poly):
     pts = vtk_to_numpy(poly.GetPoints().GetData()).astype(np.float64)
     return (int(poly.GetNumberOfPoints()), int(poly.GetNumberOfCells()),

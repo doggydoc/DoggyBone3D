@@ -5,7 +5,6 @@
 # Licensed under the MIT License, see LICENSE in the repository root.
 
 import numpy as np
-import os.path as osp
 import slicer
 import vtk
 

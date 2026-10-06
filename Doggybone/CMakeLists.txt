@@ -21,10 +21,12 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneUI/ui_guide_build.py
   DoggyboneUI/ui_pins.py
   DoggyboneUI/ui_saw.py
+  DoggyboneUI/ui_tibia.py
   )
 
 set(MODULE_PYTHON_RESOURCES
   Resources/Icons/${MODULE_NAME}.png
+  Resources/Icons/Doggybone_help_logo.png
   Resources/descriptions/condyluslateralistibiae.png
   Resources/descriptions/condylusmedtibiae.png
   Resources/descriptions/distfemurmidpoint.png

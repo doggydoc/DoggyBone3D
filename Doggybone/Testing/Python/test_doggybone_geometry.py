@@ -33,10 +33,6 @@ def unit(v):
     return v / np.linalg.norm(v)
 
 
-def rot(axis, deg):
-    return H(ol.rotation_matrix_about_line([0, 0, 0], axis, deg))[:3, :3]
-
-
 def bone(radius=6.0, length=80.0):
     c = vtk.vtkCylinderSource(); c.SetRadius(radius); c.SetHeight(length); c.SetResolution(96); c.CappingOn()
     t = vtk.vtkTransform(); t.RotateX(90)
