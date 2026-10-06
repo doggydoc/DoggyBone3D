@@ -22,6 +22,10 @@ In Slicer it appears under **Orthopedics > Doggybone 3D**.
 **Based on** [BoneAngleMeter](https://github.com/jburgp/BoneAngleMeter_public) by Juliette Burg
 Personnaz and Andreas Voigt, developed during Juliette Burg Personnaz' doctorate at CTK, LMU Munich.
 
+**Acknowledgement:** The interactive, rotatable cutting planes follow the approach of
+[Osteotomy Planner](https://github.com/KitwareMedical/OsteotomyPlanner) (Sam Horvath, Ye Han, Beatriz Paniagua,
+Kitware), a 3D Slicer extension for human craniofacial surgery planning.
+
 **License:** MIT (see [LICENSE](LICENSE)) - Copyright (c) 2022 Juliette Burg Personnaz, Andreas
 Voigt; Copyright (c) 2026 Matthias Frank, Kleintierklinik Frank & Partner.
 
