@@ -1,4 +1,4 @@
-<img src="Doggybone/Resources/Icons/Doggybone_help_logo.png" alt="Doggybone 3D logo" width="128"/>
+<img src="Doggybone/Resources/Icons/Doggybone_help_logo.png" alt="Doggybone 3D logo" width="200"/>
 
 # Doggybone 3D
 
