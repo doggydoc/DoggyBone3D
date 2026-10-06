@@ -4,12 +4,11 @@ project(Doggybone3D)
 
 #-----------------------------------------------------------------------------
 # Extension meta-information
-# TODO before submitting to the Extension Index: replace the GitHub URLs below with the real repository
-set(EXTENSION_HOMEPAGE "https://github.com/GITHUB_USER/Doggybone3D")
+set(EXTENSION_HOMEPAGE "https://github.com/doggydoc/Doggybone3D")
 set(EXTENSION_CATEGORY "Orthopedics")
 set(EXTENSION_CONTRIBUTORS "Juliette Burg Personnaz, Andreas Voigt (CTK, LMU Munich), Matthias Frank (Kleintierklinik Frank & Partner, Freiburg)")
 set(EXTENSION_DESCRIPTION "Canine hind-limb angle measurement, corrective osteotomy planning and patient-specific cutting guides. Based on BoneAngleMeter (Burg Personnaz, Voigt). For research use only.")
-set(EXTENSION_ICONURL "https://raw.githubusercontent.com/GITHUB_USER/Doggybone3D/main/Doggybone/Resources/Icons/Doggybone.png")
+set(EXTENSION_ICONURL "https://raw.githubusercontent.com/doggydoc/Doggybone3D/main/Doggybone/Resources/Icons/Doggybone.png")
 set(EXTENSION_SCREENSHOTURLS "")
 set(EXTENSION_DEPENDS "NA") # Specified as a list or "NA" if no dependencies
 
