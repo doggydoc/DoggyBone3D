@@ -1,4 +1,4 @@
-# Doggybone 3D - geometry regression tests (no GUI; run inside Slicer's Python or any Python with vtk + numpy):
+# DoggyBone3D - geometry regression tests (no GUI; run inside Slicer's Python or any Python with vtk + numpy):
 #   Slicer:  exec(open(r"<path>/test_doggybone_geometry.py").read())      or
 #   shell:   PythonSlicer -m unittest <path>/test_doggybone_geometry.py
 import os, sys, unittest, types

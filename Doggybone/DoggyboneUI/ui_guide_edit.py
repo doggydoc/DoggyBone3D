@@ -1,4 +1,4 @@
-# Doggybone 3D - canine osteotomy planning and patient-specific cutting guides for 3D Slicer
+# DoggyBone3D - canine osteotomy planning and patient-specific cutting guides for 3D Slicer
 # Copyright (c) 2026 Matthias Frank, Kleintierklinik Frank & Partner, Freiburg, Germany
 # Based on BoneAngleMeter, Copyright (c) 2022 Juliette Burg Personnaz, Andreas Voigt
 # (CTK, LMU Munich) - https://github.com/jburgp/BoneAngleMeter_public
@@ -238,7 +238,7 @@ class GuideEditMixin:
             was_blocked = button.blockSignals(True)
             button.setChecked(False)
             button.blockSignals(was_blocked)
-            slicer.util.warningDisplay(f"Brush / lasso cannot start: {message}", windowTitle="Doggybone 3D")
+            slicer.util.warningDisplay(f"Brush / lasso cannot start: {message}", windowTitle="DoggyBone3D")
             return
         if key == "pins" and not self._guide_mode_is_reduction():
             button = self._guide_tool_buttons[key]

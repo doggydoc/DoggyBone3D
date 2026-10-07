@@ -1,4 +1,4 @@
-# Doggybone 3D - canine osteotomy planning and patient-specific cutting guides for 3D Slicer
+# DoggyBone3D - canine osteotomy planning and patient-specific cutting guides for 3D Slicer
 # Copyright (c) 2026 Matthias Frank, Kleintierklinik Frank & Partner, Freiburg, Germany
 # Based on BoneAngleMeter, Copyright (c) 2022 Juliette Burg Personnaz, Andreas Voigt
 # (CTK, LMU Munich) - https://github.com/jburgp/BoneAngleMeter_public
@@ -99,7 +99,7 @@ class Doggybone(ScriptedLoadableModule):
 
   def __init__(self, parent):
     ScriptedLoadableModule.__init__(self, parent)
-    self.parent.title = "Doggybone 3D"
+    self.parent.title = "DoggyBone3D"
     self.parent.categories = ["Orthopedics"]
     self.parent.dependencies = []
     self.parent.contributors = ["Matthias Frank (Kleintierklinik Frank & Partner, Freiburg)",
@@ -108,14 +108,14 @@ class Doggybone(ScriptedLoadableModule):
     logoHtml = (f'<p><img src="{qt.QUrl.fromLocalFile(logoPath).toString()}" width="120" height="120"></p>'
                 if os.path.exists(logoPath) else "")
     self.parent.helpText = logoHtml + """
-Doggybone 3D: landmark-based angle measurement of the canine hind limb, corrective osteotomy planning
+DoggyBone3D: landmark-based angle measurement of the canine hind limb, corrective osteotomy planning
 (closing / opening wedge, bisecting principle, contact-congruent alignment, torsion) and
 patient-specific cutting-guide design.
 <p><b>For research use only - not a certified medical device.</b> All planning results must be
 checked by the surgeon.</p>
 """
     self.parent.acknowledgementText = """
-Doggybone 3D is developed by Matthias Frank, Kleintierklinik Frank &amp; Partner, Freiburg, Germany.
+DoggyBone3D is developed by Matthias Frank, Kleintierklinik Frank &amp; Partner, Freiburg, Germany.
 It is based on BoneAngleMeter by Juliette Burg Personnaz and Andreas Voigt, developed during
 Juliette Burg Personnaz' doctorate at CTK, LMU Munich
 (<a href="https://github.com/jburgp/BoneAngleMeter_public">github.com/jburgp/BoneAngleMeter_public</a>).

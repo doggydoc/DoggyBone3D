@@ -1,8 +1,8 @@
-<img src="Doggybone/Resources/Icons/Doggybone_help_logo.png" alt="Doggybone 3D logo" width="200"/>
+<img src="Doggybone/Resources/Icons/Doggybone_help_logo.png" alt="DoggyBone3D logo" width="200"/>
 
-# DoggyBone 3D
+# DoggyBone3D
 
-**DoggyBone 3D** is a 3D Slicer module for the canine hind limb. It contains the canine hind-limb
+**DoggyBone3D** is a 3D Slicer module for the canine hind limb. It contains the canine hind-limb
 angle measurements of BoneAngleMeter and extends them with
 
 - corrective osteotomy planning: closing / opening wedge, bisecting principle, contact-congruent
@@ -12,9 +12,9 @@ angle measurements of BoneAngleMeter and extends them with
   lasso), extrusion into the guide body with fit gap and wall thickness,
 - segmentation clean-up in 3D (lasso, removal of small islands).
 
-In Slicer it appears under **Orthopedics > DoggyBone 3D**.
+In Slicer it appears under **Orthopedics > DoggyBone3D**.
 
-> **For research use only.** DoggyBone 3D is not a certified medical device. All measurements and
+> **For research use only.** DoggyBone3D is not a certified medical device. All measurements and
 > planning results must be verified by the surgeon.
 
 **Author:** Matthias Frank, Kleintierklinik Frank & Partner, Freiburg, Germany
@@ -35,4 +35,4 @@ Voigt; Copyright (c) 2026 Matthias Frank, Kleintierklinik Frank & Partner.
 2. Download this repository (green **Code** button > **Download ZIP**, or the `.zip` of the latest release) and unpack it, e.g. to `Documents`.
 3. In Slicer open **Modules > Developer Tools > Extension Wizard** and click **Select Extension**.
 4. Choose the unpacked folder and confirm.
-5. Doggybone 3D now appears under **Modules > Orthopedics > Doggybone 3D**.
+5. DoggyBone3D now appears under **Modules > Orthopedics > DoggyBone3D**.
