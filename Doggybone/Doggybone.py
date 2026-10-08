@@ -1037,9 +1037,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._update_guide_tool_visibility()        # again, now that the parameter fields exist
         self.guide_extrude_button = qt.QPushButton("Extrude guide body")
         self.guide_extrude_button.clicked.connect(self.onExtrudeGuideBody)
-        self.guide_export_button = qt.QPushButton("Export STL...")
-        self.guide_export_button.setToolTip("Save the guide (body + saw blocks) as a binary STL in mm.")
-        self.guide_export_button.clicked.connect(self.onExportGuideStl)
+        self.guide_export_button = qt.QPushButton("Export guides...")
+        self.guide_export_button.setToolTip(
+            "Save ALL finished guides (osteotomy and reduction guide, femur and tibia) as binary STLs in mm "
+            "into one folder - always the last guide built for each bone and type. The file names carry "
+            "side, bone and type: name-number-fem/tib-dx/sx-cut/red.stl.")
+        self.guide_export_button.clicked.connect(self.onExportAllGuides)
         self.guide_clean_button = qt.QPushButton("Clean up")
         self.guide_clean_button.setToolTip(
             "Rebuild the guide as ONE clean, closed solid: all parts united, loose triangles and islands "

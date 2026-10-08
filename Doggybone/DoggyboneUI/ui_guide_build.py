@@ -183,6 +183,111 @@ class GuideBuildMixin:
         finally:
             qt.QApplication.restoreOverrideCursor()
 
+    GUIDE_BODY_PATTERN = re.compile(r"^Doggybone guide body( tibia)?( \(reduction\))?$")
+
+    def _all_guide_bodies(self):
+        """Every finished guide body in the scene: [(node, side, bone, mode)], femur before tibia,
+        saw (osteotomy) before reduction. Side / bone / mode come from the node itself (set when
+        the body was built); the bone and mode can also be read from the node name."""
+        found = []
+        for node in slicer.util.getNodesByClass("vtkMRMLModelNode"):
+            match = self.GUIDE_BODY_PATTERN.match(node.GetName() or "")
+            if not match:
+                continue
+            polydata = node.GetPolyData()
+            if polydata is None or polydata.GetNumberOfPoints() == 0:
+                continue
+            bone = node.GetAttribute("Doggybone.GuideBone") or ("Tibia" if match.group(1) else "Femur")
+            mode = node.GetAttribute("Doggybone.GuideMode") or ("reduction" if match.group(2) else "saw")
+            side = node.GetAttribute("Doggybone.GuideSide")       # None: built before sides were stored
+            found.append((node, side, bone, mode))
+        found.sort(key=lambda item: (item[2] != "Femur", item[3] != "saw"))
+        return found
+
+    @staticmethod
+    def _mesh_check(polydata):
+        """(number of separate pieces, number of open edges) of a guide mesh."""
+        connectivity = vtk.vtkPolyDataConnectivityFilter()
+        connectivity.SetInputData(polydata)
+        connectivity.SetExtractionModeToAllRegions()
+        connectivity.Update()
+        edges = vtk.vtkFeatureEdges()
+        edges.SetInputData(polydata)
+        edges.BoundaryEdgesOn()
+        edges.NonManifoldEdgesOn()
+        edges.FeatureEdgesOff()
+        edges.ManifoldEdgesOff()
+        edges.Update()
+        return connectivity.GetNumberOfExtractedRegions(), edges.GetOutput().GetNumberOfCells()
+
+    @staticmethod
+    def _write_centred_stl(polydata, path):
+        """Binary STL in mm, moved so the centre of the bounding box lies at 0,0,0 (the scene is
+        unchanged). Returns (success, bounds)."""
+        b = polydata.GetBounds()
+        centre = [0.5 * (b[0] + b[1]), 0.5 * (b[2] + b[3]), 0.5 * (b[4] + b[5])]
+        shift = vtk.vtkTransform()
+        shift.Translate(-centre[0], -centre[1], -centre[2])
+        moved = vtk.vtkTransformPolyDataFilter()
+        moved.SetInputData(polydata)
+        moved.SetTransform(shift)
+        triangles = vtk.vtkTriangleFilter()
+        triangles.SetInputConnection(moved.GetOutputPort())
+        writer = vtk.vtkSTLWriter()
+        writer.SetInputConnection(triangles.GetOutputPort())
+        writer.SetFileName(path)
+        writer.SetFileTypeToBinary()
+        ok = bool(writer.Write()) and os.path.isfile(path) and os.path.getsize(path) > 84
+        return ok, b
+
+    def onExportAllGuides(self):
+        """ONE click: every finished guide (femur / tibia, osteotomy and reduction guide) is saved as
+        its own binary STL into one folder. Each guide is the last one built for that bone and type.
+        File names come from the guide itself: patient name - number - fem/tib - dx/sx - cut/red.stl."""
+        guides = self._all_guide_bodies()
+        if not guides:
+            self.guide_status.setText("No guide yet - press 'Extrude guide body' first.")
+            return
+        start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
+        folder = qt.QFileDialog.getExistingDirectory(slicer.util.mainWindow(), "Export guides to folder", start_dir)
+        if not folder:
+            return
+        jobs = []
+        for node, side, bone, mode in guides:
+            side_text = side or self.osteotomy_side.currentText
+            file_name = self._export_file_name("fem" if bone == "Femur" else "tib",
+                                               "dx" if side_text == "Right" else "sx",
+                                               "red" if mode == "reduction" else "cut")
+            jobs.append((node, side, side_text, bone, mode, os.path.join(folder, file_name)))
+        existing = [os.path.basename(job[-1]) for job in jobs if os.path.exists(job[-1])]
+        if existing and not slicer.util.confirmOkCancelDisplay(
+                "These files already exist and will be replaced:\n" + "\n".join(existing),
+                windowTitle="Export guides"):
+            return
+        lines, problems = [], 0
+        for node, side, side_text, bone, mode, path in jobs:
+            kind = "reduction guide" if mode == "reduction" else "osteotomy guide"
+            label = f"{side_text} {bone.lower()} {kind}"
+            pieces, open_edges = self._mesh_check(node.GetPolyData())
+            ok, b = self._write_centred_stl(node.GetPolyData(), path)
+            notes = []
+            if not ok:
+                notes.append("NOT WRITTEN - check the folder / disk")
+            if pieces != 1:
+                notes.append(f"{pieces} separate pieces")
+            if open_edges:
+                notes.append(f"{open_edges} open edges - press 'Clean up' and export again")
+            if side is None:
+                notes.append("side taken from the current selection (guide built before sides were stored)")
+            problems += 1 if (not ok or pieces != 1 or open_edges) else 0
+            lines.append(f"{'OK' if ok and not notes else 'CHECK'}  {label}: {os.path.basename(path)} "
+                         f"({b[1] - b[0]:.0f} x {b[3] - b[2]:.0f} x {b[5] - b[4]:.0f} mm)"
+                         + (" - " + "; ".join(notes) if notes else ""))
+        self._last_stl_dir = folder
+        self.guide_status.setStyleSheet(STATUS_WARN_STYLE if problems else STATUS_OK_STYLE)
+        self.guide_status.setText(f"{len(jobs)} guide(s) exported to {folder} (each centred at 0,0,0):\n"
+                                  + "\n".join(lines))
+
     def onExportGuideStl(self):
         """Binary STL of the guide in millimetres, centred at 0,0,0 (for printing only the shape matters). Body and saw blocks are closed shells in ONE file - print preparation
         software (PreForm, Chitubox, PrusaSlicer, ...) unites overlapping shells."""

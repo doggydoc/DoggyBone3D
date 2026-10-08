@@ -653,6 +653,11 @@ class GuideEditMixin:
             node.GetDisplayNode().SetColor(0.35, 0.7, 0.95)
             node.GetDisplayNode().SetOpacity(0.85)
         node.SetAndObservePolyData(polydata)
+        # remember what this guide is for - the export names the file from these, not from the
+        # side / bone selected at export time
+        node.SetAttribute("Doggybone.GuideSide", self.osteotomy_side.currentText)
+        node.SetAttribute("Doggybone.GuideBone", self.osteotomy_bone.currentText)
+        node.SetAttribute("Doggybone.GuideMode", getattr(self, "_guide_mode", "saw"))
 
 
     def onCleanGuide(self):
