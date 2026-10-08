@@ -204,6 +204,87 @@ class GuideBuildMixin:
         found.sort(key=lambda item: (item[2] != "Femur", item[3] != "saw"))
         return found
 
+    # What a guide is built from; the export warns when one of these changed after the guide was built.
+    PLAN_PART_NAMES = {"planes": "cutting planes", "correction": "correction / fine shift",
+                       "reduction pins": "reduction pins", "saw pins": "saw guide pins",
+                       "saw blocks": "saw block size / position", "footprint": "painted footprint",
+                       "bone surface": "bone segmentation"}
+
+    @staticmethod
+    def _polydata_fingerprint(polydata):
+        if polydata is None or polydata.GetNumberOfPoints() == 0:
+            return "none"
+        from vtk.util.numpy_support import vtk_to_numpy
+        points = vtk_to_numpy(polydata.GetPoints().GetData()).astype(float)
+        return "%d;%d;%s;%s" % (polydata.GetNumberOfPoints(), polydata.GetNumberOfCells(),
+                                ",".join(f"{v:.2f}" for v in polydata.GetBounds()),
+                                ",".join(f"{v:.2f}" for v in points.mean(axis=0)))
+
+    def _guide_plan_signature(self, side, bone, mode):
+        """{part: fingerprint} of the inputs of the guide for this side ('Right'/'Left'), bone and
+        mode ('saw'/'reduction'), read from the scene by node name (independent of the current
+        selection). Only geometry - never widget values, so a parameter change for another guide
+        does not mark this one as outdated."""
+        import hashlib
+        side = side.lower()
+        tag = " tibia" if bone == "Tibia" else ""
+        suffix = " (reduction)" if mode == "reduction" else ""
+        get = slicer.mrmlScene.GetFirstNodeByName
+
+        def digest(text):
+            return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
+
+        def plane_text(node):
+            if node is None:
+                return "none"
+            origin, normal = self._get_plane_origin_normal(node)
+            return ",".join(f"{v:.2f}" for v in list(origin) + list(normal))
+
+        def markups_text(node):
+            if node is None:
+                return "none"
+            points = [node.GetNthControlPointPositionWorld(i) for i in range(node.GetNumberOfControlPoints())]
+            attributes = [f"{name}={node.GetAttribute(name)}" for name in sorted(node.GetAttributeNames() or [])
+                          if name.startswith("Doggybone.")]
+            return ";".join(",".join(f"{v:.2f}" for v in p) for p in points) + "|" + ";".join(attributes)
+
+        def model_text(node):
+            return "none" if node is None else self._polydata_fingerprint(node.GetPolyData())
+
+        parts = {}
+        parts["planes"] = digest(plane_text(get(self._plane_node_name(side, bone))) + "|" +
+                                 plane_text(get(self._distal_plane_node_name(side, bone))))
+        transform = get(self._preview_node_names(side, bone)[2])
+        if transform is None:
+            parts["correction"] = "none"
+        else:
+            matrix = vtk.vtkMatrix4x4()
+            transform.GetMatrixTransformToWorld(matrix)
+            parts["correction"] = digest(";".join(f"{matrix.GetElement(r, c):.3f}" for r in range(3) for c in range(4)))
+        parts["reduction pins"] = digest(markups_text(get("Doggybone guide pins" + tag + " (reduction)")))
+        if mode == "saw":
+            parts["saw pins"] = digest(markups_text(get("Doggybone guide pins" + tag)))
+            parts["saw blocks"] = digest("|".join(markups_text(get(f"Doggybone saw box{tag} {label}"))
+                                                  for label in ("proximal", "distal")))
+        else:
+            del parts["planes"]          # the reduction guide follows the correction and its pins
+        parts["footprint"] = digest(model_text(get("Doggybone guide footprint" + tag + suffix)))
+        parts["bone surface"] = digest(model_text(get("Doggybone guide bone surface" + tag + suffix)))
+        return parts
+
+    def _guide_changed_parts(self, node, side, bone, mode):
+        """Names of the inputs that changed since this guide body was built ([] = up to date),
+        or None if the guide has no stored fingerprint (built with an older version)."""
+        stored = node.GetAttribute("Doggybone.PlanSignature")
+        if not stored or side is None:
+            return None
+        try:
+            stored = json.loads(stored)
+        except ValueError:
+            return None
+        current = self._guide_plan_signature(side, bone, mode)
+        return [self.PLAN_PART_NAMES.get(part, part) for part in current if stored.get(part) != current[part]]
+
     @staticmethod
     def _mesh_check(polydata):
         """(number of separate pieces, number of open edges) of a guide mesh."""
@@ -279,7 +360,13 @@ class GuideBuildMixin:
                 notes.append(f"{open_edges} open edges - press 'Clean up' and export again")
             if side is None:
                 notes.append("side taken from the current selection (guide built before sides were stored)")
-            problems += 1 if (not ok or pieces != 1 or open_edges) else 0
+            changed = self._guide_changed_parts(node, side, bone, mode)
+            if changed:
+                notes.append("OUTDATED - changed since this guide was built: " + ", ".join(changed)
+                             + " - extrude this guide again")
+            elif changed is None:
+                notes.append("not checked for later plan changes (built with an older version)")
+            problems += 1 if (not ok or pieces != 1 or open_edges or changed) else 0
             lines.append(f"{'OK' if ok and not notes else 'CHECK'}  {label}: {os.path.basename(path)} "
                          f"({b[1] - b[0]:.0f} x {b[3] - b[2]:.0f} x {b[5] - b[4]:.0f} mm)"
                          + (" - " + "; ".join(notes) if notes else ""))
@@ -287,6 +374,10 @@ class GuideBuildMixin:
         self.guide_status.setStyleSheet(STATUS_WARN_STYLE if problems else STATUS_OK_STYLE)
         self.guide_status.setText(f"{len(jobs)} guide(s) exported to {folder} (each centred at 0,0,0):\n"
                                   + "\n".join(lines))
+        if problems:
+            slicer.util.warningDisplay(
+                "Check the exported guides before printing:\n\n" + "\n".join(l for l in lines if l.startswith("CHECK")),
+                windowTitle="Export guides")
 
     def onExportGuideStl(self):
         """Binary STL of the guide in millimetres, centred at 0,0,0 (for printing only the shape matters). Body and saw blocks are closed shells in ONE file - print preparation

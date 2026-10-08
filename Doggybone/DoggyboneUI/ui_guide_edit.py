@@ -658,6 +658,12 @@ class GuideEditMixin:
         node.SetAttribute("Doggybone.GuideSide", self.osteotomy_side.currentText)
         node.SetAttribute("Doggybone.GuideBone", self.osteotomy_bone.currentText)
         node.SetAttribute("Doggybone.GuideMode", getattr(self, "_guide_mode", "saw"))
+        # fingerprint of everything the guide was built from - the export compares it with the scene
+        try:
+            node.SetAttribute("Doggybone.PlanSignature", json.dumps(self._guide_plan_signature(
+                self.osteotomy_side.currentText, self.osteotomy_bone.currentText, getattr(self, "_guide_mode", "saw"))))
+        except Exception:
+            logging.exception("Doggybone: guide plan signature failed (the export cannot check this guide)")
 
 
     def onCleanGuide(self):
