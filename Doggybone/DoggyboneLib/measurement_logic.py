@@ -410,20 +410,12 @@ class AntetorsionMeasurement(BaseMeasurement):
             "medial femur condyle": (medial_condyle, medial_radius),
             "lateral femur condyle": (lateral_condyle, lateral_radius),
         }
-        # Femoral (anatomical) shaft axis through the 30 % / 50 % midpoints - the reference axis of
-        # this measurement - drawn over the whole femur: from the level of the femoral head to the
-        # level of the condyles (both projected onto the axis line).
-        shaft_a = np.asarray(point_dict["Femur midpoint 30%"], dtype=float)
-        shaft_b = np.asarray(point_dict["Femur midpoint 50%"], dtype=float)
-        shaft_dir = shaft_b - shaft_a
-        shaft_dir = shaft_dir / np.linalg.norm(shaft_dir)
-        condyle_mid = 0.5 * (np.asarray(medial_condyle, dtype=float) + np.asarray(lateral_condyle, dtype=float))
-        shaft_start = shaft_a + np.dot(np.asarray(center, dtype=float) - shaft_a, shaft_dir) * shaft_dir
-        shaft_end = shaft_a + np.dot(condyle_mid - shaft_a, shaft_dir) * shaft_dir
+        # Femoral (anatomical) shaft axis: drawn only between the two placed midpoints (50 % / 30 %),
+        # like in the aLDFA measurement - no extension beyond the landmarks.
         self.axes = {
             "Femoral condylar axis": (medial_condyle, lateral_condyle),
             "Femoral neck axis": (center, point_dict["femur neck"]),
-            "Femoral shaft axis": (shaft_start, shaft_end),
+            "Femoral shaft axis": (point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 30%"]),
         }
         # aLDFA from the same landmarks (shaft 30 % / 50 %, condyles) - shown together with the
         # antetorsion; the stand-alone aLDFA measurement is unchanged
