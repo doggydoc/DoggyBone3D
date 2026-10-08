@@ -167,8 +167,7 @@ class VarusValgusTibiaMeasurement(BaseMeasurement):
     the anatomical axis, aMPTA + aMDTA - 180 deg (0 = parallel joint lines; normal ~ MPTA_REF + MDTA_REF - 180).
     Smaller than normal = varus, larger = valgus. The anatomical angles (shaft axis through the two
     diaphyseal midpoints) are shown as well."""
-    AXIS_LABELS = ["Tibial mechanical axis", "Tibial shaft axis", "Proximal tibial axis", "Proximal joint line",
-                   "Distal joint line"]
+    AXIS_LABELS = ["Tibial mechanical axis", "Tibial shaft axis", "Proximal joint line", "Distal joint line"]
     LANDMARK_ORDER = ["intercondylar eminence", "Talus centre", "proximal tibia midpoint", "distal tibia midpoint",
                       "lateral condyle articulation point tibia", "medial condyle articulation point tibia",
                       "lateral cochlea articulation point tibia", "medial cochlea articulation point tibia"]
@@ -182,7 +181,6 @@ class VarusValgusTibiaMeasurement(BaseMeasurement):
         if self._angles is None:
             return None
         m_mpta, m_mdta, a_mpta, a_mdta = self._angles
-        p_mpta, p_axis = getattr(self, "_proximal_axis_angles", (None, None))
         deg = "\N{DEGREE SIGN}"
         reference = TIBIA_MPTA_REF_DEG + TIBIA_MDTA_REF_DEG - 180.0
         return [
@@ -191,8 +189,7 @@ class VarusValgusTibiaMeasurement(BaseMeasurement):
             f"mMDTA: {m_mdta:.2f}{deg} ({self._label(m_mdta, TIBIA_MDTA_REF_DEG)} distal; ref. {TIBIA_MDTA_REF_DEG:.1f}{deg})",
             f"aMPTA / aMDTA (shaft axis): {a_mpta:.2f}{deg} ({self._label(a_mpta, TIBIA_MPTA_REF_DEG)}) / "
             f"{a_mdta:.2f}{deg} ({self._label(a_mdta, TIBIA_MDTA_REF_DEG)})",
-        ] + ([f"Proximal tibial axis (eminence - proximal midpoint): MPTA {p_mpta:.2f}{deg}, "
-              f"{p_axis:.2f}{deg} to the shaft axis"] if p_mpta is not None else [])
+        ]
 
     @staticmethod
     def _label(value, reference, tolerance=0.5):
@@ -214,7 +211,6 @@ class VarusValgusTibiaMeasurement(BaseMeasurement):
         self.axes = {
             "Tibial mechanical axis": (eminence, talus),
             "Tibial shaft axis": (shaft_distal, shaft_proximal),
-            "Proximal tibial axis": (eminence, shaft_proximal),
             "Proximal joint line": (prox_lat, prox_med),
             "Distal joint line": (dist_lat, dist_med),
         }
@@ -229,11 +225,6 @@ class VarusValgusTibiaMeasurement(BaseMeasurement):
         a_mpta = angle(proximal_line, shaft_down) * deg
         a_mdta = angle(distal_line, -shaft_down) * deg
         self._angles = (m_mpta, m_mdta, a_mpta, a_mdta)
-        # proximal tibial axis: intercondylar eminence -> proximal diaphyseal midpoint (proximal
-        # segment; with the shaft axis it shows a proximal angulation / CORA)
-        proximal_down = shaft_proximal - eminence
-        self._proximal_axis_angles = (angle(proximal_line, proximal_down) * deg,
-                                      angle(proximal_down, shaft_down) * deg)
         # planner value: frontal angle between the joint lines on the ANATOMICAL axis
         joint_lines = a_mpta + a_mdta - 180.0
         reference = TIBIA_MPTA_REF_DEG + TIBIA_MDTA_REF_DEG - 180.0
