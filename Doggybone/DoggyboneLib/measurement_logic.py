@@ -10,6 +10,7 @@ import numpy as np
 from DoggyboneLib.helpers import *
 
 ALDFA_REFERENCE_DEG = 94.0   # canine reference aLDFA used for the varus/valgus label
+ALDFA_NORMAL_TOLERANCE_DEG = 0.5   # within reference +/- this the aLDFA is labelled "normal" (as the tibia labels)
 # canine tibial mechanical joint angles (frontal plane), Dismukes et al. 2007: mMPTA 93.3 +/- 1.8 deg;
 # mMDTA value to be checked against the paper
 TIBIA_MPTA_REF_DEG = 93.3
@@ -378,9 +379,11 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
         # magnitude comparison, not a handedness/chirality question, so it needs no side-dependent
         # sign logic (unlike the rotation measurements elsewhere in this module).
         aldfa = angle(vector_axis_femur_vv, vector_dist_femur_vv)*180/math.pi
-        # Canine reference aLDFA ~94 deg: above = distal femoral varus, below = valgus.
-        is_varus = aldfa > ALDFA_REFERENCE_DEG
-        return aldfa, "aLDFA - Varus" if is_varus else "aLDFA - Valgus"
+        # Canine reference aLDFA ~94 deg: above = distal femoral varus, below = valgus, at the
+        # reference (+/- ALDFA_NORMAL_TOLERANCE_DEG) = normal.
+        if abs(aldfa - ALDFA_REFERENCE_DEG) <= ALDFA_NORMAL_TOLERANCE_DEG:
+            return aldfa, "aLDFA - normal"
+        return aldfa, "aLDFA - Varus" if aldfa > ALDFA_REFERENCE_DEG else "aLDFA - Valgus"
 
 class AntetorsionMeasurement(BaseMeasurement):
     SPHERE_LABELS = ["femur head", "medial femur condyle", "lateral femur condyle"]
