@@ -38,6 +38,14 @@ class PlanesMixin:
     # Purely an internal starting point for the proximal plane when it's first inserted - not a
     # user-facing setting. Both planes are meant to be positioned entirely by hand from there.
     DEFAULT_PLANE_LEVEL_FRACTION = 0.4
+    # Femur: the usual (distal) osteotomy lies distal to the 'Femur midpoint 50%' landmark, so the
+    # MASTER plane starts there - halfway from that landmark to the condyle centres (on the shaft
+    # line) - instead of between the two shaft-axis landmarks.
+    FEMUR_PLANE_LEVEL_TO_CONDYLES = 0.5
+
+    # The two landmarks that define the anatomical shaft axis of each bone (proximal, distal).
+    SHAFT_AXIS_LANDMARKS = {"Femur": ("Femur midpoint 30%", "Femur midpoint 50%"),
+                            "Tibia": ("proximal tibia midpoint", "distal tibia midpoint")}
 
     def _get_plane_frame(self, plane_node, side=None, bone=None):
         """Return the plane's ACTUAL world-space (origin, x, y, normal) frame.
@@ -113,10 +121,7 @@ class PlanesMixin:
         panel = self.left_panel if side == "left" else self.right_panel
         landmarks_by_name = {l.name: l for l in panel.landmarks}
 
-        if bone == "Femur":
-            proximal_name, distal_name = "Femur midpoint 30%", "Femur midpoint 50%"
-        else:
-            proximal_name, distal_name = "proximal tibia midpoint", "distal tibia midpoint"
+        proximal_name, distal_name = self.SHAFT_AXIS_LANDMARKS["Femur" if bone == "Femur" else "Tibia"]
 
         proximal_landmark = landmarks_by_name.get(proximal_name)
         distal_landmark = landmarks_by_name.get(distal_name)
@@ -130,7 +135,18 @@ class PlanesMixin:
         shaft_length = np.linalg.norm(shaft_vector)
         if shaft_length < 1e-6:
             return None, None, "Reference points are coincident - cannot define an axis"
-        return origin, shaft_vector / shaft_length, None
+        shaft_unit = shaft_vector / shaft_length
+        if bone == "Femur":
+            # start distal to the 50 % landmark (on the same shaft line, so the torsion axis is unchanged)
+            medial_name, lateral_name = self.ML_LANDMARKS["Femur"]
+            medial = landmarks_by_name.get(medial_name)
+            lateral = landmarks_by_name.get(lateral_name)
+            if medial is not None and lateral is not None and medial.placed and lateral.placed:
+                condyle_mid = 0.5 * (np.array(medial.get_position()) + np.array(lateral.get_position()))
+                depth = float(np.dot(condyle_mid - distal_pos, shaft_unit))
+                if depth > 1.0:
+                    origin = distal_pos + self.FEMUR_PLANE_LEVEL_TO_CONDYLES * depth * shaft_unit
+        return origin, shaft_unit, None
 
     def _get_anatomical_frame(self, side, bone):
         '''

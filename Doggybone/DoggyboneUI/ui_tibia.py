@@ -333,6 +333,10 @@ class TibiaTargetsMixin:
         if misses:
             warning = ("Not all checked targets can be reached with one osteotomy (remaining deviation: "
                        + ", ".join(misses) + ") - the plan is the best compromise; uncheck the less important target.")
+        split_warning = self._split_axis_warning(side, bone, as_h(R), plane_origin, plane_normal,
+                                                 moving_is_distal, predicted)
+        if split_warning:
+            warning = (warning + "\n" + split_warning) if warning else split_warning
         self._tibia_last_solution = x.copy()
         self._show_tibia_planned(predicted)
         if hasattr(self, "calculated_sagittal"):
