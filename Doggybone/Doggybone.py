@@ -666,6 +666,9 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_form = qt.QFormLayout()
         guide_form.setHorizontalSpacing(6)
         guide_layout.addLayout(guide_form)
+        # bone opacity at the TOP of the guide panel: lower it to inspect the guide on the bone at once
+        self.guide_opacity_slider = self._new_bone_opacity_slider()
+        guide_form.addRow("Bone opacity", self.guide_opacity_slider)
         self.guide_mode_saw = qt.QRadioButton("2. Saw guide")
         self.guide_mode_reduction = qt.QRadioButton("1. Reduction guide")
         self.guide_mode_saw.setToolTip("Cutting guide on the bone as it is (saw slots, pin sleeves).")
@@ -1079,8 +1082,6 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "end of the guide, joined by a thin neck - break it off with pliers when it is no longer needed. "
             "'On the guide': raised text on a free flat area of the guide. Built with 'Extrude'.")
         guide_form.addRow("Label", self.guide_label_mode)
-        self.guide_opacity_slider = self._new_bone_opacity_slider()
-        guide_form.addRow("Bone opacity", self.guide_opacity_slider)
 
 
         self.guide_status = qt.QLabel("No footprint yet.")
