@@ -464,12 +464,14 @@ def smooth_selection_rim(mesh, selected, amount_mm, edge_length=0.4):
 BLADE_THICKNESS = 1.0
 SLOT_CLEARANCE = 0.2
 SLOT_WIDTH = BLADE_THICKNESS + SLOT_CLEARANCE
-SLOT_WALL = 2.5          # plate thickness on each side of the slot
+SLOT_WALL = 2.5          # plate thickness on each side of the slot (grows with the corner bridges, see configure_slots)
 SLOT_MARGIN = 1.0        # slot longer than the bone on each side (fixed; then the end caps)
 BLOCK_HEIGHT = 10.0      # top of the saw block above the highest bone point under it
 BLOCK_MAX_DEPTH = 22.0   # block never reaches further down than this below its top
 BRIDGE_WIDTH = 3.0       # closed slot ends / corner bridges along the slot (UI: Corner bridges)
 BLOCK_WALL = 3.5         # block guide (open face instead of a slot): wall thickness behind the cutting face
+DEFAULT_BRIDGE_WIDTH = BRIDGE_WIDTH             # at this corner bridge size the walls have their base thickness
+BASE_SLOT_WALL, BASE_BLOCK_WALL = SLOT_WALL, BLOCK_WALL
 BREAK_BRIDGE_LENGTH = 2.5   # saw block pair: corner bridge at each END of each kerf, along the kerf (mm)
 BREAK_BRIDGE_HEIGHT = 2.5   # ... and its height below the top of the block (mm) - snaps off with pliers
                             # both = BRIDGE_WIDTH - 0.5 (the kerf is kept free 0.5 mm beyond the slot end)
@@ -479,11 +481,18 @@ BRIDGE_FRACTION = 0.30       # bridges close the top 30 % of the local block hei
 
 def configure_slots(blade_thickness=None, block_height=None, bridge_size=None):
     """Set blade thickness (slot = blade + clearance), saw block height and the size of the corner
-    bridges (end caps of the slots, mm along the slot; the block grows sideways by the same amount)."""
+    bridges (end caps of the slots, mm along the slot; the block grows sideways by the same amount).
+    The corner bridge size also sets the width of the whole frame: every mm above the default adds
+    1 mm to the wall on each side of the slot (block guide: behind the cutting face); below the
+    default the walls keep their base thickness."""
     global BLADE_THICKNESS, SLOT_WIDTH, BLOCK_HEIGHT, BRIDGE_WIDTH, BREAK_BRIDGE_LENGTH, BREAK_BRIDGE_HEIGHT
+    global SLOT_WALL, BLOCK_WALL
     if bridge_size is not None:
         BRIDGE_WIDTH = max(1.5, float(bridge_size))
         BREAK_BRIDGE_LENGTH = BREAK_BRIDGE_HEIGHT = BRIDGE_WIDTH - 0.5
+        extra = max(0.0, BRIDGE_WIDTH - DEFAULT_BRIDGE_WIDTH)
+        SLOT_WALL = BASE_SLOT_WALL + extra
+        BLOCK_WALL = BASE_BLOCK_WALL + extra
     if blade_thickness is not None:
         BLADE_THICKNESS = float(blade_thickness)
         SLOT_WIDTH = BLADE_THICKNESS + SLOT_CLEARANCE

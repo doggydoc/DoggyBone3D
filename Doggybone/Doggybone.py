@@ -989,9 +989,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_fields.append(("Slot length", self.guide_slot_extent))
         self.guide_bridge_size = spin(2.0, 6.0, 3.0, 0.5, " mm",
                                       "Corner bridges: size of the closed ends of the saw slots (mm along the "
-                                      "slot). Larger = stiffer corners of the saw block; the block grows "
-                                      "sideways by the same amount. The slot itself always reaches 1 mm "
-                                      "beyond the bone.",
+                                      "slot). Larger = stiffer saw block: the block grows sideways by the same "
+                                      "amount, and every mm above 3 mm also makes the walls on both sides of "
+                                      "the slot 1 mm thicker (wider frame). The slot itself always reaches "
+                                      "1 mm beyond the bone.",
                                       decimals=1)
         self.guide_bridge_size.valueChanged.connect(lambda _v: self._on_bridge_size_changed())
         guide_fields.append(("Corner bridges", self.guide_bridge_size))
