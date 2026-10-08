@@ -59,5 +59,7 @@ slicerMacroBuildScriptedModule(
 
 #-----------------------------------------------------------------------------
 if(BUILD_TESTING)
+  # Register the DoggyboneTest class in the main script as a ctest (also run by "Reload and Test").
+  slicer_add_python_unittest(SCRIPT ${MODULE_NAME}.py)
   add_subdirectory(Testing)
 endif()

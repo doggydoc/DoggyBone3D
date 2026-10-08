@@ -1049,10 +1049,9 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "removed, broken edges closed, and the whole contact surface re-made as an even offset of the "
             "bone (fit gap). Run it after 'Extrude', before exporting.")
         self.guide_clean_button.clicked.connect(self.onCleanGuide)
-        # workflow order: Extrude | Clean up, below Export guide STL | Export bone STL
+        # workflow order: Extrude | Clean up, below Export guides | Export bone STL
         self.guide_extrude_button.setText("Extrude")
         self.guide_extrude_button.setToolTip("Build the guide body (guide body, saw blocks / pin bosses, label).")
-        self.guide_export_button.setText("Export guide STL...")
         self.guide_export_bone_button = qt.QPushButton("Export bone STL...")
         self.guide_export_bone_button.setToolTip(
             "Save the segmented bone as a binary STL in mm (CT coordinates) - e.g. to print a bone model "
@@ -2590,3 +2589,173 @@ class ResizableImage(qt.QLabel):
 
     def _on_popup_closed(self):
         self._popup = None
+
+#
+# DoggyboneTest
+#
+
+class DoggyboneTest(ScriptedLoadableModuleTest):
+    """Self-test of the module: Slicer's "Reload and Test" button and CTest (slicer_add_python_unittest).
+    Works on an empty scene with synthetic landmarks and meshes - no patient data needed."""
+
+    def setUp(self):
+        slicer.mrmlScene.Clear()
+
+    def runTest(self):
+        self.setUp()
+        self.test_widget()
+        self.setUp()
+        self.test_measurement_labels()
+        self.setUp()
+        self.test_geometry_regression()
+        self.setUp()
+        self.test_split_axis_prediction()
+        self.setUp()
+        self.test_guide_export()
+        self.delayDisplay("Doggybone 3D: all tests passed")
+
+    # --- helpers -----------------------------------------------------------------------------------
+    def _widget(self):
+        slicer.util.selectModule("Doggybone")
+        slicer.app.processEvents()
+        return slicer.modules.doggybone.widgetRepresentation().self()
+
+    def _place_femur_landmarks(self, widget, side="right", lateral_z=8.0):
+        """Synthetic straight femur along -z (proximal at the top): head, neck, 30 % / 50 % midpoints,
+        condyles. lateral_z < 12 tilts the condylar axis (varus)."""
+        panel = widget.right_panel if side == "right" else widget.left_panel
+        node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+        landmarks = {l.name: l for l in panel.landmarks}
+        points = {"femur head": ((0, 0, 200), 10.0), "femur neck": ((4, 0, 188), None),
+                  "Femur midpoint 30%": ((0, 0, 140), None), "Femur midpoint 50%": ((0, 0, 80), None),
+                  "medial femur condyle": ((-12, 0, 12), 9.0), "lateral femur condyle": ((12, 0, lateral_z), 9.0)}
+        for name, (position, radius) in points.items():
+            landmark = landmarks[name]
+            index = node.AddControlPoint(*position)
+            node.SetNthControlPointLabel(index, name)
+            landmark._id = index
+            landmark.placed = True
+            if radius is not None:
+                landmark.radius = radius
+        return panel
+
+    @staticmethod
+    def _remove_landmarks(panel):
+        node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+        if node is not None:
+            node.RemoveAllControlPoints()
+        for landmark in panel.landmarks:
+            landmark.placed = False
+            landmark._id = None
+
+    # --- tests -------------------------------------------------------------------------------------
+    def test_widget(self):
+        self.delayDisplay("Module widget")
+        widget = self._widget()
+        self.assertEqual(slicer.modules.doggybone.title, "DoggyBone3D")
+        for name in ("opacity_slider", "guide_extrude_button", "guide_export_button", "left_panel", "right_panel"):
+            self.assertIsNotNone(getattr(widget, name, None), name)
+        self.assertTrue(widget.guide_export_button.text.startswith("Export guides"))
+
+    def test_measurement_labels(self):
+        self.delayDisplay("Measurement labels")
+        import math
+        from DoggyboneLib import measurement_logic as ml
+        femur = ml.VarusValgusFemurMeasurement()
+        femur.side = "right"
+
+        def aldfa(target):
+            dz = 24.0 * math.tan(math.radians(target - 90.0))
+            points = {"medial femur condyle": np.array([-12.0, 0, 10]), "lateral femur condyle": np.array([12.0, 0, 10 - dz]),
+                      "Femur midpoint 30%": np.array([0.0, 0, 140]), "Femur midpoint 50%": np.array([0.0, 0, 80])}
+            radii = {name: 9.0 for name in points}
+            return femur._measure(points, radii)
+
+        value, label = aldfa(94.0)
+        self.assertAlmostEqual(value, 94.0, places=1)
+        self.assertEqual(label, "aLDFA - normal")
+        self.assertEqual(aldfa(96.0)[1], "aLDFA - Varus")
+        self.assertEqual(aldfa(91.0)[1], "aLDFA - Valgus")
+        # the tibial varus/valgus measurement has no eminence -> proximal-midpoint axis any more
+        self.assertNotIn("Proximal tibial axis", ml.VarusValgusTibiaMeasurement.AXIS_LABELS)
+
+    def test_geometry_regression(self):
+        self.delayDisplay("Geometry regression tests")
+        path = os.path.join(MODULE_PATH, "Testing", "Python", "test_doggybone_geometry.py")
+        if not os.path.exists(path):
+            self.delayDisplay("Geometry tests not installed with this build - skipped")
+            return
+        import importlib.util, unittest
+        spec = importlib.util.spec_from_file_location("doggybone_geometry_tests", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.loadTestsFromModule(module))
+        self.assertTrue(result.wasSuccessful(), f"{len(result.failures)} failures, {len(result.errors)} errors")
+
+    def test_split_axis_prediction(self):
+        """A cut between the two shaft-axis landmarks predicts the same joint angle as a cut distal to
+        them (axis of the fixed fragment), and the suggested correction hits the targets."""
+        self.delayDisplay("Correction prediction with a split shaft axis")
+        widget = self._widget()
+        panel = self._place_femur_landmarks(widget)
+        try:
+            widget.osteotomy_bone.setCurrentText("Femur")
+            normal = np.array([0.0, 0.0, -1.0])                     # proximal -> distal
+            angle = np.radians(6.0)
+            rotation = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
+            predicted = {}
+            for level in (110.0, 40.0):                            # between the midpoints / distal to them
+                origin = np.array([0.0, 0.0, level])
+                H = np.eye(4)
+                H[:3, :3] = rotation
+                H[:3, 3] = origin - rotation @ origin
+                result = widget._predict_measurements("right", "Femur", H, origin, normal, True)
+                self.assertEqual(result["axis_split"], level == 110.0)
+                predicted[level] = result["wedge"]
+            self.assertAlmostEqual(predicted[110.0], predicted[40.0], places=2)
+            for level in (110.0, 40.0):
+                R, info = widget._desired_correction_rotation("right", "Femur", True, np.array([0.0, 0.0, level]), normal)
+                self.assertIsNotNone(R, info)
+                self.assertAlmostEqual(info["predicted"]["wedge"], widget.target_wedge_value.value, places=1)
+                self.assertAlmostEqual(info["predicted"]["torsion"], widget.target_rotation_value.value, places=1)
+        finally:
+            self._remove_landmarks(panel)
+
+    def test_guide_export(self):
+        """All guide bodies are found with their own side / bone / mode, written as closed, centred STLs,
+        and a later plan change marks the guide as outdated."""
+        self.delayDisplay("Guide export")
+        import tempfile, shutil
+        widget = self._widget()
+        widget.osteotomy_side.setCurrentText("Left")
+        widget.osteotomy_bone.setCurrentText("Femur")
+        widget._guide_mode = "saw"
+        plane = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsPlaneNode", widget._plane_node_name("left", "Femur"))
+        plane.SetOrigin(0, 0, 50)
+        plane.SetNormal(0, 0, 1)
+        sphere = vtk.vtkSphereSource()
+        sphere.SetCenter(30, 40, 50)
+        sphere.SetRadius(10)
+        sphere.Update()
+        widget._set_guide_body(sphere.GetOutput())
+        guides = widget._all_guide_bodies()
+        self.assertEqual(len(guides), 1)
+        body, side, bone, mode = guides[0]
+        self.assertEqual((side, bone, mode), ("Left", "Femur", "saw"))
+        self.assertEqual(widget._guide_changed_parts(body, side, bone, mode), [])
+        self.assertEqual(widget._mesh_check(body.GetPolyData()), (1, 0))
+        folder = tempfile.mkdtemp()
+        try:
+            path = os.path.join(folder, "guide.stl")
+            ok, _bounds = widget._write_centred_stl(body.GetPolyData(), path)
+            self.assertTrue(ok)
+            reader = vtk.vtkSTLReader()
+            reader.SetFileName(path)
+            reader.Update()
+            bounds = reader.GetOutput().GetBounds()
+            for low, high in zip(bounds[0::2], bounds[1::2]):
+                self.assertAlmostEqual(low + high, 0.0, places=3)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        plane.SetOrigin(0, 0, 53)
+        self.assertEqual(widget._guide_changed_parts(body, side, bone, mode), ["cutting planes"])
