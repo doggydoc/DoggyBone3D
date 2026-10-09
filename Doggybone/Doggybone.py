@@ -58,6 +58,8 @@ from DoggyboneLib import osteotomy_logic
 from DoggyboneLib import guide_logic
 importlib.reload(osteotomy_logic)
 importlib.reload(guide_logic)
+from DoggyboneLib import laterality
+importlib.reload(laterality)
 from DoggyboneLib import measurements
 importlib.reload(measurements)
 from DoggyboneLib import landmarks
@@ -391,6 +393,21 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         side_row_widget.setLayout(side_row)
 
         measurements_layout.addWidget(side_row_widget)
+
+        # side check: the landmarks themselves tell which limb they belong to (handedness of the
+        # anatomical frame, see DoggyboneLib/laterality.py) - shown live, with a one-click fix when
+        # they sit in the wrong list
+        laterality_row = qt.QHBoxLayout()
+        self.laterality_label = qt.QLabel("")
+        self.laterality_label.setWordWrap(True)
+        laterality_row.addWidget(self.laterality_label, 1)
+        self.laterality_move_button = qt.QPushButton("Move")
+        self.laterality_move_button.setVisible(False)
+        self.laterality_move_button.clicked.connect(lambda _checked=False: self.onLateralityMove())
+        laterality_row.addWidget(self.laterality_move_button)
+        laterality_row_widget = qt.QWidget()
+        laterality_row_widget.setLayout(laterality_row)
+        measurements_layout.addWidget(laterality_row_widget)
 
         # slice views aligned to the BONE instead of the scanner (the limb is never lying exactly
         # along the scanner axes): red = perpendicular to the shaft axis, green = frontal plane
@@ -1198,6 +1215,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 self._on_target_values_changed()
             except Exception:
                 logging.exception("Doggybone: refreshing the calculated corrections failed (continuing)")
+            try:
+                self._update_laterality_status()
+            except Exception:
+                logging.exception("Doggybone: side check failed (continuing)")
         qt.QTimer.singleShot(300, run)
 
     def _on_scene_reset(self, caller=None, event=None):
@@ -1349,6 +1370,113 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
     def _sync_measurement_side(self, index):
         if hasattr(self, "side_selector") and self.side_selector.currentIndex != index:
             self.side_selector.setCurrentIndex(index)
+
+    # --- side check (laterality) ------------------------------------------------------------------
+    def _panel_for_side(self, side):
+        return self.left_panel if side == "Left" else self.right_panel
+
+    def _landmark_points(self, side):
+        """{landmark name: RAS position} of the list of one side - the newest point per name wins,
+        deleted landmarks ("<name> (deleted)") never match a name."""
+        panel = self._panel_for_side(side)
+        node = slicer.mrmlScene.GetNodeByID(getattr(panel, "markup_node_id", "") or "")
+        points = {}
+        if node is None:
+            return points
+        for i in range(node.GetNumberOfControlPoints()):
+            if node.GetNthControlPointPositionStatus(i) != node.PositionDefined:
+                continue
+            position = [0.0, 0.0, 0.0]
+            node.GetNthControlPointPositionWorld(i, position)
+            points[node.GetNthControlPointLabel(i)] = np.array(position)
+        return points
+
+    def laterality_check(self, side):
+        """Which limb do the landmarks in the 'side' list form? See laterality.detect()."""
+        return laterality.detect(self._landmark_points(side))
+
+    def _update_laterality_status(self):
+        label = getattr(self, "laterality_label", None)
+        if label is None or not hasattr(self, "side_selector"):
+            return
+        current = self.side_selector.currentText
+        other = "Right" if current == "Left" else "Left"
+        result, result_other = self.laterality_check(current), self.laterality_check(other)
+        button = self.laterality_move_button
+        button.setVisible(False)
+        label.setToolTip(laterality.summary(result) or
+                         "The side is computed from the femur landmarks (shaft midpoints + condyles) or the "
+                         "tibia landmarks (axis points, condyles, cranial / caudal plateau point).")
+        status = result["status"]
+        if status == "incomplete":
+            label.setStyleSheet("")
+            label.setText("Side check: waiting for the femur or tibia landmarks.")
+            return
+        label.setStyleSheet(STATUS_WARN_STYLE)
+        if status == "uncertain":
+            label.setText("Side check: uncertain - " + "; ".join(result["messages"]))
+        elif status in ("check", "conflict"):
+            label.setText("Side check: " + "; ".join(result["messages"]))
+        elif result["side"] != current:
+            label.setText(f"Side check: these landmarks form a {result['side'].upper()} limb, "
+                          f"but they are in the {current} list.")
+            has_other = bool(self._landmark_points(other))
+            button.setText(f"Swap Left / Right" if has_other else f"Move to {result['side']}")
+            button.setToolTip(f"Put these landmarks into the {result['side']} list"
+                              + (f" (the landmarks of the {other} list go to the {current} list)" if has_other else "")
+                              + ". Osteotomy planes and guides are NOT moved.")
+            button.setVisible(True)
+        elif result_other["status"] == "ok" and result_other["side"] == current:
+            label.setText(f"Side check: BOTH lists form a {current.upper()} limb - the same leg measured twice, "
+                          "or medial / lateral swapped in one list.")
+        else:
+            label.setStyleSheet(STATUS_OK_STYLE)
+            label.setText(f"\u2713 Side check: the landmarks form a {current.lower()} limb.")
+
+    def onLateralityMove(self):
+        """Move the landmarks of the shown list to the other list - or swap both lists."""
+        current = self.side_selector.currentText
+        other = "Right" if current == "Left" else "Left"
+        source, target = self._panel_for_side(current), self._panel_for_side(other)
+        swap = bool(self._landmark_points(other))
+        question = (f"Swap ALL landmarks between the Left and the Right list?" if swap else
+                    f"Move all landmarks from the {current} list to the {other} list?")
+        if not slicer.util.confirmOkCancelDisplay(
+                question + "\n\nOsteotomy planes, corrections and guides stay with their side - check "
+                           "them afterwards.", windowTitle="Side check"):
+            return
+
+        def collect(panel):
+            node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+            names = {landmark.name for landmark in panel.landmarks}
+            items = []
+            for i in range(node.GetNumberOfControlPoints()):
+                name = node.GetNthControlPointLabel(i)
+                if name not in names or node.GetNthControlPointPositionStatus(i) != node.PositionDefined:
+                    continue
+                position = [0.0, 0.0, 0.0]
+                node.GetNthControlPointPositionWorld(i, position)
+                items.append((name, position, node.GetAttribute(f"Doggybone.radius.{name}")))
+            return items
+
+        def place(panel, items):
+            node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+            for name, position, radius in items:
+                index = node.AddControlPointWorld(vtk.vtkVector3d(*position))
+                node.SetNthControlPointLabel(index, name)
+                if radius:
+                    node.SetAttribute(f"Doggybone.radius.{name}", radius)
+            self._relink_existing_landmarks(panel)
+
+        moving, staying = collect(source), collect(target) if swap else []
+        source.clear_all_landmarks()
+        if swap:
+            target.clear_all_landmarks()
+        place(target, moving)
+        if swap:
+            place(source, staying)
+        self.side_selector.setCurrentText(other)       # show the moved landmarks
+        self._schedule_values_refresh()
 
     def _on_osteotomy_bone_changed(self, index):
         bone = self.osteotomy_bone.currentText
@@ -2111,7 +2239,11 @@ class MeasurementsPanel(qt.QWidget):
                                     f"Delete all placed {self.side} landmarks? This cannot be undone.",
                                     qt.QMessageBox.Yes | qt.QMessageBox.No) != qt.QMessageBox.Yes:
             return
+        self.clear_all_landmarks()
 
+    def clear_all_landmarks(self):
+        """Remove every placed landmark of this side without asking (also used by the side check
+        when the landmarks are moved to the other list)."""
         current_widget = self.measurement_stack.currentWidget()
         if current_widget is not None:
             current_widget.disable()

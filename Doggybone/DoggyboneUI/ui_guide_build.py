@@ -340,6 +340,20 @@ class GuideBuildMixin:
                                                "dx" if side_text == "Right" else "sx",
                                                "red" if mode == "reduction" else "cut")
             jobs.append((node, side, side_text, bone, mode, os.path.join(folder, file_name)))
+        # side check: the file name and the label on the guide carry dx / sx - compare the side of
+        # each guide with the side its landmarks actually form before anything is written
+        side_checks = {side_text: self.laterality_check(side_text) for side_text in {job[2] for job in jobs}}
+        wrong = []
+        for side_text, check in sorted(side_checks.items()):
+            if check["status"] == "ok" and check["side"] != side_text:
+                wrong.append(f"{side_text} guides: the {side_text.lower()} landmarks form a "
+                             f"{check['side'].upper()} limb.")
+            elif check["status"] in ("check", "conflict"):
+                wrong.append(f"{side_text} guides: " + "; ".join(check["messages"]))
+        if wrong and not slicer.util.confirmOkCancelDisplay(
+                "SIDE CHECK FAILED - file names and guide labels (dx / sx) may carry the wrong side:\n\n"
+                + "\n".join(wrong) + "\n\nExport anyway?", windowTitle="Export guides"):
+            return
         existing = [os.path.basename(job[-1]) for job in jobs if os.path.exists(job[-1])]
         if existing and not slicer.util.confirmOkCancelDisplay(
                 "These files already exist and will be replaced:\n" + "\n".join(existing),
@@ -360,13 +374,18 @@ class GuideBuildMixin:
                 notes.append(f"{open_edges} open edges - press 'Clean up' and export again")
             if side is None:
                 notes.append("side taken from the current selection (guide built before sides were stored)")
+            check = side_checks.get(side_text, {})
+            if check.get("status") != "ok" or check.get("side") != side_text:
+                notes.append("SIDE NOT CONFIRMED by the landmarks"
+                             + (" - " + "; ".join(check["messages"]) if check.get("messages") else ""))
             changed = self._guide_changed_parts(node, side, bone, mode)
             if changed:
                 notes.append("OUTDATED - changed since this guide was built: " + ", ".join(changed)
                              + " - extrude this guide again")
             elif changed is None:
                 notes.append("not checked for later plan changes (built with an older version)")
-            problems += 1 if (not ok or pieces != 1 or open_edges or changed) else 0
+            side_ok = check.get("status") == "ok" and check.get("side") == side_text
+            problems += 1 if (not ok or pieces != 1 or open_edges or changed or not side_ok) else 0
             lines.append(f"{'OK' if ok and not notes else 'CHECK'}  {label}: {os.path.basename(path)} "
                          f"({b[1] - b[0]:.0f} x {b[3] - b[2]:.0f} x {b[5] - b[4]:.0f} mm)"
                          + (" - " + "; ".join(notes) if notes else ""))

@@ -9,6 +9,7 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneLib/helpers.py
   DoggyboneLib/landmark_logic.py
   DoggyboneLib/landmarks.py
+  DoggyboneLib/laterality.py
   DoggyboneLib/measurement_logic.py
   DoggyboneLib/measurements.py
   DoggyboneLib/osteotomy_logic.py
