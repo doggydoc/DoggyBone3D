@@ -1373,12 +1373,25 @@ class CorrectionMixin:
     def _restore_original_overlay(self, side):
         saved = self.__dict__.get("_hidden_original_overlay", {}).pop(side, None)
         self._set_sphere_edit_visibility(True)
-        if not saved:
-            return
-        for node_id, visible in saved.items():
+        for node_id, visible in (saved or {}).items():
             node = slicer.mrmlScene.GetNodeByID(node_id)
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetVisibility(visible)
+        if saved is None:
+            # nothing remembered (e.g. after a module reload): draw the original landmarks and the
+            # axes / spheres of the active measurements again from the original landmark positions
+            panel = self.left_panel if side == "left" else self.right_panel
+            markups = slicer.mrmlScene.GetNodeByID(panel.markup_node_id) if panel is not None else None
+            if markups is not None and markups.GetDisplayNode() is not None:
+                markups.GetDisplayNode().SetVisibility(True)
+            stack = getattr(panel, "measurement_stack", None)
+            for i in range(stack.count if stack is not None else 0):
+                widget = stack.widget(i)
+                if getattr(widget, "enabled", False):
+                    try:
+                        widget.update_measurement()
+                    except Exception:
+                        logging.exception("Doggybone: redrawing a measurement failed (continuing)")
 
     def _remove_corrected_landmarks(self, side):
         self._restore_original_overlay(side)
@@ -1502,8 +1515,18 @@ class CorrectionMixin:
             else:
                 target = float(self.target_wedge_value.value)
                 results.append(f"{description} {value:.1f}\N{DEGREE SIGN} (target {target:.1f}\N{DEGREE SIGN})")
-            spheres.update(corrected.get_spheres())
-            for label, ends in corrected.get_axes().items():
+            # the DRAWN axes / spheres follow the bone: every landmark where it really is after the
+            # correction (also a shaft-axis landmark on the moved fragment); only the values above
+            # use the fixed fragment's axis when the cut splits it
+            shown = corrected
+            if measure_points is not points:
+                shown = copy.copy(measurement)
+                try:
+                    shown._measure(points, radii)
+                except Exception:
+                    shown = corrected
+            spheres.update(shown.get_spheres())
+            for label, ends in shown.get_axes().items():
                 axes.setdefault(label, ends)
 
         palette = [(0.2, 1.0, 0.4), (1.0, 0.85, 0.1), (1.0, 0.4, 0.2), (0.4, 0.7, 1.0)]
