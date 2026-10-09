@@ -449,7 +449,8 @@ class CorrectionMixin:
         if advice:
             self.correction_status.setText(self.correction_status.text + "\n" + advice)
         self._update_corrected_landmarks()
-        self.onHideAnnotationsToggled(True)            # labels and cutting planes hidden while the preview is shown
+        self.onHideAnnotationsToggled(True)            # cutting planes hidden while the preview is shown
+        self._apply_landmark_label_visibility()         # landmark names: 'Hide all landmark descriptions'
 
         # After the cut only the X/Y gizmo on the contact (master) face stays interactive; the
         # cutting planes' own handles are switched off so they cannot be moved by accident.
@@ -1475,6 +1476,7 @@ class CorrectionMixin:
         display.SetSelectedColor(0.2, 1.0, 0.4)
         display.SetColor(0.2, 1.0, 0.4)
         display.SetTextScale(2.5)
+        display.SetPointLabelsVisibility(not self._landmark_labels_hidden())
         display.SetGlyphScale(2.0)
 
         # which measurements to show in the corrected position: the planner's wedge / rotation

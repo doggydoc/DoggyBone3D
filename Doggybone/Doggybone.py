@@ -639,8 +639,15 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
 
         # With an active preview (always, no options): the original segmentation is hidden in 3D,
-        # the landmarks / spheres / axes are shown in the corrected position, and all labels and
-        # the cutting planes are hidden - everything comes back with 'Remove preview'.
+        # the landmarks / spheres / axes are shown in the corrected position and the cutting planes
+        # are hidden - everything comes back with 'Remove preview'. The landmark names: checkbox.
+        self.hide_landmark_labels = qt.QCheckBox("Hide all landmark descriptions")
+        self.hide_landmark_labels.setChecked(True)
+        self.hide_landmark_labels.setToolTip(
+            "Hide the names of all landmarks in the 3D and slice views - original and corrected position, "
+            "left and right. Uncheck to show them again.")
+        self.hide_landmark_labels.toggled.connect(lambda _c: self._apply_landmark_label_visibility())
+        osteotomy_form_layout.addRow(self.hide_landmark_labels)
 
         self.segment_opacity_slider = self._new_bone_opacity_slider()
         osteotomy_form_layout.addRow("Bone opacity", self.segment_opacity_slider)
@@ -1659,6 +1666,30 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if hasattr(self, "_apply_segment_opacity"):
             self._apply_segment_opacity()            # preview fragments + corrected bone
 
+    def _landmark_labels_hidden(self):
+        box = getattr(self, "hide_landmark_labels", None)
+        return bool(box.checked) if box is not None else False
+
+    def _apply_landmark_label_visibility(self):
+        """Landmark names (original landmarks of both sides and the corrected landmarks) on / off
+        according to 'Hide all landmark descriptions'."""
+        show = not self._landmark_labels_hidden()
+        nodes = []
+        for panel in (getattr(self, "left_panel", None), getattr(self, "right_panel", None)):
+            if panel is not None and getattr(panel, "markup_node_id", None):
+                nodes.append(slicer.mrmlScene.GetNodeByID(panel.markup_node_id))
+            box = getattr(panel, "show_labels_checkbox", None)
+            if box is not None and bool(box.checked) != show:      # the measurement panel shows the same state
+                was = box.blockSignals(True)
+                box.setChecked(show)
+                box.blockSignals(was)
+        nodes += [n for n in slicer.util.getNodesByClass("vtkMRMLMarkupsFiducialNode")
+                  if (n.GetName() or "").startswith("Doggybone") and (n.GetName() or "").endswith("corrected landmarks")]
+        for node in nodes:
+            display = node.GetDisplayNode() if node is not None else None
+            if display is not None:
+                display.SetPointLabelsVisibility(show)
+
     def onHideAnnotationsToggled(self, hide):
         """Hide / show all labels and the cutting planes; the previous state is restored exactly.
         Called automatically: hide when a correction preview is shown, show again when it is removed."""
@@ -1672,12 +1703,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 if display is None or not name.startswith("Doggybone"):
                     continue
                 is_plane = node.IsA("vtkMRMLMarkupsPlaneNode") or name.endswith(" marker")
-                if is_plane:
-                    saved.append((node.GetID(), "visibility", bool(display.GetVisibility())))
-                    display.SetVisibility(False)
-                else:
-                    saved.append((node.GetID(), "point labels", bool(display.GetPointLabelsVisibility())))
-                    display.SetPointLabelsVisibility(False)
+                if not is_plane:
+                    continue                            # landmark names: 'Hide all landmark descriptions'
+                saved.append((node.GetID(), "visibility", bool(display.GetVisibility())))
+                display.SetVisibility(False)
                 if hasattr(display, "GetPropertiesLabelVisibility"):
                     saved.append((node.GetID(), "properties label", bool(display.GetPropertiesLabelVisibility())))
                     display.SetPropertiesLabelVisibility(False)
