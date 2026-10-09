@@ -2864,8 +2864,10 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
         self.assertTrue(result.wasSuccessful(), f"{len(result.failures)} failures, {len(result.errors)} errors")
 
     def test_split_axis_prediction(self):
-        """A cut between the two shaft-axis landmarks predicts the same joint angle as a cut distal to
-        them (axis of the fixed fragment), and the suggested correction hits the targets."""
+        """A cut between the two shaft-axis landmarks: close to the distal landmark the axis stays on the
+        proximal fragment (same prediction as a cut distal to both, targets are hit); close to the
+        proximal landmark the axis goes with the moved distal fragment (the joint angle of that
+        fragment then does not change by rotating it)."""
         self.delayDisplay("Correction prediction with a split shaft axis")
         widget = self._widget()
         panel = self._place_femur_landmarks(widget)
@@ -2875,16 +2877,18 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
             angle = np.radians(6.0)
             rotation = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
             predicted = {}
-            for level in (110.0, 40.0):                            # between the midpoints / distal to them
+            for level in (90.0, 40.0, 135.0):    # near the 50 % landmark / distal to both / near the 30 % one
                 origin = np.array([0.0, 0.0, level])
                 H = np.eye(4)
                 H[:3, :3] = rotation
                 H[:3, 3] = origin - rotation @ origin
                 result = widget._predict_measurements("right", "Femur", H, origin, normal, True)
-                self.assertEqual(result["axis_split"], level == 110.0)
+                self.assertEqual(result["axis_split"], level != 40.0)
                 predicted[level] = result["wedge"]
-            self.assertAlmostEqual(predicted[110.0], predicted[40.0], places=2)
-            for level in (110.0, 40.0):
+            self.assertAlmostEqual(predicted[90.0], predicted[40.0], places=2)
+            original = widget._get_measurement_by_name(panel, widget.WEDGE_MEASUREMENT_NAME["Femur"])()[1]
+            self.assertAlmostEqual(predicted[135.0], original, places=2)
+            for level in (90.0, 40.0):
                 R, info = widget._desired_correction_rotation("right", "Femur", True, np.array([0.0, 0.0, level]), normal)
                 self.assertIsNotNone(R, info)
                 self.assertAlmostEqual(info["predicted"]["wedge"], widget.target_wedge_value.value, places=1)

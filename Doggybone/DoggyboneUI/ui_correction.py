@@ -487,27 +487,37 @@ class CorrectionMixin:
         return value if description == "Innenrotation" else -value
 
     # A cut BETWEEN the two shaft-axis landmarks: warn when the post-op value measured through both
-    # midpoints differs from the planned (fixed-fragment axis) value by more than this.
+    # midpoints differs from the planned value (axis of the fragment that carries the shaft) by more than this.
     SPLIT_AXIS_WARNING_DEG = 4.0
 
-    def _split_shaft_axis_names(self, bone, positions, origin, normal, distal_sign):
-        """Names of the two shaft-axis landmarks if the cut lies BETWEEN them (one on each side),
-        otherwise an empty set. positions: {landmark name: point}."""
+    def _split_shaft_axis(self, bone, positions, origin, normal, distal_sign):
+        """(names, axis_on_distal_fragment) if the cut lies BETWEEN the two shaft-axis landmarks, else
+        (set(), None). The shaft axis then belongs as a whole to the fragment that carries the larger
+        part of the segment between the two landmarks: a cut close to the distal landmark (distal
+        femoral osteotomy) leaves the axis on the proximal fragment, a cut close to the proximal
+        landmark (proximal tibial osteotomy) puts it on the distal fragment."""
         names = [name for name in self.SHAFT_AXIS_LANDMARKS.get(bone, ()) if name in positions]
         if len(names) != 2:
-            return set()
-        sides = {float(np.dot(np.asarray(positions[name], dtype=float) - origin, normal)) * distal_sign > 0.0
-                 for name in names}
-        return set(names) if len(sides) == 2 else set()
+            return set(), None
+        depth = {name: float(np.dot(np.asarray(positions[name], dtype=float) - origin, normal)) * distal_sign
+                 for name in names}                    # > 0: on the distal side of the cut
+        if (depth[names[0]] > 0.0) == (depth[names[1]] > 0.0):
+            return set(), None
+        distal_part = max(depth.values()) / (max(depth.values()) - min(depth.values()))
+        return set(names), distal_part >= 0.5
+
+    def _split_shaft_axis_names(self, bone, positions, origin, normal, distal_sign):
+        return self._split_shaft_axis(bone, positions, origin, normal, distal_sign)[0]
 
     def _predict_measurements(self, side, bone, H, plane_origin, plane_normal, moving_is_distal,
                               keep_split_axis=True):
         '''Move the landmarks lying on the MOVING side of the given (fixed) cut plane by the 4x4
         matrix H, read the wedge and torsion measurements, and restore the landmarks exactly.
-        If the cut lies between the two shaft-axis landmarks, both stay where they are
-        (keep_split_axis): the joint is then measured against the axis of the FIXED fragment
-        instead of a line across the osteotomy. keep_split_axis=False gives the value that would
-        be measured through both midpoints after healing (used only for the split-axis warning).
+        If the cut lies between the two shaft-axis landmarks (keep_split_axis), both go with the
+        fragment that carries the larger part of the shaft (see _split_shaft_axis): the joints are then
+        measured against that fragment's axis instead of a line across the osteotomy.
+        keep_split_axis=False gives the value that would be measured through both midpoints after
+        healing (used only for the split-axis warning).
         Returns {"wedge": value or None, "torsion": signed value or None, "axis_split": bool} or None.'''
         panel = self.left_panel if side == "left" else self.right_panel
         fiducials = slicer.mrmlScene.GetNodeByID(panel.markup_node_id) if getattr(panel, "markup_node_id", None) else None
@@ -524,16 +534,15 @@ class CorrectionMixin:
         index_by_name = {l.name: l._id for l in getattr(panel, "landmarks", [])
                          if getattr(l, "placed", False) and getattr(l, "_id", None) is not None
                          and 0 <= l._id < len(originals)}
-        split_names = self._split_shaft_axis_names(
+        split_names, axis_on_distal = self._split_shaft_axis(
             bone, {name: originals[i] for name, i in index_by_name.items()}, o, n, distal_sign)
-        keep_ids = {index_by_name[name] for name in split_names} if keep_split_axis else set()
+        axis_ids = {index_by_name[name] for name in split_names} if keep_split_axis else set()
+        axis_moves = axis_on_distal == moving_is_distal
         result = {"wedge": None, "torsion": None, "axis_split": bool(split_names)}
         try:
             for i, point in enumerate(originals):
-                if i in keep_ids:
-                    continue
                 on_distal_side = float(np.dot(point - o, n)) * distal_sign > 0.0
-                if on_distal_side == moving_is_distal:
+                if (axis_moves if i in axis_ids else on_distal_side == moving_is_distal):
                     moved = (H @ np.append(point, 1.0))[:3]
                     fiducials.SetNthControlPointPositionWorld(i, *moved)
             wedge_measurement = self._get_measurement_by_name(panel, self.WEDGE_MEASUREMENT_NAME[bone])
@@ -580,7 +589,7 @@ class CorrectionMixin:
             return ""
         proximal_name, distal_name = self.SHAFT_AXIS_LANDMARKS["Femur" if bone == "Femur" else "Tibia"]
         return (f"WARNING: the cut lies between '{proximal_name}' and '{distal_name}'. The plan uses the "
-                f"axis of the fixed fragment; measured through both midpoints after healing the values "
+                f"axis of the fragment that carries most of the shaft; measured through both midpoints after healing the values "
                 f"would differ by more than {self.SPLIT_AXIS_WARNING_DEG:.0f}{deg}: " + ", ".join(big)
                 + ". Consider moving the cut out of the shaft segment between these landmarks.")
 
@@ -1445,20 +1454,24 @@ class CorrectionMixin:
 
         placed = {l.name: np.asarray(l.get_position(), dtype=float)
                   for l in getattr(panel, "landmarks", []) if getattr(l, "placed", False)}
-        # cut between the shaft-axis landmarks: measure against the fixed fragment's axis (as the plan)
-        split_names = self._split_shaft_axis_names(bone, placed, o, n, distal_sign)
+        # cut between the shaft-axis landmarks: the values use the axis of the fragment that carries
+        # the shaft (as the plan, see _split_shaft_axis); the drawing shows every point where it is
+        split_names, axis_on_distal = self._split_shaft_axis(bone, placed, o, n, distal_sign)
+        axis_moves = axis_on_distal == state["moving_is_distal"]
         points, measure_points, radii, moved_names = {}, {}, {}, []
         for landmark in getattr(panel, "landmarks", []):
             if not getattr(landmark, "placed", False):
                 continue
             p = placed[landmark.name]
-            measure_points[landmark.name] = p
+            moved = (H @ np.append(p, 1.0))[:3]
             on_distal_side = float(np.dot(p - o, n)) * distal_sign > 0.0
+            if landmark.name in split_names:
+                measure_points[landmark.name] = moved if axis_moves else p
+            else:
+                measure_points[landmark.name] = moved if on_distal_side == state["moving_is_distal"] else p
             if on_distal_side == state["moving_is_distal"]:
-                p = (H @ np.append(p, 1.0))[:3]
+                p = moved
                 moved_names.append(landmark.name)
-                if landmark.name not in split_names:
-                    measure_points[landmark.name] = p
             points[landmark.name] = p
             radii[landmark.name] = getattr(landmark, "radius", None)
         if not points:
@@ -1519,7 +1532,7 @@ class CorrectionMixin:
                 results.append(f"{description} {value:.1f}\N{DEGREE SIGN} (target {target:.1f}\N{DEGREE SIGN})")
             # the DRAWN axes / spheres follow the bone: every landmark where it really is after the
             # correction (also a shaft-axis landmark on the moved fragment); only the values above
-            # use the fixed fragment's axis when the cut splits it
+            # use the axis of the fragment that carries the shaft when the cut splits it
             shown = corrected
             if measure_points is not points:
                 shown = copy.copy(measurement)
