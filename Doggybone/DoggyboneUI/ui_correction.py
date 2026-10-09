@@ -1327,7 +1327,24 @@ class CorrectionMixin:
         nodes = [slicer.mrmlScene.GetNodeByID(panel.markup_node_id)]
         nodes += list(getattr(panel, "sphere_nodes", {}).values())
         nodes += list(getattr(panel, "axis_nodes", {}).values())
+        # also by name - after a module reload the panel's own lists are empty, the nodes still exist
+        for label in self._all_measurement_labels(panel):
+            for suffix in (" axis", " sphere"):
+                node = slicer.mrmlScene.GetFirstNodeByName(f"Doggybone {side} {label}{suffix}")
+                if node is not None and node not in nodes:
+                    nodes.append(node)
         return [n for n in nodes if n is not None and n.GetScene() is not None and n.GetDisplayNode() is not None]
+
+    def _panel_measurements(self, panel):
+        stack = getattr(panel, "measurement_stack", None)
+        return [stack.widget(i).measurement for i in range(stack.count)] if stack is not None else []
+
+    def _all_measurement_labels(self, panel):
+        labels = set()
+        for measurement in self._panel_measurements(panel):
+            labels.update(getattr(measurement, "AXIS_LABELS", []) or [])
+            labels.update(getattr(measurement, "SPHERE_LABELS", []) or [])
+        return labels
 
     def _hide_original_overlay(self, side):
         """While the corrected landmarks are shown, hide the ORIGINAL (pre-correction) landmarks,
@@ -1447,8 +1464,22 @@ class CorrectionMixin:
         display.SetTextScale(2.5)
         display.SetGlyphScale(2.0)
 
+        # which measurements to show in the corrected position: the planner's wedge / rotation
+        # measurements plus every measurement whose ORIGINAL axes are visible right now (e.g. TPA with
+        # its functional axis and plateau line) - otherwise those stay behind in the original position
+        planner_names = [name for name in (self.WEDGE_MEASUREMENT_NAME.get(bone),
+                                           self.ROTATION_MEASUREMENT_NAME.get(bone)) if name]
+        shown_names = list(planner_names)
+        for measurement in self._panel_measurements(panel):
+            if measurement.name in shown_names:
+                continue
+            for label in getattr(measurement, "AXIS_LABELS", []) or []:
+                node = slicer.mrmlScene.GetFirstNodeByName(f"Doggybone {side} {label} axis")
+                if node is not None and node.GetDisplayNode() is not None and node.GetDisplayNode().GetVisibility():
+                    shown_names.append(measurement.name)
+                    break
         results, spheres, axes = [], {}, {}
-        for bone_name in (self.WEDGE_MEASUREMENT_NAME.get(bone), self.ROTATION_MEASUREMENT_NAME.get(bone)):
+        for bone_name in shown_names:
             measurement = self._get_measurement_by_name(panel, bone_name) if bone_name else None
             if measurement is None:
                 continue
@@ -1461,7 +1492,10 @@ class CorrectionMixin:
             except Exception as exc:                     # a measurement must never break the preview
                 results.append(f"{measurement.name}: not measurable ({exc})")
                 continue
-            if bone_name == self.ROTATION_MEASUREMENT_NAME.get(bone):
+            if bone_name not in planner_names:
+                results.append(f"{getattr(measurement, 'display_name', None) or measurement.name}: "
+                               f"{value:.1f}\N{DEGREE SIGN} ({description})")
+            elif bone_name == self.ROTATION_MEASUREMENT_NAME.get(bone):
                 value = self._signed_rotation_value(bone, value, description)
                 target = float(self.target_rotation_value.value)
                 results.append(f"{measurement.name} {value:+.1f}\N{DEGREE SIGN} (target {target:+.1f}\N{DEGREE SIGN})")
