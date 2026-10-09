@@ -647,7 +647,20 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "Hide the names of all landmarks in the 3D and slice views - original and corrected position, "
             "left and right. Uncheck to show them again.")
         self.hide_landmark_labels.toggled.connect(lambda _c: self._apply_landmark_label_visibility())
-        osteotomy_form_layout.addRow(self.hide_landmark_labels)
+        self.show_cutting_planes = qt.QCheckBox("Show cutting planes")
+        self.show_cutting_planes.setChecked(True)
+        self.show_cutting_planes.setToolTip(
+            "Show / hide the cutting planes and their L / M markers. Unticked automatically while the "
+            "correction preview is shown; 'Remove preview' sets it back.")
+        self.show_cutting_planes.toggled.connect(lambda _c: self._apply_cutting_plane_visibility())
+        view_row = qt.QHBoxLayout()
+        view_row.setContentsMargins(0, 0, 0, 0)
+        view_row.addWidget(self.hide_landmark_labels)
+        view_row.addWidget(self.show_cutting_planes)
+        view_row.addStretch(1)
+        view_widget = qt.QWidget()
+        view_widget.setLayout(view_row)
+        osteotomy_form_layout.addRow(view_widget)
 
         self.segment_opacity_slider = self._new_bone_opacity_slider()
         osteotomy_form_layout.addRow("Bone opacity", self.segment_opacity_slider)
@@ -1690,40 +1703,44 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             if display is not None:
                 display.SetPointLabelsVisibility(show)
 
+    CUTTING_PLANE_SUFFIXES = (" proximal plane", " distal plane", " proximal plane L marker", " proximal plane M marker",
+                              " distal plane L marker", " distal plane M marker", " L marker", " M marker")
+
+    def _cutting_plane_nodes(self):
+        """The cutting planes and their L / M markers (both sides, both bones) - not the gizmos
+        (fine shift, pins, saw boxes), which are plane nodes too."""
+        nodes = []
+        for node in slicer.util.getNodesByClass("vtkMRMLMarkupsNode"):
+            name = node.GetName() or ""
+            if name.startswith("Doggybone") and name.endswith(self.CUTTING_PLANE_SUFFIXES) \
+                    and node.GetDisplayNode() is not None:
+                nodes.append(node)
+        return nodes
+
+    def _apply_cutting_plane_visibility(self):
+        """Cutting planes on / off according to 'Show cutting planes'."""
+        box = getattr(self, "show_cutting_planes", None)
+        show = bool(box.checked) if box is not None else True
+        for node in self._cutting_plane_nodes():
+            node.GetDisplayNode().SetVisibility(show)
+
     def onHideAnnotationsToggled(self, hide):
-        """Hide / show all labels and the cutting planes; the previous state is restored exactly.
-        Called automatically: hide when a correction preview is shown, show again when it is removed."""
-        if hide:
-            if getattr(self, "_hidden_annotations", None):
-                return                                  # already hidden - keep the saved original state
-            saved = []
-            for node in slicer.util.getNodesByClass("vtkMRMLMarkupsNode"):
-                name = node.GetName() or ""
-                display = node.GetDisplayNode()
-                if display is None or not name.startswith("Doggybone"):
-                    continue
-                is_plane = node.IsA("vtkMRMLMarkupsPlaneNode") or name.endswith(" marker")
-                if not is_plane:
-                    continue                            # landmark names: 'Hide all landmark descriptions'
-                saved.append((node.GetID(), "visibility", bool(display.GetVisibility())))
-                display.SetVisibility(False)
-                if hasattr(display, "GetPropertiesLabelVisibility"):
-                    saved.append((node.GetID(), "properties label", bool(display.GetPropertiesLabelVisibility())))
-                    display.SetPropertiesLabelVisibility(False)
-            self._hidden_annotations = saved
+        """Called automatically: the cutting planes are hidden when a correction preview is shown
+        ('Show cutting planes' unticked) and come back as they were when it is removed."""
+        box = getattr(self, "show_cutting_planes", None)
+        if box is None:
             return
-        for node_id, kind, value in getattr(self, "_hidden_annotations", []):
-            node = slicer.mrmlScene.GetNodeByID(node_id)
-            display = node.GetDisplayNode() if node is not None else None
-            if display is None:
-                continue
-            if kind == "visibility":
-                display.SetVisibility(value)
-            elif kind == "point labels":
-                display.SetPointLabelsVisibility(value)
-            else:
-                display.SetPropertiesLabelVisibility(value)
-        self._hidden_annotations = []
+        if hide:
+            if getattr(self, "_planes_before_preview", None) is None:
+                self._planes_before_preview = bool(box.checked)
+            box.setChecked(False)
+            self._apply_cutting_plane_visibility()
+            return
+        before = getattr(self, "_planes_before_preview", None)
+        self._planes_before_preview = None
+        if before is not None:
+            box.setChecked(before)
+        self._apply_cutting_plane_visibility()          # the planes always follow the checkbox afterwards
 
     def onAlignSliceViews(self):
         choice = self.view_align_selector.currentText
