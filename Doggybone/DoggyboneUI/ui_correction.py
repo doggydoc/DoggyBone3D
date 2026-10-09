@@ -434,21 +434,8 @@ class CorrectionMixin:
         self._ensure_fine_shift_nodes(side, bone, transform_node)
         self._apply_fine_shift(update_combined=True, move_gizmo=True)
 
-        # Optionally hide the original segmentation so the corrected preview is not obscured by
-        # overlapping surfaces. Preserve its previous 3D visibility and restore it on Remove preview.
-        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
-        if segmentation_node is not None and segmentation_node.GetDisplayNode() is not None:
-            display_node = segmentation_node.GetDisplayNode()
-            if not hasattr(self, "_original_segmentation_visibility_3d"):
-                try:
-                    self._original_segmentation_visibility_3d = bool(display_node.GetVisibility3D())
-                except Exception:
-                    self._original_segmentation_visibility_3d = bool(display_node.GetVisibility())
-            if self.hide_original_in_preview.isChecked():
-                if hasattr(display_node, "SetVisibility3D"):
-                    display_node.SetVisibility3D(False)
-                else:
-                    display_node.SetVisibility(False)
+        # the original segmentation gives way to the corrected preview in 3D (see _sync_original_segmentation)
+        self._sync_original_segmentation()
 
         self.correction_status.setText(
             f"Preview active ({self.osteotomy_technique.currentText}): wedge {wedge_description}, "
@@ -462,6 +449,7 @@ class CorrectionMixin:
         if advice:
             self.correction_status.setText(self.correction_status.text + "\n" + advice)
         self._update_corrected_landmarks()
+        self.onHideAnnotationsToggled(True)            # labels and cutting planes hidden while the preview is shown
 
         # After the cut only the X/Y gizmo on the contact (master) face stays interactive; the
         # cutting planes' own handles are switched off so they cannot be moved by accident.
@@ -1294,6 +1282,29 @@ class CorrectionMixin:
     CORRECTED_PREFIX = "Doggybone {side} corrected"
     CORRECTED_STATUS_MARK = "\nCorrected position (measured on the moved landmarks): "
 
+    def _sync_original_segmentation(self):
+        """While a correction preview of the current side / bone exists, the ORIGINAL segmentation
+        is hidden in 3D (it stays in the slice views) - whatever showed it again (bone switch, guide
+        tools, opacity). Exception: the saw guide is being planned (guide panel open, saw mode) -
+        that guide sits on the uncut bone."""
+        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+        if segmentation_node is None or segmentation_node.GetDisplayNode() is None:
+            return
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
+        if combined is None or combined.GetPolyData() is None or combined.GetPolyData().GetNumberOfPoints() == 0:
+            return
+        guide_panel = getattr(self, "_guide_collapsible", None)
+        saw_guide_view = (getattr(self, "_guide_mode", "saw") == "saw" and guide_panel is not None
+                          and not guide_panel.collapsed)
+        display = segmentation_node.GetDisplayNode()
+        if hasattr(display, "SetVisibility3D"):
+            display.SetVisibility(True)
+            display.SetVisibility3D(saw_guide_view)
+        else:
+            display.SetVisibility(saw_guide_view)
+
     def _apply_segment_opacity(self):
         """Opacity of the preview segments (fixed + moved fragment, combined bone)."""
         slider = getattr(self, "segment_opacity_slider", None)
@@ -1307,6 +1318,7 @@ class CorrectionMixin:
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetOpacity(opacity)
+        self._sync_original_segmentation()
 
     def _original_overlay_nodes(self, side):
         panel = self.left_panel if side == "left" else self.right_panel
@@ -1381,7 +1393,7 @@ class CorrectionMixin:
         state = getattr(self, "_fine_shift_state", None)
         side = (state or {}).get("side") or self.osteotomy_side.currentText.lower()
         self._remove_corrected_landmarks(side)
-        if not state or not self.show_corrected_landmarks.isChecked():
+        if not state:
             return
         bone = state["bone"]
         names = self._preview_node_names(side, bone)
@@ -1520,6 +1532,7 @@ class CorrectionMixin:
             display_node.SetOpacity(max(opacity, 0.1))
         if hasattr(self, "_guide_saved_opacity"):
             self._guide_saved_opacity = []             # nothing left to restore to a hidden state
+        self._sync_original_segmentation()            # a preview of this bone still hides it in 3D
 
     def onClearPreview(self):
         side = self.osteotomy_side.currentText.lower()
@@ -1535,8 +1548,7 @@ class CorrectionMixin:
                 slicer.mrmlScene.RemoveNode(node)
                 removed_any = True
         # without a preview the original bone must always be visible again - whatever hid it
-        # (preview option, guide tools, a module reload that lost the remembered state)
+        # (preview, guide tools, a module reload that lost the remembered state)
         self._ensure_segmentation_visible()
-        if hasattr(self, "_original_segmentation_visibility_3d"):
-            del self._original_segmentation_visibility_3d
+        self.onHideAnnotationsToggled(False)           # labels and cutting planes back
         self.correction_status.setText("Preview removed." if removed_any else "No preview to remove.")

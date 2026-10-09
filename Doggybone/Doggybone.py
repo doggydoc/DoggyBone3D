@@ -633,28 +633,14 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.reset_all_button.setStyleSheet("QPushButton { color: #9b1c1c; }")
         self.reset_all_button.clicked.connect(self.onResetPlanningAndGuides)
         preview_grid.addWidget(self.reset_all_button, 2, 0, 1, 2)
-        self.hide_annotations_button = qt.QCheckBox("Hide labels and cutting planes")
-        self.hide_annotations_button.setToolTip(
-            "One click hides all labels (landmark names, plane names, L/M markers) and the cutting "
-            "planes - e.g. for a clean view or a screenshot. Click again to show them as before.")
-        self.hide_annotations_button.toggled.connect(self.onHideAnnotationsToggled)
         preview_widget = qt.QWidget()
         preview_widget.setLayout(preview_grid)
         osteotomy_form_layout.addRow(preview_widget)
 
 
-        self.hide_original_in_preview = qt.QCheckBox("Hide original segmentation in preview")
-        self.hide_original_in_preview.setChecked(True)
-        osteotomy_form_layout.addRow(self.hide_original_in_preview)
-        self.show_corrected_landmarks = qt.QCheckBox("Show landmarks, spheres and axes in the corrected position")
-        self.show_corrected_landmarks.setChecked(True)
-        self.show_corrected_landmarks.setToolTip(
-            "With an active preview: the landmarks of the moved fragment are carried along with the "
-            "correction (incl. fine shift); spheres and axes are drawn from them and the angles are "
-            "measured on the corrected bone.")
-        self.show_corrected_landmarks.toggled.connect(lambda _c: self._update_corrected_landmarks())
-        osteotomy_form_layout.addRow(self.show_corrected_landmarks)
-        osteotomy_form_layout.addRow(self.hide_annotations_button)
+        # With an active preview (always, no options): the original segmentation is hidden in 3D,
+        # the landmarks / spheres / axes are shown in the corrected position, and all labels and
+        # the cutting planes are hidden - everything comes back with 'Remove preview'.
 
         self.segment_opacity_slider = self._new_bone_opacity_slider()
         osteotomy_form_layout.addRow("Bone opacity", self.segment_opacity_slider)
@@ -671,6 +657,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         self.layout.addWidget(guide_collapsible_button)
         self._guide_collapsible = guide_collapsible_button
+        # opening / closing the guide panel switches the uncut bone on / off in 3D (saw guide vs. preview)
+        guide_collapsible_button.connect('contentsCollapsed(bool)', lambda _c: self._sync_original_segmentation())
         guide_layout = qt.QVBoxLayout(guide_collapsible_button)
         guide_info_label = qt.QLabel(
             "Footprint = coloured area on the bone surface where the guide sits. Paint it by hand "
@@ -1672,8 +1660,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             self._apply_segment_opacity()            # preview fragments + corrected bone
 
     def onHideAnnotationsToggled(self, hide):
-        """Hide / show all labels and the cutting planes; the previous state is restored exactly."""
+        """Hide / show all labels and the cutting planes; the previous state is restored exactly.
+        Called automatically: hide when a correction preview is shown, show again when it is removed."""
         if hide:
+            if getattr(self, "_hidden_annotations", None):
+                return                                  # already hidden - keep the saved original state
             saved = []
             for node in slicer.util.getNodesByClass("vtkMRMLMarkupsNode"):
                 name = node.GetName() or ""
