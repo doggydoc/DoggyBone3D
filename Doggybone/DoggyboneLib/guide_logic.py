@@ -1608,27 +1608,62 @@ def apply_hinge_stop(slots, stop):
     return ("Hinge stop: " + ", ".join(notes) + " - frame closed there, the hinge cannot be cut through.") if notes else ""
 
 
-def hinge_strut(slots, bar_radius=1.3, neck_radius=0.55, neck_height=2.0):
-    """Break-off strut over the hinge-side end of a closing-wedge saw block: a round bar across both
-    kerfs, standing on the two outer walls on thin necks (break them with pliers once the guide is
-    pinned). Returns a closed polydata or None."""
+def hinge_strut(slots, block=None, bar_radius=1.3, neck_radius=0.55, neck_height=2.0, sink=0.5):
+    """Break-off strut across the closing wedge AT THE HINGE: a round bar from the proximal to the
+    distal outer wall of the saw block, standing on the block's real top surface on two thin necks
+    (break them with pliers once the guide is pinned). With `block` (the saw_block_pair mesh) the
+    feet are found by casting rays down onto the block, so they always sit on it; if the walls do
+    not reach the hinge position the strut moves towards the slot centre until both feet sit.
+    Returns a closed polydata (three overlapping closed tubes) or None."""
     good = [s for s in slots if "error" not in s]
     if len(good) != 2:
         return None
-    feet = []
+    frames = []
     for index, slot in enumerate(good):
         C, u, v, n = (np.asarray(slot[k], float) for k in ("centre", "u", "v", "normal"))
         u_h = kerf_hinge_u(slot, good[1 - index])
-        sign = 1.0 if (u_h is None or u_h >= 0.0) else -1.0
-        u_end = float(slot["u1"]) if sign > 0 else float(slot["u0"])
-        u_at = u_end + sign * 0.5 * BRIDGE_WIDTH                  # middle of the end bridge
+        if u_h is None:                                       # parallel cuts: at the u1 end
+            u_h = float(slot["u1"])
         side = float(slot.get("side") or 1.0)
-        mid_wall = 0.5 * SLOT_WIDTH + 0.5 * SLOT_WALL            # middle of the outer wall
-        feet.append((C + u_at * u + float(slot["v_top"]) * v - side * mid_wall * n, v))
-    up = unit(feet[0][1] + feet[1][1])
-    tops = [p + (neck_height + bar_radius) * up for p, _v in feet]
+        frames.append((C, u, v, n, side, u_h, float(slot["v_top"])))
+    up = unit(frames[0][2] + frames[1][2])
+    mid_wall = 0.5 * SLOT_WIDTH + 0.5 * SLOT_WALL                # middle of each outer wall
+    obb = None
+    if block is not None and block.GetNumberOfPoints() > 0:
+        obb = vtk.vtkOBBTree()
+        obb.SetDataSet(block)
+        obb.BuildLocator()
+
+    def top_hit(point):
+        """Highest point of the block straight below / above `point` (None without a hit)."""
+        if obb is None:
+            return point
+        hits = vtk.vtkPoints()
+        obb.IntersectWithLine([float(x) for x in point + 30.0 * up], [float(x) for x in point - 30.0 * up], hits, None)
+        if hits.GetNumberOfPoints() == 0:
+            return None
+        found = [np.array(hits.GetPoint(i)) for i in range(hits.GetNumberOfPoints())]
+        return max(found, key=lambda q: float(q @ up))
+
+    feet = None
+    for step in np.arange(0.0, 12.01, 0.5):                     # from the hinge towards the slot centre
+        candidate = []
+        for C, u, v, n, side, u_h, v_top in frames:
+            u_at = u_h - np.sign(u_h) * step
+            guess = C + u_at * u + v_top * v - side * mid_wall * n
+            hit = top_hit(guess)
+            if hit is None or abs(float((hit - guess) @ up)) > 3.0:     # no wall here (e.g. over a kerf)
+                break
+            candidate.append(hit)
+        if len(candidate) == 2:
+            feet = candidate
+            break
+    if feet is None:
+        return None
+    top_level = max(float(f @ up) for f in feet)                 # bar level: above the higher foot
+    tops = [f + (top_level - float(f @ up) + neck_height + bar_radius) * up for f in feet]
     append = vtk.vtkAppendPolyData()
-    for a, b, r in ((feet[0][0] - 0.3 * up, tops[0], neck_radius), (feet[1][0] - 0.3 * up, tops[1], neck_radius),
+    for a, b, r in ((feet[0] - sink * up, tops[0], neck_radius), (feet[1] - sink * up, tops[1], neck_radius),
                     (tops[0], tops[1], bar_radius)):
         line = vtk.vtkLineSource()
         line.SetPoint1(*[float(x) for x in a])

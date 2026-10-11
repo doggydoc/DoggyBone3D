@@ -96,7 +96,7 @@ class GuideBuildMixin:
                                                         block=block))
                 strut_box = getattr(self, "guide_hinge_strut", None)
                 if strut_box is not None and strut_box.currentText.startswith("Break"):
-                    strut = guide_logic.hinge_strut(slots)
+                    strut = guide_logic.hinge_strut(slots, block=parts[-1])
                     if strut is not None:
                         parts.append(strut)
             else:
