@@ -94,6 +94,11 @@ class GuideBuildMixin:
                     bone_seat = mesh
                 parts.append(guide_logic.saw_block_pair(slots[0], slots[1], self._pin_obb_tree(bone_seat), gap,
                                                         block=block))
+                strut_box = getattr(self, "guide_hinge_strut", None)
+                if strut_box is not None and strut_box.currentText.startswith("Break"):
+                    strut = guide_logic.hinge_strut(slots)
+                    if strut is not None:
+                        parts.append(strut)
             else:
                 for slot in slots:
                     parts += guide_logic.saw_block_shells(slot, None, block_side=block_side)
@@ -287,11 +292,35 @@ class GuideBuildMixin:
 
     @staticmethod
     def _mesh_check(polydata):
-        """(number of separate pieces, number of open edges) of a guide mesh."""
+        """(number of separate pieces, number of open edges) of a guide mesh. A guide is made of
+        several closed shells that OVERLAP (body, saw block, sleeves, label, strut - the print software
+        unites them); shells whose boxes touch count as one piece, so only really loose parts count."""
         connectivity = vtk.vtkPolyDataConnectivityFilter()
         connectivity.SetInputData(polydata)
         connectivity.SetExtractionModeToAllRegions()
+        connectivity.ColorRegionsOn()
         connectivity.Update()
+        from vtk.util.numpy_support import vtk_to_numpy
+        labelled = connectivity.GetOutput()
+        regions = connectivity.GetNumberOfExtractedRegions()
+        ids = labelled.GetPointData().GetArray("RegionId")
+        if ids is not None and regions > 1:
+            region_of = vtk_to_numpy(ids)
+            points = vtk_to_numpy(labelled.GetPoints().GetData())
+            boxes = [(points[region_of == r].min(axis=0) - 0.2, points[region_of == r].max(axis=0) + 0.2)
+                     for r in range(regions) if (region_of == r).any()]
+            parent = list(range(len(boxes)))
+
+            def root(i):
+                while parent[i] != i:
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                return i
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    if np.all(boxes[i][0] <= boxes[j][1]) and np.all(boxes[j][0] <= boxes[i][1]):
+                        parent[root(i)] = root(j)
+            regions = len({root(i) for i in range(len(boxes))})
         edges = vtk.vtkFeatureEdges()
         edges.SetInputData(polydata)
         edges.BoundaryEdgesOn()
@@ -299,7 +328,7 @@ class GuideBuildMixin:
         edges.FeatureEdgesOff()
         edges.ManifoldEdgesOff()
         edges.Update()
-        return connectivity.GetNumberOfExtractedRegions(), edges.GetOutput().GetNumberOfCells()
+        return regions, edges.GetOutput().GetNumberOfCells()
 
     @staticmethod
     def _write_centred_stl(polydata, path):

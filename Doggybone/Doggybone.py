@@ -1024,6 +1024,19 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                                       decimals=1)
         self.guide_bridge_size.valueChanged.connect(lambda _v: self._on_bridge_size_changed())
         guide_fields.append(("Corner bridges", self.guide_bridge_size))
+        self.guide_hinge_stop = spin(0.0, 5.0, 0.0, 0.5, " mm",
+                                     "Closing wedge - hinge stop: both slots end this far before the hinge (where "
+                                     "the two cutting planes meet); beyond that the saw block stays solid. The frame "
+                                     "is then closed at the hinge side and the blade cannot cut through the hinge. "
+                                     "0 = off (slots over the whole bone, as before).", decimals=1)
+        self.guide_hinge_stop.setSpecialValueText("off")
+        self.guide_hinge_stop.valueChanged.connect(lambda _v: self._refresh_guide_body_if_present())
+        guide_fields.append(("Hinge stop", self.guide_hinge_stop))
+        self.guide_hinge_strut = combo(["Off", "Break-off strut"], "Off",
+                                       "Closing wedge: an extra round bar over the hinge-side end of the saw block, "
+                                       "across both kerfs, on two thin necks - it stiffens the frame while the guide "
+                                       "is placed and pinned; break it off with pliers before sawing.")
+        guide_fields.append(("Hinge strut", self.guide_hinge_strut))
         self.guide_saw_type = combo(["Slot", "Block"], "Slot",
                                     "Slot: the blade runs in a closed slot (guided on both sides).\n"
                                     "Block: no slot - the guide ends exactly at the cutting plane and the blade "
