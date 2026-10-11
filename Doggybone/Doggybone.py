@@ -1692,6 +1692,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.onOpacityChanged(value)                 # bone segmentation(s)
         if hasattr(self, "_apply_segment_opacity"):
             self._apply_segment_opacity()            # preview fragments + corrected bone
+        # while a guide tool is active the bone is shown as the guide's own bone surface
+        shown = getattr(self, "_guide_shown_surface", None)
+        surface = slicer.mrmlScene.GetNodeByID(shown) if shown else None
+        if surface is not None and surface.GetDisplayNode() is not None:
+            surface.GetDisplayNode().SetOpacity(value / 100.0)
 
     def _landmark_labels_hidden(self):
         box = getattr(self, "hide_landmark_labels", None)

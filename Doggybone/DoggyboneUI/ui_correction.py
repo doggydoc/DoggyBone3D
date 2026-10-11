@@ -1297,6 +1297,8 @@ class CorrectionMixin:
         is hidden in 3D (it stays in the slice views) - whatever showed it again (bone switch, guide
         tools, opacity). Exception: the saw guide is being planned (guide panel open, saw mode) -
         that guide sits on the uncut bone."""
+        if getattr(self, "_guide_shown_surface", None):
+            return      # a guide tool shows its own bone surface - the segmentation stays hidden meanwhile
         segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         if segmentation_node is None or segmentation_node.GetDisplayNode() is None:
             return
