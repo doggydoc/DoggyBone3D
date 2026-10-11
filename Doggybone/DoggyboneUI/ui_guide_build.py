@@ -548,8 +548,14 @@ class GuideBuildMixin:
                     display.SetVisibility(corrected)
                 elif node.GetID() in measured_ids or (
                         name.startswith(prefix) and (name.endswith(" sphere") or name.endswith(" axis"))):
+                    if corrected:
+                        saved = self.__dict__.setdefault("_hidden_original_overlay", {}).setdefault(side, {})
+                        saved.setdefault(node.GetID(), bool(display.GetVisibility()))
                     display.SetVisibility(not corrected)
         self._set_sphere_edit_visibility(not corrected)
+        # saw guide: the original set is shown again, measurement updates may show it from now on
+        if not corrected:
+            self.__dict__.setdefault("_hidden_original_overlay", {}).pop(side, None)
 
     # --- patient + guide label ----------------------------------------------------------------
     PATIENT_NODE_NAME = "Doggybone patient"

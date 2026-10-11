@@ -2188,6 +2188,17 @@ class MeasurementsPanel(qt.QWidget):
             if current_widget is not None:
                 current_widget.update_measurement()
 
+    def _show_unless_original_hidden(self, node):
+        """Make a sphere / axis node visible - unless the ORIGINAL overlay of this side is hidden right
+        now (corrected preview / reduction guide): then it is only noted, and it comes back when the
+        original overlay is restored."""
+        store = getattr(self.base_widget, "__dict__", {}).get("_hidden_original_overlay", {})
+        if self.side in store:
+            store[self.side][node.GetID()] = True
+            node.GetDisplayNode().SetVisibility(False)
+            return
+        node.GetDisplayNode().SetVisibility(True)
+
     def show_sphere(self, label, center, radius):
         if not self.spheres_visible:
             self.hide_sphere(label)
@@ -2214,7 +2225,7 @@ class MeasurementsPanel(qt.QWidget):
         sphere_source.SetPhiResolution(32)
         sphere_source.Update()
         node.SetAndObservePolyData(sphere_source.GetOutputDataObject(0))
-        node.GetDisplayNode().SetVisibility(True)
+        self._show_unless_original_hidden(node)
 
     def hide_sphere(self, label):
         node = self.sphere_nodes.get(label)
@@ -2262,7 +2273,7 @@ class MeasurementsPanel(qt.QWidget):
         tube_filter.Update()
         node.SetAndObservePolyData(tube_filter.GetOutputDataObject(0))
         node.GetDisplayNode().SetColor(*color)
-        node.GetDisplayNode().SetVisibility(True)
+        self._show_unless_original_hidden(node)
 
     def hide_axis(self, label):
         node = self.axis_nodes.get(label)
