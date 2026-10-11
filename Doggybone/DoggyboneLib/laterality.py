@@ -8,7 +8,7 @@ anatomical frame built from the landmarks (RAS is right-handed):
 
     lateral . (cranial x proximal)  > 0  ->  right limb,   < 0  ->  left limb
 
-Femur   proximal = shaft axis (50 % -> 30 % midpoint)
+Femur   proximal = shaft axis (50 % -> 33 % midpoint)
         lateral  = medial -> lateral condyle
         cranial  = opposite of the caudal offset of the condyles from the shaft axis
         check    : the femoral head must lie MEDIAL of the shaft axis
@@ -29,7 +29,7 @@ MIN_PLATEAU_MM = 4.0            # tibia: cranio-caudal extent of the two plateau
 MIN_ML_MM = 5.0                 # medial <-> lateral landmark distance across the axis
 MAX_DISTAL_ML_ANGLE = 90.0      # tibia: proximal vs. distal medio-lateral direction
 
-FEMUR_REQUIRED = ("Femur midpoint 30%", "Femur midpoint 50%", "medial femur condyle", "lateral femur condyle")
+FEMUR_REQUIRED = ("Femur midpoint 33%", "Femur midpoint 50%", "medial femur condyle", "lateral femur condyle")
 TIBIA_PAIRS_PROXIMAL = (("condylus medialis tibiae", "condylus lateralis tibiae"),
                         ("medial condyle articulation point tibia", "lateral condyle articulation point tibia"))
 TIBIA_PAIRS_DISTAL = (("medial cochlea", "lateral cochlea"),

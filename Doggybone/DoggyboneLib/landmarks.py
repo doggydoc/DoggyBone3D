@@ -64,8 +64,8 @@ LANDMARKS = [
     SphereLandmark('lateral femur condyle',
                    "Place the center inside the lateral condyle, then adjust the sphere's radius until it best matches the condyle surface.",
                    r"Resources/descriptions/lateralfemurcondyle.png"),
-    SimpleLandmark('Femur midpoint 30%',
-                   "Choose the point at 30 % of the femoral length, measured from the proximal end, in the middle of the diaphysis.",
+    SimpleLandmark('Femur midpoint 33%',
+                   "Choose the point at 33 % of the femoral length (one third), measured from the proximal end, in the middle of the diaphysis.",
                    r"Resources/descriptions/proxfemurmidpoint.png"),
     SimpleLandmark('Femur midpoint 50%',
                    "Choose the point at 50 % of the femoral length (mid-femur), in the middle of the diaphysis.",
@@ -77,3 +77,12 @@ LANDMARKS = [
                    "Place the center inside the femoral head, then adjust the sphere's radius until it best matches the articular surface.",
                    r"Resources/descriptions/point on femur head.png")
 ]
+
+# Earlier names of landmarks -> current name. Saved scenes and exported landmark files that still use
+# an old name are recognised (see DoggyboneWidget._relink_existing_landmarks and the CSV import).
+LEGACY_LANDMARK_NAMES = {"Femur midpoint 30%": "Femur midpoint 33%"}
+
+
+def current_landmark_name(name):
+    return LEGACY_LANDMARK_NAMES.get(name, name)
+

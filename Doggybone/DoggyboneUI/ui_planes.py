@@ -44,7 +44,7 @@ class PlanesMixin:
     FEMUR_PLANE_LEVEL_TO_CONDYLES = 0.5
 
     # The two landmarks that define the anatomical shaft axis of each bone (proximal, distal).
-    SHAFT_AXIS_LANDMARKS = {"Femur": ("Femur midpoint 30%", "Femur midpoint 50%"),
+    SHAFT_AXIS_LANDMARKS = {"Femur": ("Femur midpoint 33%", "Femur midpoint 50%"),
                             "Tibia": ("proximal tibia midpoint", "distal tibia midpoint")}
 
     def _get_plane_frame(self, plane_node, side=None, bone=None):

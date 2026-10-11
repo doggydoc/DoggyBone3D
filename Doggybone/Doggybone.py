@@ -1841,9 +1841,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         by_name = {landmark.name: landmark for landmark in panel.landmarks}
         linked = []
         for i in reversed(range(node.GetNumberOfControlPoints())):
-            landmark = by_name.get(node.GetNthControlPointLabel(i))
+            label = node.GetNthControlPointLabel(i)
+            landmark = by_name.get(landmarks.current_landmark_name(label))
             if landmark is None or landmark.placed:
                 continue
+            if label != landmark.name:                  # saved with an earlier landmark name
+                node.SetNthControlPointLabel(i, landmark.name)
             landmark._id = i
             landmark.placed = True
             node.SetNthControlPointLocked(i, True)
@@ -2103,7 +2106,7 @@ class MeasurementsPanel(qt.QWidget):
                                     quoting=csv.QUOTE_MINIMAL)
             for row in reader:
                 try:
-                    name = row['landmark name']
+                    name = landmarks.current_landmark_name(row['landmark name'])
                     x = _csv_float(row['x'])
                     y = _csv_float(row['y'])
                     z = _csv_float(row['z'])
@@ -2792,13 +2795,13 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
         return slicer.modules.doggybone.widgetRepresentation().self()
 
     def _place_femur_landmarks(self, widget, side="right", lateral_z=8.0):
-        """Synthetic straight femur along -z (proximal at the top): head, neck, 30 % / 50 % midpoints,
+        """Synthetic straight femur along -z (proximal at the top): head, neck, 33 % / 50 % midpoints,
         condyles. lateral_z < 12 tilts the condylar axis (varus)."""
         panel = widget.right_panel if side == "right" else widget.left_panel
         node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
         landmarks = {l.name: l for l in panel.landmarks}
         points = {"femur head": ((0, 0, 200), 10.0), "femur neck": ((4, 0, 188), None),
-                  "Femur midpoint 30%": ((0, 0, 140), None), "Femur midpoint 50%": ((0, 0, 80), None),
+                  "Femur midpoint 33%": ((0, 0, 140), None), "Femur midpoint 50%": ((0, 0, 80), None),
                   "medial femur condyle": ((-12, 0, 12), 9.0), "lateral femur condyle": ((12, 0, lateral_z), 9.0)}
         for name, (position, radius) in points.items():
             landmark = landmarks[name]
@@ -2838,7 +2841,7 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
         def aldfa(target):
             dz = 24.0 * math.tan(math.radians(target - 90.0))
             points = {"medial femur condyle": np.array([-12.0, 0, 10]), "lateral femur condyle": np.array([12.0, 0, 10 - dz]),
-                      "Femur midpoint 30%": np.array([0.0, 0, 140]), "Femur midpoint 50%": np.array([0.0, 0, 80])}
+                      "Femur midpoint 33%": np.array([0.0, 0, 140]), "Femur midpoint 50%": np.array([0.0, 0, 80])}
             radii = {name: 9.0 for name in points}
             return femur._measure(points, radii)
 
@@ -2877,7 +2880,7 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
             angle = np.radians(6.0)
             rotation = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
             predicted = {}
-            for level in (90.0, 40.0, 135.0):    # near the 50 % landmark / distal to both / near the 30 % one
+            for level in (90.0, 40.0, 135.0):    # near the 50 % landmark / distal to both / near the 33 % one
                 origin = np.array([0.0, 0.0, level])
                 H = np.eye(4)
                 H[:3, :3] = rotation

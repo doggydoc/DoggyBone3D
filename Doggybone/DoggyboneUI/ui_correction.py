@@ -36,7 +36,7 @@ class CorrectionMixin:
         # fallback (no anatomical frame): a proximal landmark
         panel = self.left_panel if side == "left" else self.right_panel
         node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
-        proximal_names = (["femur head", "femur neck", "Femur midpoint 30%"] if bone == "Femur"
+        proximal_names = (["femur head", "femur neck", "Femur midpoint 33%"] if bone == "Femur"
                           else ["intercondylar eminence", "proximal tibia midpoint", "condylus medialis tibiae"])
         for name in proximal_names:
             for landmark in panel.landmarks:

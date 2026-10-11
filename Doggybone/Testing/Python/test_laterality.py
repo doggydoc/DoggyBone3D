@@ -19,7 +19,7 @@ lat = _load("laterality")
 
 # RIGHT hind limb in its anatomical frame: +x lateral, +y cranial, +z proximal (mm)
 RIGHT = {
-    "Femur midpoint 30%": (0, 4, 140), "Femur midpoint 50%": (0, 2, 100), "femur head": (-18, 6, 205),
+    "Femur midpoint 33%": (0, 4, 140), "Femur midpoint 50%": (0, 2, 100), "femur head": (-18, 6, 205),
     "femur neck": (-6, 2, 190), "medial femur condyle": (-14, -28, 12), "lateral femur condyle": (14, -28, 12),
     "distal tibia midpoint": (0, 0, -200), "proximal tibia midpoint": (0, 0, -50),
     "intercondylar eminence": (0, 0, 0), "condylus medialis tibiae": (-15, -12, -5),

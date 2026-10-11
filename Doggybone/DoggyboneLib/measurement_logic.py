@@ -355,7 +355,7 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
             "lateral femur condyle": (lateral_condyle, lateral_radius),
         }
         self.axes = {
-            "Femoral shaft axis": (point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 30%"]),
+            "Femoral shaft axis": (point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 33%"]),
             "Femoral condylar axis": (medial_condyle, lateral_condyle),
         }
 
@@ -371,7 +371,7 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
         # gives the supplementary angle (180 - angle), which read Valgus for that known-varus
         # case - the earlier "point distally" convention was calibrated against the now-removed
         # plane projection and doesn't carry over to the raw 3D angle.
-        vector_axis_femur_vv = vector_with_two_points(point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 30%"])
+        vector_axis_femur_vv = vector_with_two_points(point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 33%"])
         vector_dist_femur_vv = vector_with_two_points(medial_condyle, lateral_condyle)
 
         # aLDFA: the femoral (anatomical) axis stands at 90 deg on the condylar axis. Varus
@@ -388,7 +388,7 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
 class AntetorsionMeasurement(BaseMeasurement):
     SPHERE_LABELS = ["femur head", "medial femur condyle", "lateral femur condyle"]
     AXIS_LABELS = ["Femoral condylar axis", "Femoral neck axis", "Femoral shaft axis"]
-    LANDMARK_ORDER = ["femur head", "femur neck", "Femur midpoint 30%", "Femur midpoint 50%",
+    LANDMARK_ORDER = ["femur head", "femur neck", "Femur midpoint 33%", "Femur midpoint 50%",
                       "medial femur condyle", "lateral femur condyle"]
 
     def __init__(self):
@@ -413,19 +413,19 @@ class AntetorsionMeasurement(BaseMeasurement):
             "medial femur condyle": (medial_condyle, medial_radius),
             "lateral femur condyle": (lateral_condyle, lateral_radius),
         }
-        # Femoral (anatomical) shaft axis: drawn only between the two placed midpoints (50 % / 30 %),
+        # Femoral (anatomical) shaft axis: drawn only between the two placed midpoints (50 % / 33 %),
         # like in the aLDFA measurement - no extension beyond the landmarks.
         self.axes = {
             "Femoral condylar axis": (medial_condyle, lateral_condyle),
             "Femoral neck axis": (center, point_dict["femur neck"]),
-            "Femoral shaft axis": (point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 30%"]),
+            "Femoral shaft axis": (point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 33%"]),
         }
-        # aLDFA from the same landmarks (shaft 30 % / 50 %, condyles) - shown together with the
+        # aLDFA from the same landmarks (shaft 33 % / 50 %, condyles) - shown together with the
         # antetorsion; the stand-alone aLDFA measurement is unchanged
         aldfa = VarusValgusFemurMeasurement()
         aldfa.side = self.side
         self._aldfa = aldfa._measure(point_dict, radius_dict)
-        normal = vector_with_two_points(point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 30%"])
+        normal = vector_with_two_points(point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 33%"])
         vector_distal_femur = vector_with_two_points(medial_condyle, lateral_condyle)
         vector_femur_neck = vector_with_two_points(center, point_dict["femur neck"])
         
