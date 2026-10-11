@@ -1608,11 +1608,15 @@ def apply_hinge_stop(slots, stop):
     return ("Hinge stop: " + ", ".join(notes) + " - frame closed there, the hinge cannot be cut through.") if notes else ""
 
 
-def hinge_strut(slots, block=None, neck_radius=1.0, neck_height=2.0, bar_width=3.0, bar_thickness=2.0, sink=0.5):
+def hinge_strut(slots, block=None, neck_radius=1.0, neck_height=2.0, bar_width=3.0, bar_thickness=2.0, sink=0.5,
+                clearance=0.5):
     """Break-off strut across the closing wedge AT THE HINGE: a flat bridge (bar_width x bar_thickness,
     default 3 x 2 mm) from the proximal to the distal outer wall of the saw block, standing on the
     block's real top surface on two round posts (default 2 mm thick, 2 mm high) - break it off with
-    pliers once the guide is pinned. With `block` (the saw_block_pair mesh) the
+    pliers once the guide is pinned. The posts never reach into a kerf: each stands at least
+    `clearance` mm away from BOTH cutting slots (checked against both kerf planes - near the hinge the
+    two kerfs cross; each post runs parallel to its own wall); if that is not possible at the hinge, the strut
+    moves towards the slot centre. With `block` (the saw_block_pair mesh) the
     feet are found by casting rays down onto the block, so they always sit on it; if the walls do
     not reach the hinge position the strut moves towards the slot centre until both feet sit.
     Returns a closed polydata (two posts + the bridge, overlapping closed shells) or None."""
@@ -1628,41 +1632,62 @@ def hinge_strut(slots, block=None, neck_radius=1.0, neck_height=2.0, bar_width=3
         side = float(slot.get("side") or 1.0)
         frames.append((C, u, v, n, side, u_h, float(slot["v_top"])))
     up = unit(frames[0][2] + frames[1][2])
-    mid_wall = 0.5 * SLOT_WIDTH + 0.5 * SLOT_WALL                # middle of each outer wall
+    half = 0.5 * SLOT_WIDTH
+    post_offset = half + neck_radius + clearance + 0.1           # post centre from its own kerf centre
+    kerfs = [(np.asarray(sl["centre"], float), unit(np.asarray(sl["normal"], float))) for sl in good]
+
+    def clear_of_kerfs(point):
+        # + 0.05 mm: the 24-sided post reaches slightly beyond its nominal radius between the corners
+        return all(abs(float((point - Ck) @ nk)) - half >= neck_radius + clearance + 0.05 for Ck, nk in kerfs)
     obb = None
     if block is not None and block.GetNumberOfPoints() > 0:
         obb = vtk.vtkOBBTree()
         obb.SetDataSet(block)
         obb.BuildLocator()
 
-    def top_hit(point):
-        """Highest point of the block straight below / above `point` (None without a hit)."""
+    def top_hit(point, axis):
+        """Highest point (along `axis`) of the block on the line through `point` along `axis`."""
         if obb is None:
             return point
         hits = vtk.vtkPoints()
-        obb.IntersectWithLine([float(x) for x in point + 30.0 * up], [float(x) for x in point - 30.0 * up], hits, None)
+        obb.IntersectWithLine([float(x) for x in point + 30.0 * axis], [float(x) for x in point - 30.0 * axis],
+                              hits, None)
         if hits.GetNumberOfPoints() == 0:
             return None
         found = [np.array(hits.GetPoint(i)) for i in range(hits.GetNumberOfPoints())]
-        return max(found, key=lambda q: float(q @ up))
+        return max(found, key=lambda q: float(q @ axis))
+
+    def post_ends(foot, axis, level):
+        """Post along `axis` (its own wall direction) from below the foot to inside the bridge."""
+        lift = float(axis @ up)
+        if lift < 0.3:
+            return None
+        t_top = (level - float(foot @ up)) / lift
+        return foot - sink * axis, foot + t_top * axis, foot + (t_top + 0.5 * bar_thickness / lift) * axis
 
     feet = None
     for step in np.arange(0.0, 12.01, 0.5):                     # from the hinge towards the slot centre
         candidate = []
         for C, u, v, n, side, u_h, v_top in frames:
             u_at = u_h - np.sign(u_h) * step
-            guess = C + u_at * u + v_top * v - side * mid_wall * n
-            hit = top_hit(guess)
-            if hit is None or abs(float((hit - guess) @ up)) > 3.0:     # no wall here (e.g. over a kerf)
+            guess = C + u_at * u + v_top * v - side * post_offset * n
+            hit = top_hit(guess, v)                          # along the wall: same distance to its kerf
+            if hit is None or abs(float((hit - guess) @ v)) > 3.0:     # no wall here (e.g. over a kerf)
                 break
-            candidate.append(hit)
-        if len(candidate) == 2:
+            candidate.append((hit, v))
+        if len(candidate) != 2:
+            continue
+        level = max(float(f @ up) for f, _ in candidate) + neck_height
+        ends = [post_ends(f, a, level) for f, a in candidate]
+        if any(e is None for e in ends):
+            continue
+        # the whole post, from its sunk foot into the bridge, stays clear of both kerfs
+        if all(clear_of_kerfs(lo + k / 8.0 * (hi - lo)) for lo, _, hi in ends for k in range(9)):
             feet = candidate
             break
     if feet is None:
         return None
-    top_level = max(float(f @ up) for f in feet)                 # posts end at one common level
-    post_tops = [f + (top_level - float(f @ up) + neck_height) * up for f in feet]
+    post_tops = [e[1] for e in ends]
 
     def closed(source_output):
         tri = vtk.vtkTriangleFilter()
@@ -1681,10 +1706,10 @@ def hinge_strut(slots, block=None, neck_radius=1.0, neck_height=2.0, bar_width=3
         return part
 
     append = vtk.vtkAppendPolyData()
-    for foot, post_top in zip(feet, post_tops):                    # round posts, sunk into the block
+    for lo, _, hi in ends:                                         # round posts, sunk into the block
         line = vtk.vtkLineSource()
-        line.SetPoint1(*[float(x) for x in foot - sink * up])
-        line.SetPoint2(*[float(x) for x in post_top + 0.5 * bar_thickness * up])   # into the bridge
+        line.SetPoint1(*[float(x) for x in lo])
+        line.SetPoint2(*[float(x) for x in hi])                    # into the bridge
         tube = vtk.vtkTubeFilter()
         tube.SetInputConnection(line.GetOutputPort())
         tube.SetRadius(float(neck_radius))
