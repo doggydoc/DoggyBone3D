@@ -393,6 +393,24 @@ class PlanesMixin:
         self._configure_plane_size(node, side, bone, **kwargs)
         return node, True, f"{label} master plane created. Position and orient it manually, then create the second plane."
 
+    def _refresh_views(self):
+        """Redraw all slice and 3D views now and once more right after the click has been handled.
+        On macOS Slicer otherwise keeps showing the old picture after many scene changes in one
+        button handler until the window loses and regains focus (e.g. switching to the Finder)."""
+        def render():
+            layout_manager = slicer.app.layoutManager()
+            if layout_manager is None:
+                return
+            for name in layout_manager.sliceViewNames():
+                widget = layout_manager.sliceWidget(name)
+                if widget is not None:
+                    widget.sliceView().forceRender()
+            for index in range(layout_manager.threeDViewCount):
+                layout_manager.threeDWidget(index).threeDView().forceRender()
+        render()
+        qt.QTimer.singleShot(0, render)
+        qt.QTimer.singleShot(150, render)
+
     def onInsertMasterPlane(self):
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
@@ -429,6 +447,8 @@ class PlanesMixin:
                     + ("" if "aligned" in self.osteotomy_status.text else self.osteotomy_status.text))
         except Exception as exc:
             self.osteotomy_status.setText(f"Could not create master plane: {exc}")
+        finally:
+            self._refresh_views()
 
     def onCreateDerivedPlane(self):
         side = self.osteotomy_side.currentText.lower()
@@ -457,6 +477,7 @@ class PlanesMixin:
         advice = self._cwo_wedge_advice(side, bone) if hasattr(self, "_cwo_wedge_advice") else ""
         if advice and hasattr(self, "correction_status"):
             self.correction_status.setText(advice)
+        self._refresh_views()
 
 
     def _sync_other_plane(self, side, bone):
