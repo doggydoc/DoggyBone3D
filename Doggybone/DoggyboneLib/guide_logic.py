@@ -1608,13 +1608,14 @@ def apply_hinge_stop(slots, stop):
     return ("Hinge stop: " + ", ".join(notes) + " - frame closed there, the hinge cannot be cut through.") if notes else ""
 
 
-def hinge_strut(slots, block=None, bar_radius=1.3, neck_radius=0.55, neck_height=2.0, sink=0.5):
-    """Break-off strut across the closing wedge AT THE HINGE: a round bar from the proximal to the
-    distal outer wall of the saw block, standing on the block's real top surface on two thin necks
-    (break them with pliers once the guide is pinned). With `block` (the saw_block_pair mesh) the
+def hinge_strut(slots, block=None, neck_radius=1.0, neck_height=2.0, bar_width=3.0, bar_thickness=2.0, sink=0.5):
+    """Break-off strut across the closing wedge AT THE HINGE: a flat bridge (bar_width x bar_thickness,
+    default 3 x 2 mm) from the proximal to the distal outer wall of the saw block, standing on the
+    block's real top surface on two round posts (default 2 mm thick, 2 mm high) - break it off with
+    pliers once the guide is pinned. With `block` (the saw_block_pair mesh) the
     feet are found by casting rays down onto the block, so they always sit on it; if the walls do
     not reach the hinge position the strut moves towards the slot centre until both feet sit.
-    Returns a closed polydata (three overlapping closed tubes) or None."""
+    Returns a closed polydata (two posts + the bridge, overlapping closed shells) or None."""
     good = [s for s in slots if "error" not in s]
     if len(good) != 2:
         return None
@@ -1660,22 +1661,13 @@ def hinge_strut(slots, block=None, bar_radius=1.3, neck_radius=0.55, neck_height
             break
     if feet is None:
         return None
-    top_level = max(float(f @ up) for f in feet)                 # bar level: above the higher foot
-    tops = [f + (top_level - float(f @ up) + neck_height + bar_radius) * up for f in feet]
-    append = vtk.vtkAppendPolyData()
-    for a, b, r in ((feet[0] - sink * up, tops[0], neck_radius), (feet[1] - sink * up, tops[1], neck_radius),
-                    (tops[0], tops[1], bar_radius)):
-        line = vtk.vtkLineSource()
-        line.SetPoint1(*[float(x) for x in a])
-        line.SetPoint2(*[float(x) for x in b])
-        tube = vtk.vtkTubeFilter()
-        tube.SetInputConnection(line.GetOutputPort())
-        tube.SetRadius(float(r))
-        tube.SetNumberOfSides(20)
-        tube.CappingOn()
+    top_level = max(float(f @ up) for f in feet)                 # posts end at one common level
+    post_tops = [f + (top_level - float(f @ up) + neck_height) * up for f in feet]
+
+    def closed(source_output):
         tri = vtk.vtkTriangleFilter()
-        tri.SetInputConnection(tube.GetOutputPort())
-        weld = vtk.vtkCleanPolyData()                    # caps share the end rings -> closed shell
+        tri.SetInputData(source_output)
+        weld = vtk.vtkCleanPolyData()                    # shared edges -> closed shell
         weld.SetInputConnection(tri.GetOutputPort())
         weld.SetTolerance(1e-6)
         normals = vtk.vtkPolyDataNormals()
@@ -1686,7 +1678,47 @@ def hinge_strut(slots, block=None, bar_radius=1.3, neck_radius=0.55, neck_height
         normals.Update()
         part = vtk.vtkPolyData()
         part.DeepCopy(normals.GetOutput())
-        append.AddInputData(part)
+        return part
+
+    append = vtk.vtkAppendPolyData()
+    for foot, post_top in zip(feet, post_tops):                    # round posts, sunk into the block
+        line = vtk.vtkLineSource()
+        line.SetPoint1(*[float(x) for x in foot - sink * up])
+        line.SetPoint2(*[float(x) for x in post_top + 0.5 * bar_thickness * up])   # into the bridge
+        tube = vtk.vtkTubeFilter()
+        tube.SetInputConnection(line.GetOutputPort())
+        tube.SetRadius(float(neck_radius))
+        tube.SetNumberOfSides(24)
+        tube.CappingOn()
+        tube.Update()
+        append.AddInputData(closed(tube.GetOutput()))
+    # flat bridge on the posts: along the line between them, bar_width wide, bar_thickness high
+    along = post_tops[1] - post_tops[0]
+    along = along - float(along @ up) * up
+    length = float(np.linalg.norm(along))
+    if length < 1e-6:
+        return None
+    along = along / length
+    across = np.cross(up, along)
+    centre = 0.5 * (post_tops[0] + post_tops[1]) + 0.5 * bar_thickness * up
+    cube = vtk.vtkCubeSource()
+    cube.SetXLength(length + 2.0 * neck_radius + 1.0)            # covers both posts completely
+    cube.SetYLength(float(bar_width))
+    cube.SetZLength(float(bar_thickness))
+    cube.Update()
+    matrix = vtk.vtkMatrix4x4()
+    for r in range(3):
+        matrix.SetElement(r, 0, float(along[r]))
+        matrix.SetElement(r, 1, float(across[r]))
+        matrix.SetElement(r, 2, float(up[r]))
+        matrix.SetElement(r, 3, float(centre[r]))
+    place = vtk.vtkTransform()
+    place.SetMatrix(matrix)
+    placed = vtk.vtkTransformPolyDataFilter()
+    placed.SetInputConnection(cube.GetOutputPort())
+    placed.SetTransform(place)
+    placed.Update()
+    append.AddInputData(closed(placed.GetOutput()))
     append.Update()
     out = vtk.vtkPolyData()
     out.DeepCopy(append.GetOutput())

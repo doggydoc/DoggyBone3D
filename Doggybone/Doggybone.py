@@ -1033,9 +1033,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.guide_hinge_stop.valueChanged.connect(lambda _v: self._refresh_guide_body_if_present())
         guide_fields.append(("Hinge stop", self.guide_hinge_stop))
         self.guide_hinge_strut = combo(["Off", "Break-off strut"], "Off",
-                                       "Closing wedge: an extra round bar over the hinge-side end of the saw block, "
-                                       "across both kerfs, on two thin necks - it stiffens the frame while the guide "
-                                       "is placed and pinned; break it off with pliers before sawing.")
+                                       "Closing wedge: a flat bridge (3 x 2 mm) across both kerfs at the hinge, on two "
+                                       "round posts (2 mm thick, 2 mm high) standing on the proximal and distal wall of "
+                                       "the saw block - it stiffens the frame while the guide is placed and pinned; "
+                                       "break it off with pliers before sawing.")
         guide_fields.append(("Hinge strut", self.guide_hinge_strut))
         self.guide_saw_type = combo(["Slot", "Block"], "Slot",
                                     "Slot: the blade runs in a closed slot (guided on both sides).\n"
