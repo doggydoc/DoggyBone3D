@@ -154,6 +154,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
+        # macOS: after a layout switch (e.g. 3D view -> four-up) the window often keeps showing the old
+        # picture until it loses focus - redraw everything once the new layout is in place
+        layout_manager = slicer.app.layoutManager()
+        if layout_manager is not None:
+            layout_manager.layoutChanged.connect(self._on_layout_changed)
 
         #####################
         # GUI and connections
@@ -1249,7 +1254,24 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._scene_reset_pending = True
         qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule("Doggybone"))
 
+    def _on_layout_changed(self, *_args):
+        def redraw():
+            try:
+                slicer.util.forceRenderAllViews()
+                window = slicer.util.mainWindow()
+                if window is not None:
+                    window.update()
+                    window.repaint()
+            except Exception:
+                logging.exception("Doggybone: redraw after layout change failed (continuing)")
+        for delay in (0, 150, 500):
+            qt.QTimer.singleShot(delay, redraw)
+
     def cleanup(self):
+        try:
+            slicer.app.layoutManager().layoutChanged.disconnect(self._on_layout_changed)
+        except Exception:
+            pass
         for node, tag in getattr(self, "_landmark_observers", []):
             try:
                 node.RemoveObserver(tag)
