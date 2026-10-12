@@ -1615,12 +1615,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if not ready:
             return False, 0.0, f"Place the landmarks for '{name}' ({side}) first."
         # Convert the magnitude-only measurement into a signed anatomical value. Target values
-        # are entered in the positive named direction (Antetorsion for femur; Innenrotation for
+        # are entered in the positive named direction (Antetorsion for femur; internal torsion for
         # tibia). This keeps the UI clinical while preserving a deterministic transform sign.
         if bone == "Femur":
             current_signed = value if description == "Antetorsion" else -value
         else:
-            current_signed = value if description == "Innenrotation" else -value
+            current_signed = value if description.startswith("Internal") else -value
         target_signed = self.target_rotation_value.value
         return True, target_signed - current_signed, (
             f"{name}: current {current_signed:+.1f}°, target {target_signed:+.1f}°")

@@ -484,7 +484,7 @@ class CorrectionMixin:
     def _signed_rotation_value(bone, value, description):
         if bone == "Femur":
             return value if description == "Antetorsion" else -value
-        return value if description == "Innenrotation" else -value
+        return value if description.startswith("Internal") else -value
 
     # A cut BETWEEN the two shaft-axis landmarks: warn when the post-op value measured through both
     # midpoints differs from the planned value (axis of the fragment that carries the shaft) by more than this.

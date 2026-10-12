@@ -147,9 +147,9 @@ class TibiaTorsionMeasurement(BaseMeasurement):
         q = np.dot(t,normal)
         
         if self.side.lower() == "right":
-            return a, "Innenrotation" if q > 0 else "Aussenrotation"
+            return a, "Internal torsion" if q > 0 else "External torsion"
         elif self.side.lower() == "left":
-            return a, "Aussenrotation" if q > 0 else "Innenrotation"
+            return a, "External torsion" if q > 0 else "Internal torsion"
         else:
             raise ValueError(f"Unknown side {self.side}")
 
@@ -296,9 +296,9 @@ class TibiotalarRotationMeasurement(BaseMeasurement):
         q = np.dot(t,normal)
         
         if self.side.lower() == "right":
-            return a, "Innenrotation" if q > 0 else "Aussenrotation"
+            return a, "Internal rotation" if q > 0 else "External rotation"
         elif self.side.lower() == "left":
-            return a, "Aussenrotation" if q > 0 else "Innenrotation"
+            return a, "External rotation" if q > 0 else "Internal rotation"
         else:
             raise ValueError(f"Unknown side {self.side}")
 
@@ -334,9 +334,9 @@ class FemorotibialRotationMeasurement(BaseMeasurement):
         q = np.dot(t,normal)
         
         if self.side.lower() == "right":
-            return a, "Innenrotation" if q > 0 else "Aussenrotation"
+            return a, "Internal rotation" if q > 0 else "External rotation"
         elif self.side.lower() == "left":
-            return a, "Aussenrotation" if q > 0 else "Innenrotation"
+            return a, "External rotation" if q > 0 else "Internal rotation"
         else:
             raise ValueError(f"Unknown side {self.side}")
 
@@ -438,9 +438,9 @@ class AntetorsionMeasurement(BaseMeasurement):
         q = np.dot(t,normal)
         
         if self.side.lower() == "right":
-            return a, "no Antetorsion" if q > 0 else "Antetorsion"
+            return a, "Retrotorsion" if q > 0 else "Antetorsion"
         elif self.side.lower() == "left":
-            return a, "Antetorsion" if q > 0 else "no Antetorsion"
+            return a, "Antetorsion" if q > 0 else "Retrotorsion"
         else:
             raise ValueError(f"Unknown side {self.side}")
         
@@ -474,12 +474,12 @@ class TibialMetatarsalAngleMeasurement(BaseMeasurement):
         vector_distal_proj = project_vector_to_plane_from_normal(normal, vector_distal)
         tma = angle(vector_proximal_proj, vector_distal_proj) * 180 / math.pi
         # Below 90 deg: the metatarsal axis has rotated toward the condylar axis's own lateral
-        # direction (outward). Above 90 deg: rotated the other way (inward). Verified via
+        # direction (external). Above 90 deg: rotated the other way (internal). Verified via
         # controlled rotation-based synthetic geometry - needs no side-dependent sign logic,
         # since "medial -> lateral" is already a correctly side-oriented vector by construction,
         # same reasoning as the aLDFA magnitude-only comparison.
         is_outward = tma < 90
         deviation = abs(tma - 90)
-        return deviation, "Outward rotation" if is_outward else "Inward rotation"
+        return deviation, "External rotation" if is_outward else "Internal rotation"
 
 
