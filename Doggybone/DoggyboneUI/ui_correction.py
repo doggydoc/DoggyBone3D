@@ -36,7 +36,7 @@ class CorrectionMixin:
         # fallback (no anatomical frame): a proximal landmark
         panel = self.left_panel if side == "left" else self.right_panel
         node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
-        proximal_names = (["femur head", "femur neck", "Femur midpoint 30%"] if bone == "Femur"
+        proximal_names = (["femur head", "femur neck", "Femur midpoint 33%"] if bone == "Femur"
                           else ["intercondylar eminence", "proximal tibia midpoint", "condylus medialis tibiae"])
         for name in proximal_names:
             for landmark in panel.landmarks:
@@ -434,21 +434,8 @@ class CorrectionMixin:
         self._ensure_fine_shift_nodes(side, bone, transform_node)
         self._apply_fine_shift(update_combined=True, move_gizmo=True)
 
-        # Optionally hide the original segmentation so the corrected preview is not obscured by
-        # overlapping surfaces. Preserve its previous 3D visibility and restore it on Remove preview.
-        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
-        if segmentation_node is not None and segmentation_node.GetDisplayNode() is not None:
-            display_node = segmentation_node.GetDisplayNode()
-            if not hasattr(self, "_original_segmentation_visibility_3d"):
-                try:
-                    self._original_segmentation_visibility_3d = bool(display_node.GetVisibility3D())
-                except Exception:
-                    self._original_segmentation_visibility_3d = bool(display_node.GetVisibility())
-            if self.hide_original_in_preview.isChecked():
-                if hasattr(display_node, "SetVisibility3D"):
-                    display_node.SetVisibility3D(False)
-                else:
-                    display_node.SetVisibility(False)
+        # the original segmentation gives way to the corrected preview in 3D (see _sync_original_segmentation)
+        self._sync_original_segmentation()
 
         self.correction_status.setText(
             f"Preview active ({self.osteotomy_technique.currentText}): wedge {wedge_description}, "
@@ -462,6 +449,8 @@ class CorrectionMixin:
         if advice:
             self.correction_status.setText(self.correction_status.text + "\n" + advice)
         self._update_corrected_landmarks()
+        self.onHideAnnotationsToggled(True)            # cutting planes hidden while the preview is shown
+        self._apply_landmark_label_visibility()         # landmark names: 'Hide all landmark descriptions'
 
         # After the cut only the X/Y gizmo on the contact (master) face stays interactive; the
         # cutting planes' own handles are switched off so they cannot be moved by accident.
@@ -495,30 +484,40 @@ class CorrectionMixin:
     def _signed_rotation_value(bone, value, description):
         if bone == "Femur":
             return value if description == "Antetorsion" else -value
-        return value if description == "Innenrotation" else -value
+        return value if description.startswith("Internal") else -value
 
     # A cut BETWEEN the two shaft-axis landmarks: warn when the post-op value measured through both
-    # midpoints differs from the planned (fixed-fragment axis) value by more than this.
+    # midpoints differs from the planned value (axis of the fragment that carries the shaft) by more than this.
     SPLIT_AXIS_WARNING_DEG = 4.0
 
-    def _split_shaft_axis_names(self, bone, positions, origin, normal, distal_sign):
-        """Names of the two shaft-axis landmarks if the cut lies BETWEEN them (one on each side),
-        otherwise an empty set. positions: {landmark name: point}."""
+    def _split_shaft_axis(self, bone, positions, origin, normal, distal_sign):
+        """(names, axis_on_distal_fragment) if the cut lies BETWEEN the two shaft-axis landmarks, else
+        (set(), None). The shaft axis then belongs as a whole to the fragment that carries the larger
+        part of the segment between the two landmarks: a cut close to the distal landmark (distal
+        femoral osteotomy) leaves the axis on the proximal fragment, a cut close to the proximal
+        landmark (proximal tibial osteotomy) puts it on the distal fragment."""
         names = [name for name in self.SHAFT_AXIS_LANDMARKS.get(bone, ()) if name in positions]
         if len(names) != 2:
-            return set()
-        sides = {float(np.dot(np.asarray(positions[name], dtype=float) - origin, normal)) * distal_sign > 0.0
-                 for name in names}
-        return set(names) if len(sides) == 2 else set()
+            return set(), None
+        depth = {name: float(np.dot(np.asarray(positions[name], dtype=float) - origin, normal)) * distal_sign
+                 for name in names}                    # > 0: on the distal side of the cut
+        if (depth[names[0]] > 0.0) == (depth[names[1]] > 0.0):
+            return set(), None
+        distal_part = max(depth.values()) / (max(depth.values()) - min(depth.values()))
+        return set(names), distal_part >= 0.5
+
+    def _split_shaft_axis_names(self, bone, positions, origin, normal, distal_sign):
+        return self._split_shaft_axis(bone, positions, origin, normal, distal_sign)[0]
 
     def _predict_measurements(self, side, bone, H, plane_origin, plane_normal, moving_is_distal,
                               keep_split_axis=True):
         '''Move the landmarks lying on the MOVING side of the given (fixed) cut plane by the 4x4
         matrix H, read the wedge and torsion measurements, and restore the landmarks exactly.
-        If the cut lies between the two shaft-axis landmarks, both stay where they are
-        (keep_split_axis): the joint is then measured against the axis of the FIXED fragment
-        instead of a line across the osteotomy. keep_split_axis=False gives the value that would
-        be measured through both midpoints after healing (used only for the split-axis warning).
+        If the cut lies between the two shaft-axis landmarks (keep_split_axis), both go with the
+        fragment that carries the larger part of the shaft (see _split_shaft_axis): the joints are then
+        measured against that fragment's axis instead of a line across the osteotomy.
+        keep_split_axis=False gives the value that would be measured through both midpoints after
+        healing (used only for the split-axis warning).
         Returns {"wedge": value or None, "torsion": signed value or None, "axis_split": bool} or None.'''
         panel = self.left_panel if side == "left" else self.right_panel
         fiducials = slicer.mrmlScene.GetNodeByID(panel.markup_node_id) if getattr(panel, "markup_node_id", None) else None
@@ -535,16 +534,15 @@ class CorrectionMixin:
         index_by_name = {l.name: l._id for l in getattr(panel, "landmarks", [])
                          if getattr(l, "placed", False) and getattr(l, "_id", None) is not None
                          and 0 <= l._id < len(originals)}
-        split_names = self._split_shaft_axis_names(
+        split_names, axis_on_distal = self._split_shaft_axis(
             bone, {name: originals[i] for name, i in index_by_name.items()}, o, n, distal_sign)
-        keep_ids = {index_by_name[name] for name in split_names} if keep_split_axis else set()
+        axis_ids = {index_by_name[name] for name in split_names} if keep_split_axis else set()
+        axis_moves = axis_on_distal == moving_is_distal
         result = {"wedge": None, "torsion": None, "axis_split": bool(split_names)}
         try:
             for i, point in enumerate(originals):
-                if i in keep_ids:
-                    continue
                 on_distal_side = float(np.dot(point - o, n)) * distal_sign > 0.0
-                if on_distal_side == moving_is_distal:
+                if (axis_moves if i in axis_ids else on_distal_side == moving_is_distal):
                     moved = (H @ np.append(point, 1.0))[:3]
                     fiducials.SetNthControlPointPositionWorld(i, *moved)
             wedge_measurement = self._get_measurement_by_name(panel, self.WEDGE_MEASUREMENT_NAME[bone])
@@ -591,7 +589,7 @@ class CorrectionMixin:
             return ""
         proximal_name, distal_name = self.SHAFT_AXIS_LANDMARKS["Femur" if bone == "Femur" else "Tibia"]
         return (f"WARNING: the cut lies between '{proximal_name}' and '{distal_name}'. The plan uses the "
-                f"axis of the fixed fragment; measured through both midpoints after healing the values "
+                f"axis of the fragment that carries most of the shaft; measured through both midpoints after healing the values "
                 f"would differ by more than {self.SPLIT_AXIS_WARNING_DEG:.0f}{deg}: " + ", ".join(big)
                 + ". Consider moving the cut out of the shaft segment between these landmarks.")
 
@@ -1294,6 +1292,31 @@ class CorrectionMixin:
     CORRECTED_PREFIX = "Doggybone {side} corrected"
     CORRECTED_STATUS_MARK = "\nCorrected position (measured on the moved landmarks): "
 
+    def _sync_original_segmentation(self):
+        """While a correction preview of the current side / bone exists, the ORIGINAL segmentation
+        is hidden in 3D (it stays in the slice views) - whatever showed it again (bone switch, guide
+        tools, opacity). Exception: the saw guide is being planned (guide panel open, saw mode) -
+        that guide sits on the uncut bone."""
+        if getattr(self, "_guide_shown_surface", None):
+            return      # a guide tool shows its own bone surface - the segmentation stays hidden meanwhile
+        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+        if segmentation_node is None or segmentation_node.GetDisplayNode() is None:
+            return
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
+        if combined is None or combined.GetPolyData() is None or combined.GetPolyData().GetNumberOfPoints() == 0:
+            return
+        guide_panel = getattr(self, "_guide_collapsible", None)
+        saw_guide_view = (getattr(self, "_guide_mode", "saw") == "saw" and guide_panel is not None
+                          and not guide_panel.collapsed)
+        display = segmentation_node.GetDisplayNode()
+        if hasattr(display, "SetVisibility3D"):
+            display.SetVisibility(True)
+            display.SetVisibility3D(saw_guide_view)
+        else:
+            display.SetVisibility(saw_guide_view)
+
     def _apply_segment_opacity(self):
         """Opacity of the preview segments (fixed + moved fragment, combined bone)."""
         slider = getattr(self, "segment_opacity_slider", None)
@@ -1307,6 +1330,7 @@ class CorrectionMixin:
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetOpacity(opacity)
+        self._sync_original_segmentation()
 
     def _original_overlay_nodes(self, side):
         panel = self.left_panel if side == "left" else self.right_panel
@@ -1315,7 +1339,24 @@ class CorrectionMixin:
         nodes = [slicer.mrmlScene.GetNodeByID(panel.markup_node_id)]
         nodes += list(getattr(panel, "sphere_nodes", {}).values())
         nodes += list(getattr(panel, "axis_nodes", {}).values())
+        # also by name - after a module reload the panel's own lists are empty, the nodes still exist
+        for label in self._all_measurement_labels(panel):
+            for suffix in (" axis", " sphere"):
+                node = slicer.mrmlScene.GetFirstNodeByName(f"Doggybone {side} {label}{suffix}")
+                if node is not None and node not in nodes:
+                    nodes.append(node)
         return [n for n in nodes if n is not None and n.GetScene() is not None and n.GetDisplayNode() is not None]
+
+    def _panel_measurements(self, panel):
+        stack = getattr(panel, "measurement_stack", None)
+        return [stack.widget(i).measurement for i in range(stack.count)] if stack is not None else []
+
+    def _all_measurement_labels(self, panel):
+        labels = set()
+        for measurement in self._panel_measurements(panel):
+            labels.update(getattr(measurement, "AXIS_LABELS", []) or [])
+            labels.update(getattr(measurement, "SPHERE_LABELS", []) or [])
+        return labels
 
     def _hide_original_overlay(self, side):
         """While the corrected landmarks are shown, hide the ORIGINAL (pre-correction) landmarks,
@@ -1344,12 +1385,25 @@ class CorrectionMixin:
     def _restore_original_overlay(self, side):
         saved = self.__dict__.get("_hidden_original_overlay", {}).pop(side, None)
         self._set_sphere_edit_visibility(True)
-        if not saved:
-            return
-        for node_id, visible in saved.items():
+        for node_id, visible in (saved or {}).items():
             node = slicer.mrmlScene.GetNodeByID(node_id)
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetVisibility(visible)
+        if saved is None:
+            # nothing remembered (e.g. after a module reload): draw the original landmarks and the
+            # axes / spheres of the active measurements again from the original landmark positions
+            panel = self.left_panel if side == "left" else self.right_panel
+            markups = slicer.mrmlScene.GetNodeByID(panel.markup_node_id) if panel is not None else None
+            if markups is not None and markups.GetDisplayNode() is not None:
+                markups.GetDisplayNode().SetVisibility(True)
+            stack = getattr(panel, "measurement_stack", None)
+            for i in range(stack.count if stack is not None else 0):
+                widget = stack.widget(i)
+                if getattr(widget, "enabled", False):
+                    try:
+                        widget.update_measurement()
+                    except Exception:
+                        logging.exception("Doggybone: redrawing a measurement failed (continuing)")
 
     def _remove_corrected_landmarks(self, side):
         self._restore_original_overlay(side)
@@ -1381,7 +1435,7 @@ class CorrectionMixin:
         state = getattr(self, "_fine_shift_state", None)
         side = (state or {}).get("side") or self.osteotomy_side.currentText.lower()
         self._remove_corrected_landmarks(side)
-        if not state or not self.show_corrected_landmarks.isChecked():
+        if not state:
             return
         bone = state["bone"]
         names = self._preview_node_names(side, bone)
@@ -1402,20 +1456,24 @@ class CorrectionMixin:
 
         placed = {l.name: np.asarray(l.get_position(), dtype=float)
                   for l in getattr(panel, "landmarks", []) if getattr(l, "placed", False)}
-        # cut between the shaft-axis landmarks: measure against the fixed fragment's axis (as the plan)
-        split_names = self._split_shaft_axis_names(bone, placed, o, n, distal_sign)
+        # cut between the shaft-axis landmarks: the values use the axis of the fragment that carries
+        # the shaft (as the plan, see _split_shaft_axis); the drawing shows every point where it is
+        split_names, axis_on_distal = self._split_shaft_axis(bone, placed, o, n, distal_sign)
+        axis_moves = axis_on_distal == state["moving_is_distal"]
         points, measure_points, radii, moved_names = {}, {}, {}, []
         for landmark in getattr(panel, "landmarks", []):
             if not getattr(landmark, "placed", False):
                 continue
             p = placed[landmark.name]
-            measure_points[landmark.name] = p
+            moved = (H @ np.append(p, 1.0))[:3]
             on_distal_side = float(np.dot(p - o, n)) * distal_sign > 0.0
+            if landmark.name in split_names:
+                measure_points[landmark.name] = moved if axis_moves else p
+            else:
+                measure_points[landmark.name] = moved if on_distal_side == state["moving_is_distal"] else p
             if on_distal_side == state["moving_is_distal"]:
-                p = (H @ np.append(p, 1.0))[:3]
+                p = moved
                 moved_names.append(landmark.name)
-                if landmark.name not in split_names:
-                    measure_points[landmark.name] = p
             points[landmark.name] = p
             radii[landmark.name] = getattr(landmark, "radius", None)
         if not points:
@@ -1433,10 +1491,25 @@ class CorrectionMixin:
         display.SetSelectedColor(0.2, 1.0, 0.4)
         display.SetColor(0.2, 1.0, 0.4)
         display.SetTextScale(2.5)
+        display.SetPointLabelsVisibility(not self._landmark_labels_hidden())
         display.SetGlyphScale(2.0)
 
+        # which measurements to show in the corrected position: the planner's wedge / rotation
+        # measurements plus every measurement whose ORIGINAL axes are visible right now (e.g. TPA with
+        # its functional axis and plateau line) - otherwise those stay behind in the original position
+        planner_names = [name for name in (self.WEDGE_MEASUREMENT_NAME.get(bone),
+                                           self.ROTATION_MEASUREMENT_NAME.get(bone)) if name]
+        shown_names = list(planner_names)
+        for measurement in self._panel_measurements(panel):
+            if measurement.name in shown_names:
+                continue
+            for label in getattr(measurement, "AXIS_LABELS", []) or []:
+                node = slicer.mrmlScene.GetFirstNodeByName(f"Doggybone {side} {label} axis")
+                if node is not None and node.GetDisplayNode() is not None and node.GetDisplayNode().GetVisibility():
+                    shown_names.append(measurement.name)
+                    break
         results, spheres, axes = [], {}, {}
-        for bone_name in (self.WEDGE_MEASUREMENT_NAME.get(bone), self.ROTATION_MEASUREMENT_NAME.get(bone)):
+        for bone_name in shown_names:
             measurement = self._get_measurement_by_name(panel, bone_name) if bone_name else None
             if measurement is None:
                 continue
@@ -1449,15 +1522,28 @@ class CorrectionMixin:
             except Exception as exc:                     # a measurement must never break the preview
                 results.append(f"{measurement.name}: not measurable ({exc})")
                 continue
-            if bone_name == self.ROTATION_MEASUREMENT_NAME.get(bone):
+            if bone_name not in planner_names:
+                results.append(f"{getattr(measurement, 'display_name', None) or measurement.name}: "
+                               f"{value:.1f}\N{DEGREE SIGN} ({description})")
+            elif bone_name == self.ROTATION_MEASUREMENT_NAME.get(bone):
                 value = self._signed_rotation_value(bone, value, description)
                 target = float(self.target_rotation_value.value)
                 results.append(f"{measurement.name} {value:+.1f}\N{DEGREE SIGN} (target {target:+.1f}\N{DEGREE SIGN})")
             else:
                 target = float(self.target_wedge_value.value)
                 results.append(f"{description} {value:.1f}\N{DEGREE SIGN} (target {target:.1f}\N{DEGREE SIGN})")
-            spheres.update(corrected.get_spheres())
-            for label, ends in corrected.get_axes().items():
+            # the DRAWN axes / spheres follow the bone: every landmark where it really is after the
+            # correction (also a shaft-axis landmark on the moved fragment); only the values above
+            # use the axis of the fragment that carries the shaft when the cut splits it
+            shown = corrected
+            if measure_points is not points:
+                shown = copy.copy(measurement)
+                try:
+                    shown._measure(points, radii)
+                except Exception:
+                    shown = corrected
+            spheres.update(shown.get_spheres())
+            for label, ends in shown.get_axes().items():
                 axes.setdefault(label, ends)
 
         palette = [(0.2, 1.0, 0.4), (1.0, 0.85, 0.1), (1.0, 0.4, 0.2), (0.4, 0.7, 1.0)]
@@ -1520,6 +1606,7 @@ class CorrectionMixin:
             display_node.SetOpacity(max(opacity, 0.1))
         if hasattr(self, "_guide_saved_opacity"):
             self._guide_saved_opacity = []             # nothing left to restore to a hidden state
+        self._sync_original_segmentation()            # a preview of this bone still hides it in 3D
 
     def onClearPreview(self):
         side = self.osteotomy_side.currentText.lower()
@@ -1535,8 +1622,7 @@ class CorrectionMixin:
                 slicer.mrmlScene.RemoveNode(node)
                 removed_any = True
         # without a preview the original bone must always be visible again - whatever hid it
-        # (preview option, guide tools, a module reload that lost the remembered state)
+        # (preview, guide tools, a module reload that lost the remembered state)
         self._ensure_segmentation_visible()
-        if hasattr(self, "_original_segmentation_visibility_3d"):
-            del self._original_segmentation_visibility_3d
+        self.onHideAnnotationsToggled(False)           # labels and cutting planes back
         self.correction_status.setText("Preview removed." if removed_any else "No preview to remove.")

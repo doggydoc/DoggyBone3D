@@ -359,6 +359,11 @@ class SawMixin:
             slot["label"] = label
             slots.append(slot)
             notes.append(f"{label} {slot['length']:.1f} mm long (bone {slot['bone_width']:.1f} mm)")
+        stop_box = getattr(self, "guide_hinge_stop", None)
+        if stop_box is not None and len(slots) == 2:
+            note = guide_logic.apply_hinge_stop(slots, float(stop_box.value))
+            if note:
+                notes.append(note)
         chosen = self.guide_pin.currentText
         d = min(diameters) if diameters else None
         if not chosen.startswith("Auto"):

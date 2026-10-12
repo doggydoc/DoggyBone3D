@@ -29,6 +29,11 @@ Kitware), a 3D Slicer extension for human craniofacial surgery planning.
 **License:** MIT (see [LICENSE](LICENSE)) - Copyright (c) 2022 Juliette Burg Personnaz, Andreas
 Voigt; Copyright (c) 2026 Matthias Frank, Kleintierklinik Frank & Partner.
 
+## Requirements
+
+- [3D Slicer](https://download.slicer.org/) 5.x (developed and tested with 5.12)
+- A CT scan of the canine hind limb (DICOM or any volume format Slicer reads)
+
 ## Installation
 
 1. Install [3D Slicer](https://download.slicer.org/).
@@ -36,3 +41,28 @@ Voigt; Copyright (c) 2026 Matthias Frank, Kleintierklinik Frank & Partner.
 3. In Slicer open **Modules > Developer Tools > Extension Wizard** and click **Select Extension**.
 4. Choose the unpacked folder and confirm.
 5. DoggyBone3D now appears under **Modules > Orthopedics > DoggyBone3D**.
+
+Alternatively add the module folder directly: **Edit > Application Settings > Modules > Additional module
+paths > Add**, choose the `Doggybone` folder inside the unpacked repository and restart Slicer.
+
+## Workflow
+
+The module panel is organised in four sections, used from top to bottom:
+
+1. **3D Segmentation** - threshold the bone from the CT, clean the segmentation up in 3D.
+2. **Measurements** - place the landmarks for the left or right limb; the angles (aLDFA, antetorsion,
+   tibial varus/valgus, TPA, tibial torsion, ...) and their axes are shown live.
+3. **Osteotomy Planning** - choose bone and technique, insert the cutting planes, set the target
+   values and let the module suggest the correction; the corrected bone and the predicted
+   postoperative angles are shown.
+4. **Guide Planning** - paint the guide footprint on the bone, extrude the osteotomy guide and the
+   reduction guide with pins / saw slots, and save all finished guides with **Export guides**
+   (one STL per guide, named by patient, bone, side and type). The export warns if a guide is
+   outdated because the plan changed after it was built.
+
+## Tests
+
+In Slicer, enable **Edit > Application Settings > Developer > Enable developer mode**; the module then
+shows **Reload and Test**, which runs the self-test (`DoggyboneTest` in `Doggybone/Doggybone.py`) on
+synthetic data. The geometry regression tests in `Doggybone/Testing/Python` can also be run on their
+own: `PythonSlicer -m unittest Doggybone/Testing/Python/test_doggybone_geometry.py`.

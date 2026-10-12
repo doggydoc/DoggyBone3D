@@ -58,6 +58,8 @@ from DoggyboneLib import osteotomy_logic
 from DoggyboneLib import guide_logic
 importlib.reload(osteotomy_logic)
 importlib.reload(guide_logic)
+from DoggyboneLib import laterality
+importlib.reload(laterality)
 from DoggyboneLib import measurements
 importlib.reload(measurements)
 from DoggyboneLib import landmarks
@@ -392,6 +394,21 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
         measurements_layout.addWidget(side_row_widget)
 
+        # side check: the landmarks themselves tell which limb they belong to (handedness of the
+        # anatomical frame, see DoggyboneLib/laterality.py) - shown live, with a one-click fix when
+        # they sit in the wrong list
+        laterality_row = qt.QHBoxLayout()
+        self.laterality_label = qt.QLabel("")
+        self.laterality_label.setWordWrap(True)
+        laterality_row.addWidget(self.laterality_label, 1)
+        self.laterality_move_button = qt.QPushButton("Move")
+        self.laterality_move_button.setVisible(False)
+        self.laterality_move_button.clicked.connect(lambda _checked=False: self.onLateralityMove())
+        laterality_row.addWidget(self.laterality_move_button)
+        laterality_row_widget = qt.QWidget()
+        laterality_row_widget.setLayout(laterality_row)
+        measurements_layout.addWidget(laterality_row_widget)
+
         # slice views aligned to the BONE instead of the scanner (the limb is never lying exactly
         # along the scanner axes): red = perpendicular to the shaft axis, green = frontal plane
         # (shaft + condylar axis), yellow = sagittal plane
@@ -616,28 +633,34 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.reset_all_button.setStyleSheet("QPushButton { color: #9b1c1c; }")
         self.reset_all_button.clicked.connect(self.onResetPlanningAndGuides)
         preview_grid.addWidget(self.reset_all_button, 2, 0, 1, 2)
-        self.hide_annotations_button = qt.QCheckBox("Hide labels and cutting planes")
-        self.hide_annotations_button.setToolTip(
-            "One click hides all labels (landmark names, plane names, L/M markers) and the cutting "
-            "planes - e.g. for a clean view or a screenshot. Click again to show them as before.")
-        self.hide_annotations_button.toggled.connect(self.onHideAnnotationsToggled)
         preview_widget = qt.QWidget()
         preview_widget.setLayout(preview_grid)
         osteotomy_form_layout.addRow(preview_widget)
 
 
-        self.hide_original_in_preview = qt.QCheckBox("Hide original segmentation in preview")
-        self.hide_original_in_preview.setChecked(True)
-        osteotomy_form_layout.addRow(self.hide_original_in_preview)
-        self.show_corrected_landmarks = qt.QCheckBox("Show landmarks, spheres and axes in the corrected position")
-        self.show_corrected_landmarks.setChecked(True)
-        self.show_corrected_landmarks.setToolTip(
-            "With an active preview: the landmarks of the moved fragment are carried along with the "
-            "correction (incl. fine shift); spheres and axes are drawn from them and the angles are "
-            "measured on the corrected bone.")
-        self.show_corrected_landmarks.toggled.connect(lambda _c: self._update_corrected_landmarks())
-        osteotomy_form_layout.addRow(self.show_corrected_landmarks)
-        osteotomy_form_layout.addRow(self.hide_annotations_button)
+        # With an active preview (always, no options): the original segmentation is hidden in 3D,
+        # the landmarks / spheres / axes are shown in the corrected position and the cutting planes
+        # are hidden - everything comes back with 'Remove preview'. The landmark names: checkbox.
+        self.hide_landmark_labels = qt.QCheckBox("Hide all landmark descriptions")
+        self.hide_landmark_labels.setChecked(True)
+        self.hide_landmark_labels.setToolTip(
+            "Hide the names of all landmarks in the 3D and slice views - original and corrected position, "
+            "left and right. Uncheck to show them again.")
+        self.hide_landmark_labels.toggled.connect(lambda _c: self._apply_landmark_label_visibility())
+        self.show_cutting_planes = qt.QCheckBox("Show cutting planes")
+        self.show_cutting_planes.setChecked(True)
+        self.show_cutting_planes.setToolTip(
+            "Show / hide the cutting planes and their L / M markers. Unticked automatically while the "
+            "correction preview is shown; 'Remove preview' sets it back.")
+        self.show_cutting_planes.toggled.connect(lambda _c: self._apply_cutting_plane_visibility())
+        view_row = qt.QHBoxLayout()
+        view_row.setContentsMargins(0, 0, 0, 0)
+        view_row.addWidget(self.hide_landmark_labels)
+        view_row.addWidget(self.show_cutting_planes)
+        view_row.addStretch(1)
+        view_widget = qt.QWidget()
+        view_widget.setLayout(view_row)
+        osteotomy_form_layout.addRow(view_widget)
 
         self.segment_opacity_slider = self._new_bone_opacity_slider()
         osteotomy_form_layout.addRow("Bone opacity", self.segment_opacity_slider)
@@ -654,6 +677,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         self.layout.addWidget(guide_collapsible_button)
         self._guide_collapsible = guide_collapsible_button
+        # opening / closing the guide panel switches the uncut bone on / off in 3D (saw guide vs. preview)
+        guide_collapsible_button.connect('contentsCollapsed(bool)', lambda _c: self._sync_original_segmentation())
         guide_layout = qt.QVBoxLayout(guide_collapsible_button)
         guide_info_label = qt.QLabel(
             "Footprint = coloured area on the bone surface where the guide sits. Paint it by hand "
@@ -666,6 +691,9 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_form = qt.QFormLayout()
         guide_form.setHorizontalSpacing(6)
         guide_layout.addLayout(guide_form)
+        # bone opacity at the TOP of the guide panel: lower it to inspect the guide on the bone at once
+        self.guide_opacity_slider = self._new_bone_opacity_slider()
+        guide_form.addRow("Bone opacity", self.guide_opacity_slider)
         self.guide_mode_saw = qt.QRadioButton("2. Saw guide")
         self.guide_mode_reduction = qt.QRadioButton("1. Reduction guide")
         self.guide_mode_saw.setToolTip("Cutting guide on the bone as it is (saw slots, pin sleeves).")
@@ -989,12 +1017,27 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_fields.append(("Slot length", self.guide_slot_extent))
         self.guide_bridge_size = spin(2.0, 6.0, 3.0, 0.5, " mm",
                                       "Corner bridges: size of the closed ends of the saw slots (mm along the "
-                                      "slot). Larger = stiffer corners of the saw block; the block grows "
-                                      "sideways by the same amount. The slot itself always reaches 1 mm "
-                                      "beyond the bone.",
+                                      "slot). Larger = stiffer saw block: the block grows sideways by the same "
+                                      "amount, and every mm above 3 mm also makes the walls on both sides of "
+                                      "the slot 1 mm thicker (wider frame). The slot itself always reaches "
+                                      "1 mm beyond the bone.",
                                       decimals=1)
         self.guide_bridge_size.valueChanged.connect(lambda _v: self._on_bridge_size_changed())
         guide_fields.append(("Corner bridges", self.guide_bridge_size))
+        self.guide_hinge_stop = spin(0.0, 5.0, 0.0, 0.5, " mm",
+                                     "Closing wedge - hinge stop: both slots end this far before the hinge (where "
+                                     "the two cutting planes meet); beyond that the saw block stays solid. The frame "
+                                     "is then closed at the hinge side and the blade cannot cut through the hinge. "
+                                     "0 = off (slots over the whole bone, as before).", decimals=1)
+        self.guide_hinge_stop.setSpecialValueText("off")
+        self.guide_hinge_stop.valueChanged.connect(lambda _v: self._refresh_guide_body_if_present())
+        guide_fields.append(("Hinge stop", self.guide_hinge_stop))
+        self.guide_hinge_strut = combo(["Off", "Break-off strut"], "Off",
+                                       "Closing wedge: a flat bridge (3 x 2 mm) across both kerfs at the hinge, on two "
+                                       "round posts (2 mm thick, 2 mm high) standing on the proximal and distal wall of "
+                                       "the saw block - it stiffens the frame while the guide is placed and pinned; "
+                                       "break it off with pliers before sawing.")
+        guide_fields.append(("Hinge strut", self.guide_hinge_strut))
         self.guide_saw_type = combo(["Slot", "Block"], "Slot",
                                     "Slot: the blade runs in a closed slot (guided on both sides).\n"
                                     "Block: no slot - the guide ends exactly at the cutting plane and the blade "
@@ -1049,10 +1092,9 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "removed, broken edges closed, and the whole contact surface re-made as an even offset of the "
             "bone (fit gap). Run it after 'Extrude', before exporting.")
         self.guide_clean_button.clicked.connect(self.onCleanGuide)
-        # workflow order: Extrude | Clean up, below Export guide STL | Export bone STL
+        # workflow order: Extrude | Clean up, below Export guides | Export bone STL
         self.guide_extrude_button.setText("Extrude")
         self.guide_extrude_button.setToolTip("Build the guide body (guide body, saw blocks / pin bosses, label).")
-        self.guide_export_button.setText("Export guide STL...")
         self.guide_export_bone_button = qt.QPushButton("Export bone STL...")
         self.guide_export_bone_button.setToolTip(
             "Save the segmented bone as a binary STL in mm (CT coordinates) - e.g. to print a bone model "
@@ -1079,8 +1121,6 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "end of the guide, joined by a thin neck - break it off with pliers when it is no longer needed. "
             "'On the guide': raised text on a free flat area of the guide. Built with 'Extrude'.")
         guide_form.addRow("Label", self.guide_label_mode)
-        self.guide_opacity_slider = self._new_bone_opacity_slider()
-        guide_form.addRow("Bone opacity", self.guide_opacity_slider)
 
 
         self.guide_status = qt.QLabel("No footprint yet.")
@@ -1197,6 +1237,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 self._on_target_values_changed()
             except Exception:
                 logging.exception("Doggybone: refreshing the calculated corrections failed (continuing)")
+            try:
+                self._update_laterality_status()
+            except Exception:
+                logging.exception("Doggybone: side check failed (continuing)")
         qt.QTimer.singleShot(300, run)
 
     def _on_scene_reset(self, caller=None, event=None):
@@ -1349,6 +1393,113 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if hasattr(self, "side_selector") and self.side_selector.currentIndex != index:
             self.side_selector.setCurrentIndex(index)
 
+    # --- side check (laterality) ------------------------------------------------------------------
+    def _panel_for_side(self, side):
+        return self.left_panel if side == "Left" else self.right_panel
+
+    def _landmark_points(self, side):
+        """{landmark name: RAS position} of the list of one side - the newest point per name wins,
+        deleted landmarks ("<name> (deleted)") never match a name."""
+        panel = self._panel_for_side(side)
+        node = slicer.mrmlScene.GetNodeByID(getattr(panel, "markup_node_id", "") or "")
+        points = {}
+        if node is None:
+            return points
+        for i in range(node.GetNumberOfControlPoints()):
+            if node.GetNthControlPointPositionStatus(i) != node.PositionDefined:
+                continue
+            position = [0.0, 0.0, 0.0]
+            node.GetNthControlPointPositionWorld(i, position)
+            points[node.GetNthControlPointLabel(i)] = np.array(position)
+        return points
+
+    def laterality_check(self, side):
+        """Which limb do the landmarks in the 'side' list form? See laterality.detect()."""
+        return laterality.detect(self._landmark_points(side))
+
+    def _update_laterality_status(self):
+        label = getattr(self, "laterality_label", None)
+        if label is None or not hasattr(self, "side_selector"):
+            return
+        current = self.side_selector.currentText
+        other = "Right" if current == "Left" else "Left"
+        result, result_other = self.laterality_check(current), self.laterality_check(other)
+        button = self.laterality_move_button
+        button.setVisible(False)
+        label.setToolTip(laterality.summary(result) or
+                         "The side is computed from the femur landmarks (shaft midpoints + condyles) or the "
+                         "tibia landmarks (axis points, condyles, cranial / caudal plateau point).")
+        status = result["status"]
+        if status == "incomplete":
+            label.setStyleSheet("")
+            label.setText("Side check: waiting for the femur or tibia landmarks.")
+            return
+        label.setStyleSheet(STATUS_WARN_STYLE)
+        if status == "uncertain":
+            label.setText("Side check: uncertain - " + "; ".join(result["messages"]))
+        elif status in ("check", "conflict"):
+            label.setText("Side check: " + "; ".join(result["messages"]))
+        elif result["side"] != current:
+            label.setText(f"Side check: these landmarks form a {result['side'].upper()} limb, "
+                          f"but they are in the {current} list.")
+            has_other = bool(self._landmark_points(other))
+            button.setText(f"Swap Left / Right" if has_other else f"Move to {result['side']}")
+            button.setToolTip(f"Put these landmarks into the {result['side']} list"
+                              + (f" (the landmarks of the {other} list go to the {current} list)" if has_other else "")
+                              + ". Osteotomy planes and guides are NOT moved.")
+            button.setVisible(True)
+        elif result_other["status"] == "ok" and result_other["side"] == current:
+            label.setText(f"Side check: BOTH lists form a {current.upper()} limb - the same leg measured twice, "
+                          "or medial / lateral swapped in one list.")
+        else:
+            label.setStyleSheet(STATUS_OK_STYLE)
+            label.setText(f"\u2713 Side check: the landmarks form a {current.lower()} limb.")
+
+    def onLateralityMove(self):
+        """Move the landmarks of the shown list to the other list - or swap both lists."""
+        current = self.side_selector.currentText
+        other = "Right" if current == "Left" else "Left"
+        source, target = self._panel_for_side(current), self._panel_for_side(other)
+        swap = bool(self._landmark_points(other))
+        question = (f"Swap ALL landmarks between the Left and the Right list?" if swap else
+                    f"Move all landmarks from the {current} list to the {other} list?")
+        if not slicer.util.confirmOkCancelDisplay(
+                question + "\n\nOsteotomy planes, corrections and guides stay with their side - check "
+                           "them afterwards.", windowTitle="Side check"):
+            return
+
+        def collect(panel):
+            node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+            names = {landmark.name for landmark in panel.landmarks}
+            items = []
+            for i in range(node.GetNumberOfControlPoints()):
+                name = node.GetNthControlPointLabel(i)
+                if name not in names or node.GetNthControlPointPositionStatus(i) != node.PositionDefined:
+                    continue
+                position = [0.0, 0.0, 0.0]
+                node.GetNthControlPointPositionWorld(i, position)
+                items.append((name, position, node.GetAttribute(f"Doggybone.radius.{name}")))
+            return items
+
+        def place(panel, items):
+            node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+            for name, position, radius in items:
+                index = node.AddControlPointWorld(vtk.vtkVector3d(*position))
+                node.SetNthControlPointLabel(index, name)
+                if radius:
+                    node.SetAttribute(f"Doggybone.radius.{name}", radius)
+            self._relink_existing_landmarks(panel)
+
+        moving, staying = collect(source), collect(target) if swap else []
+        source.clear_all_landmarks()
+        if swap:
+            target.clear_all_landmarks()
+        place(target, moving)
+        if swap:
+            place(source, staying)
+        self.side_selector.setCurrentText(other)       # show the moved landmarks
+        self._schedule_values_refresh()
+
     def _on_osteotomy_bone_changed(self, index):
         bone = self.osteotomy_bone.currentText
         # Reset the target fields to this bone's default whenever the bone selection changes -
@@ -1464,12 +1615,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if not ready:
             return False, 0.0, f"Place the landmarks for '{name}' ({side}) first."
         # Convert the magnitude-only measurement into a signed anatomical value. Target values
-        # are entered in the positive named direction (Antetorsion for femur; Innenrotation for
+        # are entered in the positive named direction (Antetorsion for femur; internal torsion for
         # tibia). This keeps the UI clinical while preserving a deterministic transform sign.
         if bone == "Femur":
             current_signed = value if description == "Antetorsion" else -value
         else:
-            current_signed = value if description == "Innenrotation" else -value
+            current_signed = value if description.startswith("Internal") else -value
         target_signed = self.target_rotation_value.value
         return True, target_signed - current_signed, (
             f"{name}: current {current_signed:+.1f}°, target {target_signed:+.1f}°")
@@ -1541,40 +1692,74 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.onOpacityChanged(value)                 # bone segmentation(s)
         if hasattr(self, "_apply_segment_opacity"):
             self._apply_segment_opacity()            # preview fragments + corrected bone
+        # while a guide tool is active the bone is shown as the guide's own bone surface
+        shown = getattr(self, "_guide_shown_surface", None)
+        surface = slicer.mrmlScene.GetNodeByID(shown) if shown else None
+        if surface is not None and surface.GetDisplayNode() is not None:
+            surface.GetDisplayNode().SetOpacity(value / 100.0)
+
+    def _landmark_labels_hidden(self):
+        box = getattr(self, "hide_landmark_labels", None)
+        return bool(box.checked) if box is not None else False
+
+    def _apply_landmark_label_visibility(self):
+        """Landmark names (original landmarks of both sides and the corrected landmarks) on / off
+        according to 'Hide all landmark descriptions'."""
+        show = not self._landmark_labels_hidden()
+        nodes = []
+        for panel in (getattr(self, "left_panel", None), getattr(self, "right_panel", None)):
+            if panel is not None and getattr(panel, "markup_node_id", None):
+                nodes.append(slicer.mrmlScene.GetNodeByID(panel.markup_node_id))
+            box = getattr(panel, "show_labels_checkbox", None)
+            if box is not None and bool(box.checked) != show:      # the measurement panel shows the same state
+                was = box.blockSignals(True)
+                box.setChecked(show)
+                box.blockSignals(was)
+        nodes += [n for n in slicer.util.getNodesByClass("vtkMRMLMarkupsFiducialNode")
+                  if (n.GetName() or "").startswith("Doggybone") and (n.GetName() or "").endswith("corrected landmarks")]
+        for node in nodes:
+            display = node.GetDisplayNode() if node is not None else None
+            if display is not None:
+                display.SetPointLabelsVisibility(show)
+
+    CUTTING_PLANE_SUFFIXES = (" proximal plane", " distal plane", " proximal plane L marker", " proximal plane M marker",
+                              " distal plane L marker", " distal plane M marker", " L marker", " M marker")
+
+    def _cutting_plane_nodes(self):
+        """The cutting planes and their L / M markers (both sides, both bones) - not the gizmos
+        (fine shift, pins, saw boxes), which are plane nodes too."""
+        nodes = []
+        for node in slicer.util.getNodesByClass("vtkMRMLMarkupsNode"):
+            name = node.GetName() or ""
+            if name.startswith("Doggybone") and name.endswith(self.CUTTING_PLANE_SUFFIXES) \
+                    and node.GetDisplayNode() is not None:
+                nodes.append(node)
+        return nodes
+
+    def _apply_cutting_plane_visibility(self):
+        """Cutting planes on / off according to 'Show cutting planes'."""
+        box = getattr(self, "show_cutting_planes", None)
+        show = bool(box.checked) if box is not None else True
+        for node in self._cutting_plane_nodes():
+            node.GetDisplayNode().SetVisibility(show)
 
     def onHideAnnotationsToggled(self, hide):
-        """Hide / show all labels and the cutting planes; the previous state is restored exactly."""
-        if hide:
-            saved = []
-            for node in slicer.util.getNodesByClass("vtkMRMLMarkupsNode"):
-                name = node.GetName() or ""
-                display = node.GetDisplayNode()
-                if display is None or not name.startswith("Doggybone"):
-                    continue
-                is_plane = node.IsA("vtkMRMLMarkupsPlaneNode") or name.endswith(" marker")
-                if is_plane:
-                    saved.append((node.GetID(), "visibility", bool(display.GetVisibility())))
-                    display.SetVisibility(False)
-                else:
-                    saved.append((node.GetID(), "point labels", bool(display.GetPointLabelsVisibility())))
-                    display.SetPointLabelsVisibility(False)
-                if hasattr(display, "GetPropertiesLabelVisibility"):
-                    saved.append((node.GetID(), "properties label", bool(display.GetPropertiesLabelVisibility())))
-                    display.SetPropertiesLabelVisibility(False)
-            self._hidden_annotations = saved
+        """Called automatically: the cutting planes are hidden when a correction preview is shown
+        ('Show cutting planes' unticked) and come back as they were when it is removed."""
+        box = getattr(self, "show_cutting_planes", None)
+        if box is None:
             return
-        for node_id, kind, value in getattr(self, "_hidden_annotations", []):
-            node = slicer.mrmlScene.GetNodeByID(node_id)
-            display = node.GetDisplayNode() if node is not None else None
-            if display is None:
-                continue
-            if kind == "visibility":
-                display.SetVisibility(value)
-            elif kind == "point labels":
-                display.SetPointLabelsVisibility(value)
-            else:
-                display.SetPropertiesLabelVisibility(value)
-        self._hidden_annotations = []
+        if hide:
+            if getattr(self, "_planes_before_preview", None) is None:
+                self._planes_before_preview = bool(box.checked)
+            box.setChecked(False)
+            self._apply_cutting_plane_visibility()
+            return
+        before = getattr(self, "_planes_before_preview", None)
+        self._planes_before_preview = None
+        if before is not None:
+            box.setChecked(before)
+        self._apply_cutting_plane_visibility()          # the planes always follow the checkbox afterwards
 
     def onAlignSliceViews(self):
         choice = self.view_align_selector.currentText
@@ -1675,9 +1860,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         by_name = {landmark.name: landmark for landmark in panel.landmarks}
         linked = []
         for i in reversed(range(node.GetNumberOfControlPoints())):
-            landmark = by_name.get(node.GetNthControlPointLabel(i))
+            label = node.GetNthControlPointLabel(i)
+            landmark = by_name.get(landmarks.current_landmark_name(label))
             if landmark is None or landmark.placed:
                 continue
+            if label != landmark.name:                  # saved with an earlier landmark name
+                node.SetNthControlPointLabel(i, landmark.name)
             landmark._id = i
             landmark.placed = True
             node.SetNthControlPointLocked(i, True)
@@ -1937,7 +2125,7 @@ class MeasurementsPanel(qt.QWidget):
                                     quoting=csv.QUOTE_MINIMAL)
             for row in reader:
                 try:
-                    name = row['landmark name']
+                    name = landmarks.current_landmark_name(row['landmark name'])
                     x = _csv_float(row['x'])
                     y = _csv_float(row['y'])
                     z = _csv_float(row['z'])
@@ -2005,6 +2193,17 @@ class MeasurementsPanel(qt.QWidget):
             if current_widget is not None:
                 current_widget.update_measurement()
 
+    def _show_unless_original_hidden(self, node):
+        """Make a sphere / axis node visible - unless the ORIGINAL overlay of this side is hidden right
+        now (corrected preview / reduction guide): then it is only noted, and it comes back when the
+        original overlay is restored."""
+        store = getattr(self.base_widget, "__dict__", {}).get("_hidden_original_overlay", {})
+        if self.side in store:
+            store[self.side][node.GetID()] = True
+            node.GetDisplayNode().SetVisibility(False)
+            return
+        node.GetDisplayNode().SetVisibility(True)
+
     def show_sphere(self, label, center, radius):
         if not self.spheres_visible:
             self.hide_sphere(label)
@@ -2031,7 +2230,7 @@ class MeasurementsPanel(qt.QWidget):
         sphere_source.SetPhiResolution(32)
         sphere_source.Update()
         node.SetAndObservePolyData(sphere_source.GetOutputDataObject(0))
-        node.GetDisplayNode().SetVisibility(True)
+        self._show_unless_original_hidden(node)
 
     def hide_sphere(self, label):
         node = self.sphere_nodes.get(label)
@@ -2079,7 +2278,7 @@ class MeasurementsPanel(qt.QWidget):
         tube_filter.Update()
         node.SetAndObservePolyData(tube_filter.GetOutputDataObject(0))
         node.GetDisplayNode().SetColor(*color)
-        node.GetDisplayNode().SetVisibility(True)
+        self._show_unless_original_hidden(node)
 
     def hide_axis(self, label):
         node = self.axis_nodes.get(label)
@@ -2110,7 +2309,11 @@ class MeasurementsPanel(qt.QWidget):
                                     f"Delete all placed {self.side} landmarks? This cannot be undone.",
                                     qt.QMessageBox.Yes | qt.QMessageBox.No) != qt.QMessageBox.Yes:
             return
+        self.clear_all_landmarks()
 
+    def clear_all_landmarks(self):
+        """Remove every placed landmark of this side without asking (also used by the side check
+        when the landmarks are moved to the other list)."""
         current_widget = self.measurement_stack.currentWidget()
         if current_widget is not None:
             current_widget.disable()
@@ -2590,3 +2793,177 @@ class ResizableImage(qt.QLabel):
 
     def _on_popup_closed(self):
         self._popup = None
+
+#
+# DoggyboneTest
+#
+
+class DoggyboneTest(ScriptedLoadableModuleTest):
+    """Self-test of the module: Slicer's "Reload and Test" button and CTest (slicer_add_python_unittest).
+    Works on an empty scene with synthetic landmarks and meshes - no patient data needed."""
+
+    def setUp(self):
+        slicer.mrmlScene.Clear()
+
+    def runTest(self):
+        self.setUp()
+        self.test_widget()
+        self.setUp()
+        self.test_measurement_labels()
+        self.setUp()
+        self.test_geometry_regression()
+        self.setUp()
+        self.test_split_axis_prediction()
+        self.setUp()
+        self.test_guide_export()
+        self.delayDisplay("Doggybone 3D: all tests passed")
+
+    # --- helpers -----------------------------------------------------------------------------------
+    def _widget(self):
+        slicer.util.selectModule("Doggybone")
+        slicer.app.processEvents()
+        return slicer.modules.doggybone.widgetRepresentation().self()
+
+    def _place_femur_landmarks(self, widget, side="right", lateral_z=8.0):
+        """Synthetic straight femur along -z (proximal at the top): head, neck, 33 % / 50 % midpoints,
+        condyles. lateral_z < 12 tilts the condylar axis (varus)."""
+        panel = widget.right_panel if side == "right" else widget.left_panel
+        node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+        landmarks = {l.name: l for l in panel.landmarks}
+        points = {"femur head": ((0, 0, 200), 10.0), "femur neck": ((4, 0, 188), None),
+                  "Femur midpoint 33%": ((0, 0, 140), None), "Femur midpoint 50%": ((0, 0, 80), None),
+                  "medial femur condyle": ((-12, 0, 12), 9.0), "lateral femur condyle": ((12, 0, lateral_z), 9.0)}
+        for name, (position, radius) in points.items():
+            landmark = landmarks[name]
+            index = node.AddControlPoint(*position)
+            node.SetNthControlPointLabel(index, name)
+            landmark._id = index
+            landmark.placed = True
+            if radius is not None:
+                landmark.radius = radius
+        return panel
+
+    @staticmethod
+    def _remove_landmarks(panel):
+        node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+        if node is not None:
+            node.RemoveAllControlPoints()
+        for landmark in panel.landmarks:
+            landmark.placed = False
+            landmark._id = None
+
+    # --- tests -------------------------------------------------------------------------------------
+    def test_widget(self):
+        self.delayDisplay("Module widget")
+        widget = self._widget()
+        self.assertEqual(slicer.modules.doggybone.title, "DoggyBone3D")
+        for name in ("opacity_slider", "guide_extrude_button", "guide_export_button", "left_panel", "right_panel"):
+            self.assertIsNotNone(getattr(widget, name, None), name)
+        self.assertTrue(widget.guide_export_button.text.startswith("Export guides"))
+
+    def test_measurement_labels(self):
+        self.delayDisplay("Measurement labels")
+        import math
+        from DoggyboneLib import measurement_logic as ml
+        femur = ml.VarusValgusFemurMeasurement()
+        femur.side = "right"
+
+        def aldfa(target):
+            dz = 24.0 * math.tan(math.radians(target - 90.0))
+            points = {"medial femur condyle": np.array([-12.0, 0, 10]), "lateral femur condyle": np.array([12.0, 0, 10 - dz]),
+                      "Femur midpoint 33%": np.array([0.0, 0, 140]), "Femur midpoint 50%": np.array([0.0, 0, 80])}
+            radii = {name: 9.0 for name in points}
+            return femur._measure(points, radii)
+
+        value, label = aldfa(94.0)
+        self.assertAlmostEqual(value, 94.0, places=1)
+        self.assertEqual(label, "aLDFA - normal")
+        self.assertEqual(aldfa(96.0)[1], "aLDFA - Varus")
+        self.assertEqual(aldfa(91.0)[1], "aLDFA - Valgus")
+        # the tibial varus/valgus measurement has no eminence -> proximal-midpoint axis any more
+        self.assertNotIn("Proximal tibial axis", ml.VarusValgusTibiaMeasurement.AXIS_LABELS)
+
+    def test_geometry_regression(self):
+        self.delayDisplay("Geometry regression tests")
+        path = os.path.join(MODULE_PATH, "Testing", "Python", "test_doggybone_geometry.py")
+        if not os.path.exists(path):
+            self.delayDisplay("Geometry tests not installed with this build - skipped")
+            return
+        import importlib.util, unittest
+        spec = importlib.util.spec_from_file_location("doggybone_geometry_tests", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = unittest.TextTestRunner(verbosity=1).run(unittest.defaultTestLoader.loadTestsFromModule(module))
+        self.assertTrue(result.wasSuccessful(), f"{len(result.failures)} failures, {len(result.errors)} errors")
+
+    def test_split_axis_prediction(self):
+        """A cut between the two shaft-axis landmarks: close to the distal landmark the axis stays on the
+        proximal fragment (same prediction as a cut distal to both, targets are hit); close to the
+        proximal landmark the axis goes with the moved distal fragment (the joint angle of that
+        fragment then does not change by rotating it)."""
+        self.delayDisplay("Correction prediction with a split shaft axis")
+        widget = self._widget()
+        panel = self._place_femur_landmarks(widget)
+        try:
+            widget.osteotomy_bone.setCurrentText("Femur")
+            normal = np.array([0.0, 0.0, -1.0])                     # proximal -> distal
+            angle = np.radians(6.0)
+            rotation = np.array([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]])
+            predicted = {}
+            for level in (90.0, 40.0, 135.0):    # near the 50 % landmark / distal to both / near the 33 % one
+                origin = np.array([0.0, 0.0, level])
+                H = np.eye(4)
+                H[:3, :3] = rotation
+                H[:3, 3] = origin - rotation @ origin
+                result = widget._predict_measurements("right", "Femur", H, origin, normal, True)
+                self.assertEqual(result["axis_split"], level != 40.0)
+                predicted[level] = result["wedge"]
+            self.assertAlmostEqual(predicted[90.0], predicted[40.0], places=2)
+            original = widget._get_measurement_by_name(panel, widget.WEDGE_MEASUREMENT_NAME["Femur"])()[1]
+            self.assertAlmostEqual(predicted[135.0], original, places=2)
+            for level in (90.0, 40.0):
+                R, info = widget._desired_correction_rotation("right", "Femur", True, np.array([0.0, 0.0, level]), normal)
+                self.assertIsNotNone(R, info)
+                self.assertAlmostEqual(info["predicted"]["wedge"], widget.target_wedge_value.value, places=1)
+                self.assertAlmostEqual(info["predicted"]["torsion"], widget.target_rotation_value.value, places=1)
+        finally:
+            self._remove_landmarks(panel)
+
+    def test_guide_export(self):
+        """All guide bodies are found with their own side / bone / mode, written as closed, centred STLs,
+        and a later plan change marks the guide as outdated."""
+        self.delayDisplay("Guide export")
+        import tempfile, shutil
+        widget = self._widget()
+        widget.osteotomy_side.setCurrentText("Left")
+        widget.osteotomy_bone.setCurrentText("Femur")
+        widget._guide_mode = "saw"
+        plane = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsPlaneNode", widget._plane_node_name("left", "Femur"))
+        plane.SetOrigin(0, 0, 50)
+        plane.SetNormal(0, 0, 1)
+        sphere = vtk.vtkSphereSource()
+        sphere.SetCenter(30, 40, 50)
+        sphere.SetRadius(10)
+        sphere.Update()
+        widget._set_guide_body(sphere.GetOutput())
+        guides = widget._all_guide_bodies()
+        self.assertEqual(len(guides), 1)
+        body, side, bone, mode = guides[0]
+        self.assertEqual((side, bone, mode), ("Left", "Femur", "saw"))
+        self.assertEqual(widget._guide_changed_parts(body, side, bone, mode), [])
+        self.assertEqual(widget._mesh_check(body.GetPolyData()), (1, 0))
+        folder = tempfile.mkdtemp()
+        try:
+            path = os.path.join(folder, "guide.stl")
+            ok, _bounds = widget._write_centred_stl(body.GetPolyData(), path)
+            self.assertTrue(ok)
+            reader = vtk.vtkSTLReader()
+            reader.SetFileName(path)
+            reader.Update()
+            bounds = reader.GetOutput().GetBounds()
+            for low, high in zip(bounds[0::2], bounds[1::2]):
+                self.assertAlmostEqual(low + high, 0.0, places=3)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        plane.SetOrigin(0, 0, 53)
+        self.assertEqual(widget._guide_changed_parts(body, side, bone, mode), ["cutting planes"])

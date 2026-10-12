@@ -9,6 +9,7 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneLib/helpers.py
   DoggyboneLib/landmark_logic.py
   DoggyboneLib/landmarks.py
+  DoggyboneLib/laterality.py
   DoggyboneLib/measurement_logic.py
   DoggyboneLib/measurements.py
   DoggyboneLib/osteotomy_logic.py
@@ -59,5 +60,7 @@ slicerMacroBuildScriptedModule(
 
 #-----------------------------------------------------------------------------
 if(BUILD_TESTING)
+  # Register the DoggyboneTest class in the main script as a ctest (also run by "Reload and Test").
+  slicer_add_python_unittest(SCRIPT ${MODULE_NAME}.py)
   add_subdirectory(Testing)
 endif()

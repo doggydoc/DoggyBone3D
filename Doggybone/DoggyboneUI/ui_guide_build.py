@@ -94,6 +94,11 @@ class GuideBuildMixin:
                     bone_seat = mesh
                 parts.append(guide_logic.saw_block_pair(slots[0], slots[1], self._pin_obb_tree(bone_seat), gap,
                                                         block=block))
+                strut_box = getattr(self, "guide_hinge_strut", None)
+                if strut_box is not None and strut_box.currentText.startswith("Break"):
+                    strut = guide_logic.hinge_strut(slots, block=parts[-1])
+                    if strut is not None:
+                        parts.append(strut)
             else:
                 for slot in slots:
                     parts += guide_logic.saw_block_shells(slot, None, block_side=block_side)
@@ -204,13 +209,118 @@ class GuideBuildMixin:
         found.sort(key=lambda item: (item[2] != "Femur", item[3] != "saw"))
         return found
 
+    # What a guide is built from; the export warns when one of these changed after the guide was built.
+    PLAN_PART_NAMES = {"planes": "cutting planes", "correction": "correction / fine shift",
+                       "reduction pins": "reduction pins", "saw pins": "saw guide pins",
+                       "saw blocks": "saw block size / position", "footprint": "painted footprint",
+                       "bone surface": "bone segmentation"}
+
+    @staticmethod
+    def _polydata_fingerprint(polydata):
+        if polydata is None or polydata.GetNumberOfPoints() == 0:
+            return "none"
+        from vtk.util.numpy_support import vtk_to_numpy
+        points = vtk_to_numpy(polydata.GetPoints().GetData()).astype(float)
+        return "%d;%d;%s;%s" % (polydata.GetNumberOfPoints(), polydata.GetNumberOfCells(),
+                                ",".join(f"{v:.2f}" for v in polydata.GetBounds()),
+                                ",".join(f"{v:.2f}" for v in points.mean(axis=0)))
+
+    def _guide_plan_signature(self, side, bone, mode):
+        """{part: fingerprint} of the inputs of the guide for this side ('Right'/'Left'), bone and
+        mode ('saw'/'reduction'), read from the scene by node name (independent of the current
+        selection). Only geometry - never widget values, so a parameter change for another guide
+        does not mark this one as outdated."""
+        import hashlib
+        side = side.lower()
+        tag = " tibia" if bone == "Tibia" else ""
+        suffix = " (reduction)" if mode == "reduction" else ""
+        get = slicer.mrmlScene.GetFirstNodeByName
+
+        def digest(text):
+            return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
+
+        def plane_text(node):
+            if node is None:
+                return "none"
+            origin, normal = self._get_plane_origin_normal(node)
+            return ",".join(f"{v:.2f}" for v in list(origin) + list(normal))
+
+        def markups_text(node):
+            if node is None:
+                return "none"
+            points = [node.GetNthControlPointPositionWorld(i) for i in range(node.GetNumberOfControlPoints())]
+            attributes = [f"{name}={node.GetAttribute(name)}" for name in sorted(node.GetAttributeNames() or [])
+                          if name.startswith("Doggybone.")]
+            return ";".join(",".join(f"{v:.2f}" for v in p) for p in points) + "|" + ";".join(attributes)
+
+        def model_text(node):
+            return "none" if node is None else self._polydata_fingerprint(node.GetPolyData())
+
+        parts = {}
+        parts["planes"] = digest(plane_text(get(self._plane_node_name(side, bone))) + "|" +
+                                 plane_text(get(self._distal_plane_node_name(side, bone))))
+        transform = get(self._preview_node_names(side, bone)[2])
+        if transform is None:
+            parts["correction"] = "none"
+        else:
+            matrix = vtk.vtkMatrix4x4()
+            transform.GetMatrixTransformToWorld(matrix)
+            parts["correction"] = digest(";".join(f"{matrix.GetElement(r, c):.3f}" for r in range(3) for c in range(4)))
+        parts["reduction pins"] = digest(markups_text(get("Doggybone guide pins" + tag + " (reduction)")))
+        if mode == "saw":
+            parts["saw pins"] = digest(markups_text(get("Doggybone guide pins" + tag)))
+            parts["saw blocks"] = digest("|".join(markups_text(get(f"Doggybone saw box{tag} {label}"))
+                                                  for label in ("proximal", "distal")))
+        else:
+            del parts["planes"]          # the reduction guide follows the correction and its pins
+        parts["footprint"] = digest(model_text(get("Doggybone guide footprint" + tag + suffix)))
+        parts["bone surface"] = digest(model_text(get("Doggybone guide bone surface" + tag + suffix)))
+        return parts
+
+    def _guide_changed_parts(self, node, side, bone, mode):
+        """Names of the inputs that changed since this guide body was built ([] = up to date),
+        or None if the guide has no stored fingerprint (built with an older version)."""
+        stored = node.GetAttribute("Doggybone.PlanSignature")
+        if not stored or side is None:
+            return None
+        try:
+            stored = json.loads(stored)
+        except ValueError:
+            return None
+        current = self._guide_plan_signature(side, bone, mode)
+        return [self.PLAN_PART_NAMES.get(part, part) for part in current if stored.get(part) != current[part]]
+
     @staticmethod
     def _mesh_check(polydata):
-        """(number of separate pieces, number of open edges) of a guide mesh."""
+        """(number of separate pieces, number of open edges) of a guide mesh. A guide is made of
+        several closed shells that OVERLAP (body, saw block, sleeves, label, strut - the print software
+        unites them); shells whose boxes touch count as one piece, so only really loose parts count."""
         connectivity = vtk.vtkPolyDataConnectivityFilter()
         connectivity.SetInputData(polydata)
         connectivity.SetExtractionModeToAllRegions()
+        connectivity.ColorRegionsOn()
         connectivity.Update()
+        from vtk.util.numpy_support import vtk_to_numpy
+        labelled = connectivity.GetOutput()
+        regions = connectivity.GetNumberOfExtractedRegions()
+        ids = labelled.GetPointData().GetArray("RegionId")
+        if ids is not None and regions > 1:
+            region_of = vtk_to_numpy(ids)
+            points = vtk_to_numpy(labelled.GetPoints().GetData())
+            boxes = [(points[region_of == r].min(axis=0) - 0.2, points[region_of == r].max(axis=0) + 0.2)
+                     for r in range(regions) if (region_of == r).any()]
+            parent = list(range(len(boxes)))
+
+            def root(i):
+                while parent[i] != i:
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                return i
+            for i in range(len(boxes)):
+                for j in range(i + 1, len(boxes)):
+                    if np.all(boxes[i][0] <= boxes[j][1]) and np.all(boxes[j][0] <= boxes[i][1]):
+                        parent[root(i)] = root(j)
+            regions = len({root(i) for i in range(len(boxes))})
         edges = vtk.vtkFeatureEdges()
         edges.SetInputData(polydata)
         edges.BoundaryEdgesOn()
@@ -218,7 +328,7 @@ class GuideBuildMixin:
         edges.FeatureEdgesOff()
         edges.ManifoldEdgesOff()
         edges.Update()
-        return connectivity.GetNumberOfExtractedRegions(), edges.GetOutput().GetNumberOfCells()
+        return regions, edges.GetOutput().GetNumberOfCells()
 
     @staticmethod
     def _write_centred_stl(polydata, path):
@@ -259,6 +369,20 @@ class GuideBuildMixin:
                                                "dx" if side_text == "Right" else "sx",
                                                "red" if mode == "reduction" else "cut")
             jobs.append((node, side, side_text, bone, mode, os.path.join(folder, file_name)))
+        # side check: the file name and the label on the guide carry dx / sx - compare the side of
+        # each guide with the side its landmarks actually form before anything is written
+        side_checks = {side_text: self.laterality_check(side_text) for side_text in {job[2] for job in jobs}}
+        wrong = []
+        for side_text, check in sorted(side_checks.items()):
+            if check["status"] == "ok" and check["side"] != side_text:
+                wrong.append(f"{side_text} guides: the {side_text.lower()} landmarks form a "
+                             f"{check['side'].upper()} limb.")
+            elif check["status"] in ("check", "conflict"):
+                wrong.append(f"{side_text} guides: " + "; ".join(check["messages"]))
+        if wrong and not slicer.util.confirmOkCancelDisplay(
+                "SIDE CHECK FAILED - file names and guide labels (dx / sx) may carry the wrong side:\n\n"
+                + "\n".join(wrong) + "\n\nExport anyway?", windowTitle="Export guides"):
+            return
         existing = [os.path.basename(job[-1]) for job in jobs if os.path.exists(job[-1])]
         if existing and not slicer.util.confirmOkCancelDisplay(
                 "These files already exist and will be replaced:\n" + "\n".join(existing),
@@ -279,7 +403,18 @@ class GuideBuildMixin:
                 notes.append(f"{open_edges} open edges - press 'Clean up' and export again")
             if side is None:
                 notes.append("side taken from the current selection (guide built before sides were stored)")
-            problems += 1 if (not ok or pieces != 1 or open_edges) else 0
+            check = side_checks.get(side_text, {})
+            if check.get("status") != "ok" or check.get("side") != side_text:
+                notes.append("SIDE NOT CONFIRMED by the landmarks"
+                             + (" - " + "; ".join(check["messages"]) if check.get("messages") else ""))
+            changed = self._guide_changed_parts(node, side, bone, mode)
+            if changed:
+                notes.append("OUTDATED - changed since this guide was built: " + ", ".join(changed)
+                             + " - extrude this guide again")
+            elif changed is None:
+                notes.append("not checked for later plan changes (built with an older version)")
+            side_ok = check.get("status") == "ok" and check.get("side") == side_text
+            problems += 1 if (not ok or pieces != 1 or open_edges or changed or not side_ok) else 0
             lines.append(f"{'OK' if ok and not notes else 'CHECK'}  {label}: {os.path.basename(path)} "
                          f"({b[1] - b[0]:.0f} x {b[3] - b[2]:.0f} x {b[5] - b[4]:.0f} mm)"
                          + (" - " + "; ".join(notes) if notes else ""))
@@ -287,6 +422,10 @@ class GuideBuildMixin:
         self.guide_status.setStyleSheet(STATUS_WARN_STYLE if problems else STATUS_OK_STYLE)
         self.guide_status.setText(f"{len(jobs)} guide(s) exported to {folder} (each centred at 0,0,0):\n"
                                   + "\n".join(lines))
+        if problems:
+            slicer.util.warningDisplay(
+                "Check the exported guides before printing:\n\n" + "\n".join(l for l in lines if l.startswith("CHECK")),
+                windowTitle="Export guides")
 
     def onExportGuideStl(self):
         """Binary STL of the guide in millimetres, centred at 0,0,0 (for printing only the shape matters). Body and saw blocks are closed shells in ONE file - print preparation
@@ -409,8 +548,14 @@ class GuideBuildMixin:
                     display.SetVisibility(corrected)
                 elif node.GetID() in measured_ids or (
                         name.startswith(prefix) and (name.endswith(" sphere") or name.endswith(" axis"))):
+                    if corrected:
+                        saved = self.__dict__.setdefault("_hidden_original_overlay", {}).setdefault(side, {})
+                        saved.setdefault(node.GetID(), bool(display.GetVisibility()))
                     display.SetVisibility(not corrected)
         self._set_sphere_edit_visibility(not corrected)
+        # saw guide: the original set is shown again, measurement updates may show it from now on
+        if not corrected:
+            self.__dict__.setdefault("_hidden_original_overlay", {}).pop(side, None)
 
     # --- patient + guide label ----------------------------------------------------------------
     PATIENT_NODE_NAME = "Doggybone patient"

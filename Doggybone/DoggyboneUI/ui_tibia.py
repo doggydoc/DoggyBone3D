@@ -29,9 +29,9 @@ TIBIA_TARGET_ROWS = [
     ("amdta", "aMDTA (distal)", measurement_logic.TIBIA_MDTA_REF_DEG, True,
      "Distal joint line vs. the anatomical (shaft) axis - distal varus (<) / valgus (>)."),
     ("torsion", "Torsion tibia", 0.0, True,
-     "Tibial torsion (proximal condylar axis vs. cochlea axis). + = internal rotation."),
+     "Tibial torsion (proximal condylar axis vs. cochlea axis). + = internal torsion."),
     ("tma", "Torsion tibia/metatarsus", 0.0, False,
-     "Tibial metatarsal angle: foot axis vs. proximal condylar axis. + = inward."),
+     "Tibial metatarsal angle: foot axis vs. proximal condylar axis. + = internal."),
 ]
 
 
@@ -191,7 +191,7 @@ class TibiaTargetsMixin:
         if tma is not None:
             ready, value, description = tma()
             if ready:
-                values["tma"] = float(value) if description.startswith("Inward") else -float(value)
+                values["tma"] = float(value) if description.startswith("Internal") else -float(value)
         return values
 
     def _refresh_tibia_current(self):

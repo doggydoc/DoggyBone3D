@@ -658,6 +658,12 @@ class GuideEditMixin:
         node.SetAttribute("Doggybone.GuideSide", self.osteotomy_side.currentText)
         node.SetAttribute("Doggybone.GuideBone", self.osteotomy_bone.currentText)
         node.SetAttribute("Doggybone.GuideMode", getattr(self, "_guide_mode", "saw"))
+        # fingerprint of everything the guide was built from - the export compares it with the scene
+        try:
+            node.SetAttribute("Doggybone.PlanSignature", json.dumps(self._guide_plan_signature(
+                self.osteotomy_side.currentText, self.osteotomy_bone.currentText, getattr(self, "_guide_mode", "saw"))))
+        except Exception:
+            logging.exception("Doggybone: guide plan signature failed (the export cannot check this guide)")
 
 
     def onCleanGuide(self):
@@ -795,9 +801,16 @@ class GuideEditMixin:
                 if node.GetDisplayNode() is not None:
                     node.GetDisplayNode().SetHandlesInteractive(handles)
         self._guide_locked_planes = []
+        hidden_originals = {}                     # original overlay hidden meanwhile: only note it
+        for saved in self.__dict__.get("_hidden_original_overlay", {}).values():
+            for node_id in saved:
+                hidden_originals[node_id] = saved
         for node_id in getattr(self, "_guide_hidden_preview", []):
             node = slicer.mrmlScene.GetNodeByID(node_id)
             if node is not None and node.GetDisplayNode() is not None:
+                if node_id in hidden_originals:
+                    hidden_originals[node_id][node_id] = True
+                    continue
                 node.GetDisplayNode().SetVisibility(True)
         self._guide_hidden_preview = []
         # back to the module-wide bone opacity (it may have been changed while painting)

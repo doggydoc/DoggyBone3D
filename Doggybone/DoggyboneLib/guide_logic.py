@@ -464,12 +464,14 @@ def smooth_selection_rim(mesh, selected, amount_mm, edge_length=0.4):
 BLADE_THICKNESS = 1.0
 SLOT_CLEARANCE = 0.2
 SLOT_WIDTH = BLADE_THICKNESS + SLOT_CLEARANCE
-SLOT_WALL = 2.5          # plate thickness on each side of the slot
+SLOT_WALL = 2.5          # plate thickness on each side of the slot (grows with the corner bridges, see configure_slots)
 SLOT_MARGIN = 1.0        # slot longer than the bone on each side (fixed; then the end caps)
 BLOCK_HEIGHT = 10.0      # top of the saw block above the highest bone point under it
 BLOCK_MAX_DEPTH = 22.0   # block never reaches further down than this below its top
 BRIDGE_WIDTH = 3.0       # closed slot ends / corner bridges along the slot (UI: Corner bridges)
 BLOCK_WALL = 3.5         # block guide (open face instead of a slot): wall thickness behind the cutting face
+DEFAULT_BRIDGE_WIDTH = BRIDGE_WIDTH             # at this corner bridge size the walls have their base thickness
+BASE_SLOT_WALL, BASE_BLOCK_WALL = SLOT_WALL, BLOCK_WALL
 BREAK_BRIDGE_LENGTH = 2.5   # saw block pair: corner bridge at each END of each kerf, along the kerf (mm)
 BREAK_BRIDGE_HEIGHT = 2.5   # ... and its height below the top of the block (mm) - snaps off with pliers
                             # both = BRIDGE_WIDTH - 0.5 (the kerf is kept free 0.5 mm beyond the slot end)
@@ -479,11 +481,18 @@ BRIDGE_FRACTION = 0.30       # bridges close the top 30 % of the local block hei
 
 def configure_slots(blade_thickness=None, block_height=None, bridge_size=None):
     """Set blade thickness (slot = blade + clearance), saw block height and the size of the corner
-    bridges (end caps of the slots, mm along the slot; the block grows sideways by the same amount)."""
+    bridges (end caps of the slots, mm along the slot; the block grows sideways by the same amount).
+    The corner bridge size also sets the width of the whole frame: every mm above the default adds
+    1 mm to the wall on each side of the slot (block guide: behind the cutting face); below the
+    default the walls keep their base thickness."""
     global BLADE_THICKNESS, SLOT_WIDTH, BLOCK_HEIGHT, BRIDGE_WIDTH, BREAK_BRIDGE_LENGTH, BREAK_BRIDGE_HEIGHT
+    global SLOT_WALL, BLOCK_WALL
     if bridge_size is not None:
         BRIDGE_WIDTH = max(1.5, float(bridge_size))
         BREAK_BRIDGE_LENGTH = BREAK_BRIDGE_HEIGHT = BRIDGE_WIDTH - 0.5
+        extra = max(0.0, BRIDGE_WIDTH - DEFAULT_BRIDGE_WIDTH)
+        SLOT_WALL = BASE_SLOT_WALL + extra
+        BLOCK_WALL = BASE_BLOCK_WALL + extra
     if blade_thickness is not None:
         BLADE_THICKNESS = float(blade_thickness)
         SLOT_WIDTH = BLADE_THICKNESS + SLOT_CLEARANCE
@@ -1472,6 +1481,15 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
             f_top = np.maximum(f_top, s_v - top)
             normals_dist.append(s_n)
         f_outer = np.minimum(f_outer, plates)
+        # hinge stop (apply_hinge_stop): a kerf ends before the hinge - beyond its end the block is solid
+        hinge_terms = []
+        for slot in slots:
+            if "hinge_end" in slot:
+                sign, u_end = slot["hinge_end"]
+                s_u = (X - np.asarray(slot["centre"], float)) @ np.asarray(slot["u"], float)
+                hinge_terms.append(sign * (s_u - u_end))
+            else:
+                hinge_terms.append(np.full(AA.shape, -np.inf))
         # kerfs through the WHOLE block (open at the sides, from the bone to the top) except a SMALL
         # break-off bridge at each end of each kerf: BREAK_BRIDGE_LENGTH along the kerf and
         # BREAK_BRIDGE_HEIGHT below the ACTUAL top of the block (the top of the whole block, which may be
@@ -1481,12 +1499,12 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
         if block:
             # open window = the wedge between both cutting faces (side * s_n > -half for both slots)
             window = np.full(AA.shape, -np.inf)
-            for (C, u, v, n, side, ua, ub, u0, u1, top, hb), s_n in zip(frames, normals_dist):
-                window = np.maximum(window, -side * s_n - half)
+            for (C, u, v, n, side, ua, ub, u0, u1, top, hb), s_n, h_term in zip(frames, normals_dist, hinge_terms):
+                window = np.maximum(np.maximum(window, -side * s_n - half), h_term)
             kerf = np.maximum(window, -bridge)
         else:
-            for s_n in normals_dist:
-                kerf = np.minimum(kerf, np.maximum(np.abs(s_n) - half, -bridge))
+            for s_n, h_term in zip(normals_dist, hinge_terms):
+                kerf = np.minimum(kerf, np.maximum(np.maximum(np.abs(s_n) - half, -bridge), h_term))
         f_u = np.maximum(a_lo - AA, AA - a_hi)                           # common block length
         solid = np.maximum(np.maximum(f_outer, f_u), np.maximum(f_top, seat - b))
         sdf[:, jb, :] = np.maximum(solid, -kerf)
@@ -1539,6 +1557,196 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
     for value in np.concatenate([origin, e_u, e_w]):
         frame.InsertNextValue(float(value))
     out.GetFieldData().AddArray(frame)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Closing wedge: hinge stop and break-off strut at the hinge side of the saw block
+# ---------------------------------------------------------------------------------------------
+
+def kerf_hinge_u(slot, other):
+    """Where the OTHER cutting plane meets this slot, as this slot's u coordinate (along the kerf),
+    evaluated over the depth of the block; the value nearest to the slot centre (most restrictive)
+    is returned, or None if the planes are (nearly) parallel."""
+    C, u, v = (np.asarray(slot[k], float) for k in ("centre", "u", "v"))
+    o2, n2 = np.asarray(other["origin"], float), unit(np.asarray(other["normal"], float))
+    k = float(n2 @ u)
+    if abs(k) < 1e-6:
+        return None
+    bottom = np.asarray(slot.get("bottom", [0.0]), float)
+    depths = np.linspace(float(np.min(bottom)), float(slot["v_top"]), 7)
+    values = [-float(n2 @ (C + d * v - o2)) / k for d in depths]
+    side = 1.0 if np.mean(values) >= 0.0 else -1.0
+    return min(values) if side > 0 else max(values)
+
+
+def apply_hinge_stop(slots, stop):
+    """Closing wedge with the hinge (where the two cutting planes meet) inside the block's length:
+    each kerf ends `stop` mm before the hinge; beyond that the block stays solid, so the frame is
+    closed at the hinge side and the blade cannot cut through the hinge. Changes the slot dicts
+    (u0/u1, ua/ub, length, 'hinge_end') and returns a short note ('' if nothing was changed)."""
+    good = [s for s in slots if "error" not in s]
+    if len(good) != 2 or stop <= 0.0:
+        return ""
+    notes = []
+    for index, slot in enumerate(good):
+        u_h = kerf_hinge_u(slot, good[1 - index])
+        if u_h is None or not (float(slot["ua"]) - 2.0 < u_h < float(slot["ub"]) + 2.0):
+            continue
+        if u_h > 0.0:
+            end = min(float(slot["u1"]), u_h - stop)
+            if end <= float(slot["u0"]) + 2.0:
+                continue
+            slot["u1"], slot["ub"], slot["hinge_end"] = end, end + BRIDGE_WIDTH, (1.0, end)
+        else:
+            end = max(float(slot["u0"]), u_h + stop)
+            if end >= float(slot["u1"]) - 2.0:
+                continue
+            slot["u0"], slot["ua"], slot["hinge_end"] = end, end - BRIDGE_WIDTH, (-1.0, end)
+        slot["length"] = float(slot["u1"]) - float(slot["u0"])
+        notes.append(f"{slot.get('label', 'cut')} ends {stop:.1f} mm before the hinge")
+    return ("Hinge stop: " + ", ".join(notes) + " - frame closed there, the hinge cannot be cut through.") if notes else ""
+
+
+def hinge_strut(slots, block=None, neck_radius=1.0, neck_height=2.0, bar_width=3.0, bar_thickness=2.0, sink=0.5,
+                clearance=0.5):
+    """Break-off strut across the closing wedge AT THE HINGE: a flat bridge (bar_width x bar_thickness,
+    default 3 x 2 mm) from the proximal to the distal outer wall of the saw block, standing on the
+    block's real top surface on two round posts (default 2 mm thick, 2 mm high) - break it off with
+    pliers once the guide is pinned. The posts never reach into a kerf: each stands at least
+    `clearance` mm away from BOTH cutting slots (checked against both kerf planes - near the hinge the
+    two kerfs cross; each post runs parallel to its own wall); if that is not possible at the hinge, the strut
+    moves towards the slot centre. With `block` (the saw_block_pair mesh) the
+    feet are found by casting rays down onto the block, so they always sit on it; if the walls do
+    not reach the hinge position the strut moves towards the slot centre until both feet sit.
+    Returns a closed polydata (two posts + the bridge, overlapping closed shells) or None."""
+    good = [s for s in slots if "error" not in s]
+    if len(good) != 2:
+        return None
+    frames = []
+    for index, slot in enumerate(good):
+        C, u, v, n = (np.asarray(slot[k], float) for k in ("centre", "u", "v", "normal"))
+        u_h = kerf_hinge_u(slot, good[1 - index])
+        if u_h is None:                                       # parallel cuts: at the u1 end
+            u_h = float(slot["u1"])
+        side = float(slot.get("side") or 1.0)
+        frames.append((C, u, v, n, side, u_h, float(slot["v_top"])))
+    up = unit(frames[0][2] + frames[1][2])
+    half = 0.5 * SLOT_WIDTH
+    post_offset = half + neck_radius + clearance + 0.1           # post centre from its own kerf centre
+    kerfs = [(np.asarray(sl["centre"], float), unit(np.asarray(sl["normal"], float))) for sl in good]
+
+    def clear_of_kerfs(point):
+        # + 0.05 mm: the 24-sided post reaches slightly beyond its nominal radius between the corners
+        return all(abs(float((point - Ck) @ nk)) - half >= neck_radius + clearance + 0.05 for Ck, nk in kerfs)
+    obb = None
+    if block is not None and block.GetNumberOfPoints() > 0:
+        obb = vtk.vtkOBBTree()
+        obb.SetDataSet(block)
+        obb.BuildLocator()
+
+    def top_hit(point, axis):
+        """Highest point (along `axis`) of the block on the line through `point` along `axis`."""
+        if obb is None:
+            return point
+        hits = vtk.vtkPoints()
+        obb.IntersectWithLine([float(x) for x in point + 30.0 * axis], [float(x) for x in point - 30.0 * axis],
+                              hits, None)
+        if hits.GetNumberOfPoints() == 0:
+            return None
+        found = [np.array(hits.GetPoint(i)) for i in range(hits.GetNumberOfPoints())]
+        return max(found, key=lambda q: float(q @ axis))
+
+    def post_ends(foot, axis, level):
+        """Post along `axis` (its own wall direction) from below the foot to inside the bridge."""
+        lift = float(axis @ up)
+        if lift < 0.3:
+            return None
+        t_top = (level - float(foot @ up)) / lift
+        return foot - sink * axis, foot + t_top * axis, foot + (t_top + 0.5 * bar_thickness / lift) * axis
+
+    feet = None
+    for step in np.arange(0.0, 12.01, 0.5):                     # from the hinge towards the slot centre
+        candidate = []
+        for C, u, v, n, side, u_h, v_top in frames:
+            u_at = u_h - np.sign(u_h) * step
+            guess = C + u_at * u + v_top * v - side * post_offset * n
+            hit = top_hit(guess, v)                          # along the wall: same distance to its kerf
+            if hit is None or abs(float((hit - guess) @ v)) > 3.0:     # no wall here (e.g. over a kerf)
+                break
+            candidate.append((hit, v))
+        if len(candidate) != 2:
+            continue
+        level = max(float(f @ up) for f, _ in candidate) + neck_height
+        ends = [post_ends(f, a, level) for f, a in candidate]
+        if any(e is None for e in ends):
+            continue
+        # the whole post, from its sunk foot into the bridge, stays clear of both kerfs
+        if all(clear_of_kerfs(lo + k / 8.0 * (hi - lo)) for lo, _, hi in ends for k in range(9)):
+            feet = candidate
+            break
+    if feet is None:
+        return None
+    post_tops = [e[1] for e in ends]
+
+    def closed(source_output):
+        tri = vtk.vtkTriangleFilter()
+        tri.SetInputData(source_output)
+        weld = vtk.vtkCleanPolyData()                    # shared edges -> closed shell
+        weld.SetInputConnection(tri.GetOutputPort())
+        weld.SetTolerance(1e-6)
+        normals = vtk.vtkPolyDataNormals()
+        normals.SetInputConnection(weld.GetOutputPort())
+        normals.ConsistencyOn()
+        normals.AutoOrientNormalsOn()
+        normals.SplittingOff()
+        normals.Update()
+        part = vtk.vtkPolyData()
+        part.DeepCopy(normals.GetOutput())
+        return part
+
+    append = vtk.vtkAppendPolyData()
+    for lo, _, hi in ends:                                         # round posts, sunk into the block
+        line = vtk.vtkLineSource()
+        line.SetPoint1(*[float(x) for x in lo])
+        line.SetPoint2(*[float(x) for x in hi])                    # into the bridge
+        tube = vtk.vtkTubeFilter()
+        tube.SetInputConnection(line.GetOutputPort())
+        tube.SetRadius(float(neck_radius))
+        tube.SetNumberOfSides(24)
+        tube.CappingOn()
+        tube.Update()
+        append.AddInputData(closed(tube.GetOutput()))
+    # flat bridge on the posts: along the line between them, bar_width wide, bar_thickness high
+    along = post_tops[1] - post_tops[0]
+    along = along - float(along @ up) * up
+    length = float(np.linalg.norm(along))
+    if length < 1e-6:
+        return None
+    along = along / length
+    across = np.cross(up, along)
+    centre = 0.5 * (post_tops[0] + post_tops[1]) + 0.5 * bar_thickness * up
+    cube = vtk.vtkCubeSource()
+    cube.SetXLength(length + 2.0 * neck_radius + 1.0)            # covers both posts completely
+    cube.SetYLength(float(bar_width))
+    cube.SetZLength(float(bar_thickness))
+    cube.Update()
+    matrix = vtk.vtkMatrix4x4()
+    for r in range(3):
+        matrix.SetElement(r, 0, float(along[r]))
+        matrix.SetElement(r, 1, float(across[r]))
+        matrix.SetElement(r, 2, float(up[r]))
+        matrix.SetElement(r, 3, float(centre[r]))
+    place = vtk.vtkTransform()
+    place.SetMatrix(matrix)
+    placed = vtk.vtkTransformPolyDataFilter()
+    placed.SetInputConnection(cube.GetOutputPort())
+    placed.SetTransform(place)
+    placed.Update()
+    append.AddInputData(closed(placed.GetOutput()))
+    append.Update()
+    out = vtk.vtkPolyData()
+    out.DeepCopy(append.GetOutput())
     return out
 
 

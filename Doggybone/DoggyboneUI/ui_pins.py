@@ -389,12 +389,28 @@ class PinsMixin:
             wp = renderer.GetWorldPoint()
             ends.append(np.array([wp[0] / wp[3], wp[1] / wp[3], wp[2] / wp[3]]))
         d = guide_logic.unit(ends[1] - ends[0])
+
+        def ray_distance(point):
+            q = np.asarray(point, float) - ends[0]
+            return float(np.linalg.norm(q - (q @ d) * d))
         best, best_dist = None, tolerance
         for i in range(node.GetNumberOfControlPoints()):
-            q = np.array(node.GetNthControlPointPositionWorld(i)) - ends[0]
-            dist = float(np.linalg.norm(q - (q @ d) * d))
+            dist = ray_distance(node.GetNthControlPointPositionWorld(i))
             if dist < best_dist:
                 best, best_dist = i, dist
+        if best is not None or not self._guide_mode_is_reduction():
+            return best
+        # reduction: the pins are shown as long shafts - a click anywhere on a shaft hits that pin
+        labels = {node.GetNthControlPointLabel(i): i for i in range(node.GetNumberOfControlPoints())}
+        best_gap = None
+        for label, start, end, radius in getattr(self, "_reduction_pin_shafts", []):
+            index = labels.get(label)
+            if index is None:
+                continue
+            dist = min(ray_distance(start + t * (end - start)) for t in np.linspace(0.0, 1.0, 41))
+            gap = dist - (radius + 1.0)
+            if gap <= 0.0 and (best_gap is None or gap < best_gap):
+                best, best_gap = index, gap
         return best
 
     def _remove_pin(self, index):
@@ -1367,6 +1383,10 @@ class PinsMixin:
         """Axes of the pins set after the reduction (corrected pose) - ALWAYS into the reduction node,
         also when called while the saw guide is shown (they must never overwrite the saw guide's axes)."""
         pins, _rejected = self._reduction_marked_pins()
+        self._reduction_pin_shafts = [
+            (pin["label"], np.asarray(pin["far"], float) - 3.0 * np.asarray(pin["axis"], float),
+             np.asarray(pin["top"], float) + 2.0 * np.asarray(pin["axis"], float), 0.5 * float(pin["diameter"]))
+            for pin in pins if all(k in pin for k in ("far", "top", "axis", "diameter", "label"))]
         saved = getattr(self, "_guide_mode", "saw")
         self._guide_mode = "reduction"
         try:
@@ -1406,6 +1426,15 @@ class PinsMixin:
         if "error" in pin:
             self._pin_feedback(f"No pin there: {pin['error']}.", p, ok=False)
             return
+        if self._pin_distribution_manual() and hasattr(self, "pin_row_count"):
+            limit = int(self.pin_row_count.value)
+            same = sum(1 for i in range(node.GetNumberOfControlPoints())
+                       if self._pin_kind(node, i)[0] == pin["segment"])
+            if same >= limit:
+                self._pin_feedback(
+                    f"No pin added: the {pin['segment']} fragment already has {same} pin(s) - 'Pins' is set "
+                    f"to {limit}. Click a pin to remove it, or raise 'Pins'.", p, ok=False)
+                return
         M_, moved_ = self._correction_state()
         direction_ = self._reduction_pin_frame(M_, moved_)[0] if M_ is not None else None
         shift = 0.0
