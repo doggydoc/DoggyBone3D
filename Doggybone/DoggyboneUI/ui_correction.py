@@ -1014,6 +1014,25 @@ class CorrectionMixin:
                    f"{self.current_values_label.text}")
         self.osteotomy_status.setText(message)
         self.correction_status.setText("No preview.")
+        self._remove_orphan_display_nodes()
+
+    @staticmethod
+    def _remove_orphan_display_nodes():
+        """Display nodes whose plane / point list was deleted stay in the scene and are still DRAWN
+        (old cutting planes in the 3D view after a reset) - remove them, then redraw the views."""
+        browsers = list(slicer.util.getNodesByClass("vtkMRMLSequenceBrowserNode"))
+        for node in list(slicer.util.getNodesByClass("vtkMRMLDisplayNode")):
+            if not (node.IsA("vtkMRMLMarkupsDisplayNode") or node.IsA("vtkMRMLModelDisplayNode")):
+                continue
+            if node.GetDisplayableNode() is not None or node.GetScene() is None:
+                continue
+            if any(b.GetSequenceNode(node) is not None for b in browsers):
+                # kept alive by a saved Scene View (snapshot): deleting it would make Slicer re-create
+                # it and re-apply the snapshot (camera, visibilities) - only switch it off
+                node.SetVisibility(False)
+                continue
+            slicer.mrmlScene.RemoveNode(node)
+        slicer.util.forceRenderAllViews()
 
     def _set_cutting_plane_handles(self, side, bone, interactive):
         for name in (self._plane_node_name(side, bone), self._distal_plane_node_name(side, bone)):

@@ -450,6 +450,8 @@ class PlanesMixin:
             logging.exception("Doggybone: inserting the master plane failed")
             if created and node is not None and node.GetScene() is not None:
                 slicer.mrmlScene.RemoveNode(node)      # no half-made (unaligned) plane is left behind
+                if hasattr(self, "_remove_orphan_display_nodes"):
+                    self._remove_orphan_display_nodes()
             self.osteotomy_status.setText(f"Could not create master plane: {exc}")
         finally:
             self._refresh_views()
