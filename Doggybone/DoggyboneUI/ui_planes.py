@@ -418,6 +418,7 @@ class PlanesMixin:
         node_name = self._distal_plane_node_name(side, bone) if distal else self._plane_node_name(side, bone)
         label = "Distal" if distal else "Proximal"
         color = (0.95, 0.5, 0.1) if distal else None
+        node, created = None, False
         try:
             node, created, message = self._create_plane_node_at_anatomical_axis(side, bone, node_name, label, color)
             self._update_plane_handle_interactivity()
@@ -446,6 +447,9 @@ class PlanesMixin:
                     "rotate it by hand if needed, then create the second plane. "
                     + ("" if "aligned" in self.osteotomy_status.text else self.osteotomy_status.text))
         except Exception as exc:
+            logging.exception("Doggybone: inserting the master plane failed")
+            if created and node is not None and node.GetScene() is not None:
+                slicer.mrmlScene.RemoveNode(node)      # no half-made (unaligned) plane is left behind
             self.osteotomy_status.setText(f"Could not create master plane: {exc}")
         finally:
             self._refresh_views()
