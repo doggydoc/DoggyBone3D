@@ -1453,15 +1453,55 @@ class CorrectionMixin:
                     if display is not None:
                         display.RemoveAllViewNodeIDs()
 
+    COMPARE_LAYOUT_ID = 1501
+    COMPARE_LAYOUT_XML = (
+        '<layout type="horizontal" split="true">'
+        ' <item><view class="vtkMRMLViewNode" singletontag="1">'
+        '<property name="viewlabel" action="default">1</property></view></item>'
+        ' <item><view class="vtkMRMLViewNode" singletontag="2">'
+        '<property name="viewlabel" action="default">2</property></view></item>'
+        '</layout>')
+
+    def _compare_layout(self):
+        """Two large 3D views side by side, no slice views (registered once)."""
+        layout_node = slicer.app.layoutManager().layoutLogic().GetLayoutNode()
+        if not layout_node.IsLayoutDescription(self.COMPARE_LAYOUT_ID):
+            layout_node.AddLayoutDescription(self.COMPARE_LAYOUT_ID, self.COMPARE_LAYOUT_XML)
+        return self.COMPARE_LAYOUT_ID
+
+    @staticmethod
+    def _two_3d_views_shown():
+        """True if the current layout SHOWS two 3D views (Slicer keeps hidden view widgets around)."""
+        layout_manager = slicer.app.layoutManager()
+        if layout_manager is None or layout_manager.threeDViewCount < 2:
+            return False
+        return all(layout_manager.threeDWidget(i).isVisible() for i in range(2))
+
+    def _compare_layout_changed(self):
+        """Layout switched by hand while comparing: with only ONE 3D view left the comparison cannot be
+        shown - compare mode off (normal preview display) instead of a view with only the originals."""
+        layout_manager = slicer.app.layoutManager()
+        box = getattr(self, "compare_views_checkbox", None)
+        if box is None or not box.checked or getattr(self, "_compare_switching", False):
+            return
+        if not self._two_3d_views_shown():
+            self._layout_before_compare = None          # keep the layout just chosen
+            box.setChecked(False)
+        else:
+            self._apply_compare_views()
+
     def onCompareViewsToggled(self, on):
         layout_manager = slicer.app.layoutManager()
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         if on:
             self._layout_before_compare = layout_manager.layout
-            if layout_manager.threeDViewCount < 2:
-                layout_manager.setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutDual3DView)
+            self._compare_switching = True
+            try:
+                layout_manager.setLayout(self._compare_layout())
                 slicer.app.processEvents()
+            finally:
+                self._compare_switching = False
             view_nodes = [layout_manager.threeDWidget(i).mrmlViewNode() for i in range(2)]
             self._linked_before_compare = [v.GetLinkedControl() for v in view_nodes]
             for view in view_nodes:
@@ -1482,8 +1522,12 @@ class CorrectionMixin:
             if i < layout_manager.threeDViewCount:
                 layout_manager.threeDWidget(i).mrmlViewNode().SetLinkedControl(bool(linked))
         before = getattr(self, "_layout_before_compare", None)
-        if before is not None:
-            layout_manager.setLayout(before)
+        if before is not None and before != self.COMPARE_LAYOUT_ID:
+            self._compare_switching = True
+            try:
+                layout_manager.setLayout(before)
+            finally:
+                self._compare_switching = False
         self._layout_before_compare = None
         # back to the normal preview display: originals hidden while a preview exists
         combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])

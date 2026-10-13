@@ -1263,6 +1263,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule("Doggybone"))
 
     def _on_layout_changed(self, *_args):
+        if hasattr(self, "_compare_layout_changed"):
+            qt.QTimer.singleShot(0, self._compare_layout_changed)
         def redraw():
             try:
                 slicer.util.forceRenderAllViews()
