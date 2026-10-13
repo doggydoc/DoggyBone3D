@@ -11,3 +11,6 @@ __pycache__/
 .claude_*
 .guide_panel*.png
 _to_delete/
+
+# original screenshots (unprocessed, may contain patient data)
+doc/originals/
