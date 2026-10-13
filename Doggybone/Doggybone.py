@@ -445,7 +445,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # opening the osteotomy panel (e.g. coming back from the guide tools): original / preview / compare
         # views as the osteotomy planning shows them
         osteotomy_collapsible_button.connect('contentsCollapsed(bool)',
-                                             lambda collapsed: None if collapsed else self._sync_original_segmentation())
+                                             lambda collapsed: None if collapsed else self._on_osteotomy_panel_opened())
         osteotomy_collapsible_button.text = "Osteotomy Planning"
         osteotomy_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #c05621; color: white; font-weight: bold; }")

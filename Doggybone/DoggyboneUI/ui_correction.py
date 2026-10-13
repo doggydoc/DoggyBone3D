@@ -440,9 +440,9 @@ class CorrectionMixin:
         self.correction_status.setText(
             f"Preview active ({self.osteotomy_technique.currentText}): wedge {wedge_description}, "
             f"rotation {self.rotation_angle.value:.1f}\N{DEGREE SIGN}. Yellow = proximal fragment, "
-            "turquoise = distal fragment, red = wedge REMOVE, beige = combined final model - the one "
-            "matching the reference-plane choice shows the corrected position. If the direction "
-            "looks wrong, tilt the distal plane differently or change the reference plane.")
+            "turquoise = distal fragment - the fragment that is moved shows the corrected position "
+            "(the removed wedge is kept hidden in the scene). If the direction looks wrong, tilt the "
+            "distal plane differently or change the reference plane.")
         if alignment_report:
             self.correction_status.setText(self.correction_status.text + "\n" + alignment_report)
         advice = self._cwo_wedge_advice(side, bone)
@@ -1266,6 +1266,7 @@ class CorrectionMixin:
                 combined_node.CreateDefaultDisplayNodes()
                 combined_node.GetDisplayNode().SetColor(0.85, 0.8, 0.65)
                 combined_node.GetDisplayNode().SetOpacity(1.0)
+                combined_node.GetDisplayNode().SetVisibility(False)    # osteotomy view: the coloured fragments
             combined_node.SetAndObservePolyData(combined_polydata)
         if update_combined:
             self._update_corrected_landmarks()
@@ -1311,6 +1312,29 @@ class CorrectionMixin:
     CORRECTED_PREFIX = "Doggybone {side} corrected"
     CORRECTED_STATUS_MARK = "\nCorrected position (measured on the moved landmarks): "
 
+    def _on_osteotomy_panel_opened(self):
+        """Back in the osteotomy planning (e.g. from the guide tools): coloured fragments, original /
+        compare views as the osteotomy planning shows them."""
+        self._show_preview_fragments()
+        self._sync_original_segmentation()
+
+    def _show_preview_fragments(self):
+        """Osteotomy view: the two fragments in their own colours (fixed yellow, moved turquoise) and NOT
+        the combined bone - it is the same surface, both visible at once fight for the same pixels and
+        the turquoise only flickers through the beige. The combined bone stays in the scene (reduction
+        guide, export) and is shown by the reduction guide mode."""
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        proximal_name, distal_name, _t, combined_name, _w = self._preview_node_names(side, bone)
+        combined = slicer.mrmlScene.GetFirstNodeByName(combined_name)
+        if combined is None or combined.GetDisplayNode() is None:
+            return
+        combined.GetDisplayNode().SetVisibility(False)
+        for name in (proximal_name, distal_name):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(True)
+
     def _sync_original_segmentation(self):
         """While a correction preview of the current side / bone exists, the ORIGINAL segmentation
         is hidden in 3D (it stays in the slice views) - whatever showed it again (bone switch, guide
@@ -1318,6 +1342,9 @@ class CorrectionMixin:
         that guide sits on the uncut bone."""
         if getattr(self, "_guide_shown_surface", None):
             return      # a guide tool shows its own bone surface - the segmentation stays hidden meanwhile
+        guide_panel = getattr(self, "_guide_collapsible", None)
+        if guide_panel is None or guide_panel.collapsed:
+            self._show_preview_fragments()    # no guide tool open: fragments in colour, not the combined bone
         if self._compare_mode():
             self._apply_compare_views()       # original segmentation in the left view, corrected bone right
             return
