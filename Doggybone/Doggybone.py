@@ -1099,13 +1099,13 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "into one folder - always the last guide built for each bone and type. The file names carry "
             "side, bone and type: name-number-fem/tib-dx/sx-cut/red.stl.")
         self.guide_export_button.clicked.connect(self.onExportAllGuides)
-        self.guide_clean_button = qt.QPushButton("Clean up")
-        self.guide_clean_button.setToolTip(
-            "Rebuild the guide as ONE clean, closed solid: all parts united, loose triangles and islands "
-            "removed, broken edges closed, and the whole contact surface re-made as an even offset of the "
-            "bone (fit gap). Run it after 'Extrude', before exporting.")
-        self.guide_clean_button.clicked.connect(self.onCleanGuide)
-        # workflow order: Extrude | Clean up, below Export guides | Export bone STL
+        self.guide_label_mode = qt.QComboBox()
+        self.guide_label_mode.addItems(["Label: break-off tag", "Label: on the guide", "No label"])
+        self.guide_label_mode.setToolTip(
+            "Label with patient no., bone, side and an arrow to proximal - built with 'Extrude'. "
+            "'Break-off tag': a small plate at the proximal end of the guide on a thin neck, broken off with "
+            "pliers when no longer needed. 'On the guide': raised text on a free flat area of the guide.")
+        # workflow order: Extrude | Label, below Export guides | Export bone STL
         self.guide_extrude_button.setText("Extrude")
         self.guide_extrude_button.setToolTip("Build the guide body (guide body, saw blocks / pin bosses, label).")
         self.guide_export_bone_button = qt.QPushButton("Export bone STL...")
@@ -1117,7 +1117,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         extrude_row.setContentsMargins(0, 0, 0, 0)
         extrude_row.setHorizontalSpacing(6)
         extrude_row.setVerticalSpacing(2)
-        for index, button in enumerate((self.guide_extrude_button, self.guide_clean_button,
+        for index, button in enumerate((self.guide_extrude_button, self.guide_label_mode,
                                         self.guide_export_button, self.guide_export_bone_button)):
             button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             button.setMinimumWidth(60)
@@ -1127,13 +1127,6 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         extrude_widget = qt.QWidget()
         extrude_widget.setLayout(extrude_row)
         guide_form.addRow(extrude_widget)
-        self.guide_label_mode = qt.QComboBox()
-        self.guide_label_mode.addItems(["Break-off tag", "On the guide", "No label"])
-        self.guide_label_mode.setToolTip(
-            "Patient no., bone, side and an arrow to proximal. 'Break-off tag': a small plate at the proximal "
-            "end of the guide, joined by a thin neck - break it off with pliers when it is no longer needed. "
-            "'On the guide': raised text on a free flat area of the guide. Built with 'Extrude'.")
-        guide_form.addRow("Label", self.guide_label_mode)
 
 
         self.guide_status = qt.QLabel("No footprint yet.")

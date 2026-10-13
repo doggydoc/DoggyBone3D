@@ -400,7 +400,7 @@ class GuideBuildMixin:
             if pieces != 1:
                 notes.append(f"{pieces} separate pieces")
             if open_edges:
-                notes.append(f"{open_edges} open edges - press 'Clean up' and export again")
+                notes.append(f"{open_edges} open edges - press 'Extrude' again and export again")
             if side is None:
                 notes.append("side taken from the current selection (guide built before sides were stored)")
             check = side_checks.get(side_text, {})
@@ -577,9 +577,13 @@ class GuideBuildMixin:
         node.SetParameter("name", self.patient_name.text)
         node.SetParameter("number", self.patient_number.text)
 
+    LABEL_MODES = ("Break-off tag", "On the guide", "No label")       # internal names, same order as the box
+
     def _label_mode(self):
         box = getattr(self, "guide_label_mode", None)
-        return box.currentText if box is not None else "Break-off tag"
+        if box is None or not 0 <= box.currentIndex < len(self.LABEL_MODES):
+            return "Break-off tag"
+        return self.LABEL_MODES[box.currentIndex]
 
     def _label_wanted(self):
         return self._label_mode() != "No label"

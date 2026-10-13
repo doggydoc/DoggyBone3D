@@ -666,48 +666,6 @@ class GuideEditMixin:
             logging.exception("Doggybone: guide plan signature failed (the export cannot check this guide)")
 
 
-    def onCleanGuide(self):
-        body_node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
-        if body_node is None or body_node.GetPolyData() is None or body_node.GetPolyData().GetNumberOfPoints() == 0:
-            self.guide_status.setText("No guide body - press 'Extrude' first.")
-            return
-        if self._guide_mode_is_reduction():
-            side = self.osteotomy_side.currentText.lower()
-            bone = self.osteotomy_bone.currentText
-            combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
-            bone_polydata = combined.GetPolyData() if combined is not None else None
-        else:
-            bone_polydata = self._get_bone_polydata()
-        labelmap, label_value = None, 1
-        if not self._guide_mode_is_reduction():
-            segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
-            if segmentation_node is not None and segmentation_node.GetSegmentation().GetNumberOfSegments():
-                segment = segmentation_node.GetSegmentation().GetSegment(segmentation_node.GetSegmentation().GetNthSegmentID(0))
-                labelmap = segment.GetRepresentation(
-                    slicer.vtkSegmentationConverter.GetSegmentationBinaryLabelmapRepresentationName())
-                label_value = segment.GetLabelValue()
-        _d, shaft, _a, frame_error = self._guide_direction_frame(self.osteotomy_side.currentText.lower(),
-                                                                 self.osteotomy_bone.currentText)
-        qt.QApplication.setOverrideCursor(qt.Qt.WaitCursor)
-        try:
-            cleaned, info = guide_logic.clean_guide(body_node.GetPolyData(), bone_polydata, float(self.guide_gap.value),
-                                                    bone_labelmap=labelmap, label_value=label_value,
-                                                    fill_axis=None if frame_error else shaft)
-        except ValueError as error:
-            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
-            self.guide_status.setText(f"Clean up not possible: {error}. The guide is unchanged.")
-            return
-        finally:
-            qt.QApplication.restoreOverrideCursor()
-        self._set_guide_body(cleaned)
-        self.guide_status.setStyleSheet(STATUS_OK_STYLE if info["open_edges"] == 0 and info["bodies_after"] == 1
-                                        else STATUS_WARN_STYLE)
-        self.guide_status.setText(
-            f"Guide cleaned: {info['parts_before']} parts -> {info['bodies_after']} solid body, "
-            f"{info['open_edges']} open edges, {info['islands_dropped']} loose island(s) removed, contact surface "
-            f"re-made {self.guide_gap.value:.2f} mm off the bone, volume {info['volume_mm3']:.0f} mm\N{SUPERSCRIPT THREE}. "
-            "Check it, then 'Export STL...'.")
-
     def onGuideDelete(self):
         if not self._guide_mode_is_reduction():
             for label in ("proximal", "distal"):
