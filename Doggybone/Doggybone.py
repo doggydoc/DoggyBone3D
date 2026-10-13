@@ -860,8 +860,31 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 reduction_grid.addWidget(self._reduction_diam_label, row, 0)
             reduction_grid.addWidget(red_label(l2), row, 2)
             reduction_grid.addWidget(f2, row, 3)
-        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 5, 0, 1, 2)
-        reduction_grid.addWidget(self.reduction_ring_checkbox, 5, 2, 1, 2)
+        # the osteotomy panel's 'Reduction gap' once more here (same value, both fields linked)
+        self.reduction_gap_guide = qt.QDoubleSpinBox()
+        self.reduction_gap_guide.setRange(self.reduction_gap.minimum, self.reduction_gap.maximum)
+        self.reduction_gap_guide.setDecimals(self.reduction_gap.decimals)
+        self.reduction_gap_guide.setSingleStep(self.reduction_gap.singleStep)
+        self.reduction_gap_guide.setSuffix(self.reduction_gap.suffix)
+        self.reduction_gap_guide.setValue(self.reduction_gap.value)
+        self.reduction_gap_guide.setToolTip(
+            "Same value as 'Reduction gap' in Osteotomy Planning (the two fields are linked): gap left "
+            "between the cut faces after reduction. Changes the corrected bone - press 'Show/update "
+            "preview' again, then 'Extrude' the reduction guide.")
+
+        def link(source, target):
+            def copy(value):
+                if abs(target.value - value) > 1e-9:
+                    was = target.blockSignals(True)
+                    target.setValue(value)
+                    target.blockSignals(was)
+            source.valueChanged.connect(copy)
+        link(self.reduction_gap, self.reduction_gap_guide)
+        link(self.reduction_gap_guide, self.reduction_gap)
+        reduction_grid.addWidget(red_label("Red. gap"), 5, 0)
+        reduction_grid.addWidget(self.reduction_gap_guide, 5, 1)
+        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 6, 0, 1, 2)
+        reduction_grid.addWidget(self.reduction_ring_checkbox, 6, 2, 1, 2)
         self._reduction_pin_buttons = qt.QGridLayout()
         self._reduction_pin_buttons.setContentsMargins(0, 0, 0, 0)
         self._reduction_pin_buttons.setHorizontalSpacing(6)
@@ -869,7 +892,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._reduction_pin_buttons.addWidget(self.reduction_delete_pins_button, 0, 2)
         for col in range(3):
             self._reduction_pin_buttons.setColumnStretch(col, 1)
-        reduction_grid.addLayout(self._reduction_pin_buttons, 6, 0, 1, 4)
+        reduction_grid.addLayout(self._reduction_pin_buttons, 7, 0, 1, 4)
         self.reduction_delete_pins_button.setText("Delete all")
         self.pin_row_pattern.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.pin_row_pattern.setMinimumContentsLength(4)
@@ -890,6 +913,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         for widget in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
                        self.pin_row_distance_distal, self.pin_row_pattern, self.place_pin_rows_button,
                        self.reduction_delete_pins_button, self.pin_tilt, self.reduction_clearance,
+                       self.reduction_gap_guide,
                        self.reduction_standoff, self.reduction_bar_diameter):
             widget.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             widget.setMinimumWidth(60)
