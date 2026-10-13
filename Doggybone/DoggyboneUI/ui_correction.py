@@ -1410,7 +1410,7 @@ class CorrectionMixin:
         return keep(original), keep(corrected)
 
     def _compare_guide_sets(self):
-        """(reduction guide nodes -> left view, saw guide nodes -> not shown) for the compare mode."""
+        """(reduction guide nodes, saw guide nodes) - both hidden in the compare mode."""
         if not hasattr(self, "_guide_nodes_of_mode"):
             return [], []
         get = lambda names: [n for n in (slicer.mrmlScene.GetFirstNodeByName(name) for name in names)
@@ -1440,15 +1440,10 @@ class CorrectionMixin:
             display = node.GetDisplayNode()
             display.RemoveAllViewNodeIDs()
             display.AddViewNodeID(right_id)
-        # guides: the reduction guide in the left view (its visibility as set by the guide panel),
-        # the saw guide in neither 3D view
+        # no guide in the comparison (neither saw nor reduction guide, in neither view); their own
+        # visibility is untouched and applies again when compare mode is switched off
         reduction_guide, saw_guide = self._compare_guide_sets()
-        for node in reduction_guide:
-            display = node.GetDisplayNode()
-            display.RemoveAllViewNodeIDs()
-            display.AddViewNodeID(left_id)
-            display.SetVisibility(True)
-        for node in saw_guide:
+        for node in reduction_guide + saw_guide:
             display = node.GetDisplayNode()
             display.RemoveAllViewNodeIDs()
             display.AddViewNodeID("Doggybone compare - not shown")
