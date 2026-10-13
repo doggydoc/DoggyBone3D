@@ -442,6 +442,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # then handed off to Slicer's native, fully-interactive plane widget for fine adjustment.
         osteotomy_collapsible_button = ctk.ctkCollapsibleButton()
         self._osteotomy_collapsible = osteotomy_collapsible_button
+        # opening the osteotomy panel (e.g. coming back from the guide tools): original / preview / compare
+        # views as the osteotomy planning shows them
+        osteotomy_collapsible_button.connect('contentsCollapsed(bool)',
+                                             lambda collapsed: None if collapsed else self._sync_original_segmentation())
         osteotomy_collapsible_button.text = "Osteotomy Planning"
         osteotomy_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #c05621; color: white; font-weight: bold; }")

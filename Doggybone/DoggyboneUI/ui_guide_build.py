@@ -834,6 +834,8 @@ class GuideBuildMixin:
                 seg_display.SetVisibility3D(show_3d)
             if hasattr(seg_display, "SetVisibility2D"):
                 seg_display.SetVisibility2D(True)
+        if self._compare_mode():
+            self._apply_compare_views()               # compare mode: the original stays in the left 3D view
         note = self._show_saw_pin_preview()          # hidden in the reduction mode
         if mode == "saw":
             self.guide_status.setText("Saw guide: paint / edit the cutting guide on the bone as it is."
