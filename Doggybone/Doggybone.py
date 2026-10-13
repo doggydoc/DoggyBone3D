@@ -512,6 +512,18 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.target_rotation_value.setSingleStep(0.5)
         self.target_rotation_value.setSuffix(" °")
         osteotomy_form_layout.addRow("Torsion target", self.target_rotation_value)
+        # femur: a sagittal correction entered by hand (no measurement behind it)
+        self.femur_sagittal_value = qt.QDoubleSpinBox()
+        self.femur_sagittal_value.setRange(-45.0, 45.0)
+        self.femur_sagittal_value.setSingleStep(0.5)
+        self.femur_sagittal_value.setSuffix(" \N{DEGREE SIGN}")
+        self.femur_sagittal_value.setValue(0.0)
+        self.femur_sagittal_value.setToolTip(
+            "Manual sagittal correction of the femur (no measurement needed), about the medio-lateral axis "
+            "at the cut. + corrects a PROCURVATUM (the far end of the moving fragment goes cranially), "
+            "- corrects a RECURVATUM. Combined with the varus/valgus and torsion correction; the frontal and "
+            "torsion values are re-solved so their targets are still met.")
+        osteotomy_form_layout.addRow("Sagittal (manual)", self.femur_sagittal_value)
         self._osteotomy_form_layout = osteotomy_form_layout
         sagittal_field = self._build_tibia_targets(osteotomy_form_layout)   # tibia: table of current / target values
 
@@ -534,6 +546,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
         self.target_wedge_value.valueChanged.connect(self._on_target_values_changed)
         self.target_rotation_value.valueChanged.connect(self._on_target_values_changed)
+        self.femur_sagittal_value.valueChanged.connect(self._on_target_values_changed)
         self._on_osteotomy_bone_changed(self.osteotomy_bone.currentIndex)
 
 
@@ -1593,6 +1606,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             box.blockSignals(was_blocked)
         self._on_target_values_changed()
         self._set_tibia_mode_visible(bone == "Tibia")
+        box = getattr(self, "femur_sagittal_value", None)
+        if box is not None:
+            box.setVisible(bone == "Femur")
+            label = self._osteotomy_form_layout.labelForField(box)
+            if label is not None:
+                label.setVisible(bone == "Femur")
         self._update_plane_handle_interactivity()
         if hasattr(self, "_on_guide_bone_switched") and hasattr(self, "guide_status"):
             self._on_guide_bone_switched()

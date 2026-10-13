@@ -727,6 +727,15 @@ class CorrectionMixin:
         def rot3(axis, angle):
             return self._rotation_about_line(axis, angle, np.zeros(3))[:3, :3]
 
+        # femur: manual sagittal correction about the ML axis (+ = procurvatum corrected: the far end of
+        # the moving fragment goes cranially). Signed about the frame's ml axis like the tibia's.
+        ml_unit = osteotomy_logic.normalize(np.asarray(ml, dtype=float))
+        sagittal_signed = self._femur_sagittal_signed(side, bone, shaft, ml_unit, moving_is_distal)
+        R_sagittal = rot3(ml_unit, sagittal_signed) if abs(sagittal_signed) > 1e-6 else np.eye(3)
+
+        def front(angle):
+            return R_sagittal @ rot3(ap, angle)
+
         def compose(R_torsion, R_frontal_part):
             # derotation about the MOVING fragment's own long axis (see anatomical_correction_matrix)
             return R_torsion @ R_frontal_part if moving_is_distal else R_frontal_part @ R_torsion
@@ -737,11 +746,11 @@ class CorrectionMixin:
             H[:3, 3] = pivot - R @ pivot
             return H
 
-        R_frontal = np.eye(3)
+        R_frontal = R_sagittal.copy()
         if frontal > 0.01:
             best = None
             for sign in (1.0, -1.0):
-                candidate = rot3(ap, sign * frontal)
+                candidate = front(sign * frontal)
                 predicted = self._predict_measurements(side, bone, as_h(candidate), plane_origin, plane_normal, moving_is_distal)
                 if predicted is None or predicted["wedge"] is None:
                     continue
@@ -766,14 +775,14 @@ class CorrectionMixin:
         # signs as chosen above, then solve the magnitudes on the landmarks
         frontal_signed = frontal
         if frontal > 0.01:
-            frontal_signed = frontal if np.allclose(R_frontal, rot3(ap, frontal)) else -frontal
+            frontal_signed = frontal if np.allclose(R_frontal, front(frontal)) else -frontal
         torsion_signed = torsion
         if torsion > 0.01:
             torsion_signed = torsion if np.allclose(R, compose(rot3(shaft, torsion), R_frontal)) else -torsion
         frontal_signed, torsion_signed, _ = self._solve_correction_angles(
-            lambda f, t: as_h(compose(rot3(shaft, t), rot3(ap, f))), frontal_signed, torsion_signed,
+            lambda f, t: as_h(compose(rot3(shaft, t), front(f))), frontal_signed, torsion_signed,
             side, bone, plane_origin, plane_normal, moving_is_distal)
-        R = compose(rot3(shaft, torsion_signed), rot3(ap, frontal_signed))
+        R = compose(rot3(shaft, torsion_signed), front(frontal_signed))
         frontal, torsion = abs(frontal_signed), abs(torsion_signed)
         predicted = self._predict_measurements(side, bone, as_h(R), plane_origin, plane_normal, moving_is_distal)
         warning = "\n".join(text for text in (
@@ -782,7 +791,21 @@ class CorrectionMixin:
             if text)
         return R, {"frontal": frontal, "torsion": torsion, "predicted": predicted,
                    "frontal_signed": float(frontal_signed), "torsion_signed": float(torsion_signed),
-                   "warning": warning}
+                   "sagittal_signed": float(sagittal_signed), "warning": warning}
+
+    def _femur_sagittal_signed(self, side, bone, shaft, ml_unit, moving_is_distal):
+        """Manual femur sagittal correction as a signed angle about ml_unit: positive input = the far
+        end of the MOVING fragment turns cranially (corrects a procurvatum)."""
+        box = getattr(self, "femur_sagittal_value", None)
+        if bone != "Femur" or box is None or abs(float(box.value)) < 1e-6:
+            return 0.0
+        shaft = osteotomy_logic.normalize(np.asarray(shaft, dtype=float))          # proximal -> distal
+        # cranial as in the aligned slice views (screen-up of the red view): (ML, patient-mirrored) x proximal
+        cranial = osteotomy_logic.normalize(np.cross(ml_unit if side == "left" else -ml_unit, -shaft))
+        far_end = shaft if moving_is_distal else -shaft
+        turns_to = np.cross(ml_unit, far_end)                  # where a positive turn about ml moves the far end
+        sign = 1.0 if float(np.dot(turns_to, cranial)) >= 0.0 else -1.0
+        return sign * float(box.value)
 
     def _section_extent(self, origin, normal, direction):
         '''Extent (+direction, -direction) of the bone cross-section in the given plane, for the
