@@ -1477,6 +1477,18 @@ class CorrectionMixin:
             return False
         return all(layout_manager.threeDWidget(i).isVisible() for i in range(2))
 
+    @staticmethod
+    def _equalize_compare_split():
+        """Both 3D views exactly half of the 3D area (the splitter otherwise keeps its last position)."""
+        layout_manager = slicer.app.layoutManager()
+        if layout_manager is None or layout_manager.threeDViewCount < 2:
+            return
+        splitter = layout_manager.threeDWidget(0).parentWidget()
+        if not isinstance(splitter, qt.QSplitter) or splitter.count() < 2:
+            return
+        half = max(1, splitter.width // splitter.count())
+        splitter.setSizes([half] * splitter.count())
+
     def _compare_layout_changed(self):
         """Layout switched by hand while comparing: with only ONE 3D view left the comparison cannot be
         shown - compare mode off (normal preview display) instead of a view with only the originals."""
@@ -1488,6 +1500,8 @@ class CorrectionMixin:
             self._layout_before_compare = None          # keep the layout just chosen
             box.setChecked(False)
         else:
+            if layout_manager.layout == self.COMPARE_LAYOUT_ID:
+                self._equalize_compare_split()
             self._apply_compare_views()
 
     def onCompareViewsToggled(self, on):
@@ -1502,6 +1516,8 @@ class CorrectionMixin:
                 slicer.app.processEvents()
             finally:
                 self._compare_switching = False
+            self._equalize_compare_split()
+            qt.QTimer.singleShot(100, self._equalize_compare_split)     # once the window has its final size
             view_nodes = [layout_manager.threeDWidget(i).mrmlViewNode() for i in range(2)]
             self._linked_before_compare = [v.GetLinkedControl() for v in view_nodes]
             for view in view_nodes:
