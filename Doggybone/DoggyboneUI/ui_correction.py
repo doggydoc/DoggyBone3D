@@ -1527,7 +1527,8 @@ class CorrectionMixin:
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         if on:
-            self._layout_before_compare = layout_manager.layout
+            if layout_manager.layout != self.COMPARE_LAYOUT_ID:      # never remember the compare layout itself
+                self._layout_before_compare = layout_manager.layout
             self._compare_switching = True
             try:
                 layout_manager.setLayout(self._compare_layout())
@@ -1564,6 +1565,8 @@ class CorrectionMixin:
             if i < layout_manager.threeDViewCount:
                 layout_manager.threeDWidget(i).mrmlViewNode().SetLinkedControl(bool(linked))
         before = getattr(self, "_layout_before_compare", None)
+        if layout_manager.layout == self.COMPARE_LAYOUT_ID and (before is None or before == self.COMPARE_LAYOUT_ID):
+            before = slicer.vtkMRMLLayoutNode.SlicerLayoutFourUpView      # never stay in the compare layout
         if before is not None and before != self.COMPARE_LAYOUT_ID:
             self._compare_switching = True
             try:
