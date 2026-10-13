@@ -1081,7 +1081,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                                     "runs along its flat face. Closing wedge: the whole wedge between the two "
                                     "faces stays open. Smaller guide, easier to use on small bones.")
         guide_fields.append(("Saw guide", self.guide_saw_type))
-        self.guide_pin = combo(["Auto (bone size)", "1.2 mm", "1.6 mm", "2.0 mm"], "Auto (bone size)",
+        self.guide_pin = combo(["Auto (bone size)", "1.2 mm", "1.6 mm", "1.8 mm", "2.0 mm"], "Auto (bone size)",
                                "Fixation pin diameter. Auto: bone up to 15 mm -> 1.2 mm, larger -> 1.6 mm.")
         guide_fields.insert(0, ("Pin size", self.guide_pin))        # pin diameter first (top left)
         # parameters two per row (label, field, label, field) - keeps the panel narrow
