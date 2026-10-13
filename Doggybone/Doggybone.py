@@ -663,9 +663,17 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         view_row.addWidget(self.hide_landmark_labels)
         view_row.addWidget(self.show_cutting_planes)
         view_row.addStretch(1)
+        self.compare_views_checkbox = qt.QCheckBox("Compare original | corrected (two 3D views)")
+        self.compare_views_checkbox.setChecked(False)
+        self.compare_views_checkbox.setToolTip(
+            "Two 3D views side by side: left the ORIGINAL bone with its landmarks, axes and cutting planes, "
+            "right the CORRECTED bone (correction preview) with the corrected landmarks and axes. Both views "
+            "turn and zoom together. Untick to return to the previous layout.")
+        self.compare_views_checkbox.toggled.connect(self.onCompareViewsToggled)
         view_widget = qt.QWidget()
         view_widget.setLayout(view_row)
         osteotomy_form_layout.addRow(view_widget)
+        osteotomy_form_layout.addRow(self.compare_views_checkbox)
 
         self.segment_opacity_slider = self._new_bone_opacity_slider()
         osteotomy_form_layout.addRow("Bone opacity", self.segment_opacity_slider)

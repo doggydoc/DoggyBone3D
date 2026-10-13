@@ -1318,6 +1318,9 @@ class CorrectionMixin:
         that guide sits on the uncut bone."""
         if getattr(self, "_guide_shown_surface", None):
             return      # a guide tool shows its own bone surface - the segmentation stays hidden meanwhile
+        if self._compare_mode():
+            self._apply_compare_views()       # original segmentation in the left view, corrected bone right
+            return
         segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
         if segmentation_node is None or segmentation_node.GetDisplayNode() is None:
             return
@@ -1377,9 +1380,124 @@ class CorrectionMixin:
             labels.update(getattr(measurement, "SPHERE_LABELS", []) or [])
         return labels
 
+    # --- compare mode: original (left 3D view) | corrected (right 3D view) ------------------------
+    def _compare_mode(self):
+        box = getattr(self, "compare_views_checkbox", None)
+        return bool(box.checked) if box is not None else False
+
+    def _compare_view_ids(self):
+        layout_manager = slicer.app.layoutManager()
+        if layout_manager is None or layout_manager.threeDViewCount < 2:
+            return None, None, []
+        slice_ids = [layout_manager.sliceWidget(name).mrmlSliceNode().GetID()
+                     for name in layout_manager.sliceViewNames() if layout_manager.sliceWidget(name) is not None]
+        return (layout_manager.threeDWidget(0).mrmlViewNode().GetID(),
+                layout_manager.threeDWidget(1).mrmlViewNode().GetID(), slice_ids)
+
+    def _compare_node_sets(self, side, bone):
+        """(original nodes, corrected nodes) of this side / bone for the two 3D views."""
+        original = [slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)]
+        original += list(self._original_overlay_nodes(side))
+        if hasattr(self, "_cutting_plane_nodes"):
+            original += list(self._cutting_plane_nodes())
+        names = self._preview_node_names(side, bone)
+        original.append(slicer.mrmlScene.GetFirstNodeByName(names[4]))          # the wedge to remove
+        corrected = [slicer.mrmlScene.GetFirstNodeByName(names[i]) for i in (0, 1, 3)]
+        prefix = self.CORRECTED_PREFIX.format(side=side)
+        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode"):
+            corrected += [n for n in slicer.util.getNodesByClass(class_name) if (n.GetName() or "").startswith(prefix)]
+        keep = lambda nodes: [n for n in nodes if n is not None and n.GetDisplayNode() is not None]
+        return keep(original), keep(corrected)
+
+    def _apply_compare_views(self):
+        """Compare mode on: originals only in the left 3D view (+ slice views) and visible, corrected
+        objects only in the right 3D view. Called again whenever the preview is redrawn."""
+        if not self._compare_mode():
+            return
+        left_id, right_id, slice_ids = self._compare_view_ids()
+        if left_id is None:
+            return
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        original, corrected = self._compare_node_sets(side, bone)
+        for node in original:
+            display = node.GetDisplayNode()
+            display.RemoveAllViewNodeIDs()
+            for view_id in [left_id] + slice_ids:
+                display.AddViewNodeID(view_id)
+        for node in corrected:
+            display = node.GetDisplayNode()
+            display.RemoveAllViewNodeIDs()
+            display.AddViewNodeID(right_id)
+        # the originals are shown again (in the left view), whatever the preview had hidden
+        saved = self.__dict__.get("_hidden_original_overlay", {}).pop(side, None)
+        for node_id, visible in (saved or {}).items():
+            node = slicer.mrmlScene.GetNodeByID(node_id)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(visible)
+        segmentation = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+        if segmentation is not None and segmentation.GetDisplayNode() is not None:
+            segmentation.GetDisplayNode().SetVisibility(True)
+            segmentation.GetDisplayNode().SetVisibility3D(True)
+        slicer.util.forceRenderAllViews()
+
+    def _clear_compare_views(self):
+        """Every object back in all views."""
+        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsNode", "vtkMRMLSegmentationNode"):
+            for node in slicer.util.getNodesByClass(class_name):
+                name = node.GetName() or ""
+                if not name.startswith("Doggybone") and name != self.SEGMENTATION_NODE_NAME:
+                    continue
+                for i in range(node.GetNumberOfDisplayNodes()):
+                    display = node.GetNthDisplayNode(i)
+                    if display is not None:
+                        display.RemoveAllViewNodeIDs()
+
+    def onCompareViewsToggled(self, on):
+        layout_manager = slicer.app.layoutManager()
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        if on:
+            self._layout_before_compare = layout_manager.layout
+            if layout_manager.threeDViewCount < 2:
+                layout_manager.setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutDual3DView)
+                slicer.app.processEvents()
+            view_nodes = [layout_manager.threeDWidget(i).mrmlViewNode() for i in range(2)]
+            self._linked_before_compare = [v.GetLinkedControl() for v in view_nodes]
+            for view in view_nodes:
+                view.SetLinkedControl(True)              # both views turn / zoom together
+            # same camera in the right view as in the left one
+            cameras = [layout_manager.threeDWidget(i).threeDView().renderWindow().GetRenderers()
+                       .GetFirstRenderer().GetActiveCamera() for i in range(2)]
+            cameras[1].DeepCopy(cameras[0])
+            self._apply_compare_views()
+            combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
+            if combined is None:
+                self.correction_status.setText(
+                    "Compare mode: left the original bone. The right view shows the corrected bone once "
+                    "'Show/update preview' has run.")
+            return
+        self._clear_compare_views()
+        for i, linked in enumerate(getattr(self, "_linked_before_compare", []) or []):
+            if i < layout_manager.threeDViewCount:
+                layout_manager.threeDWidget(i).mrmlViewNode().SetLinkedControl(bool(linked))
+        before = getattr(self, "_layout_before_compare", None)
+        if before is not None:
+            layout_manager.setLayout(before)
+        self._layout_before_compare = None
+        # back to the normal preview display: originals hidden while a preview exists
+        combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
+        if combined is not None:
+            self._hide_original_overlay(side)
+        self._sync_original_segmentation()
+        slicer.util.forceRenderAllViews()
+
     def _hide_original_overlay(self, side):
         """While the corrected landmarks are shown, hide the ORIGINAL (pre-correction) landmarks,
         spheres and axes of that side; their visibility is remembered and restored later."""
+        if self._compare_mode():
+            self._apply_compare_views()
+            return
         store = self.__dict__.setdefault("_hidden_original_overlay", {})
         saved = store.setdefault(side, {})
         for node in self._original_overlay_nodes(side):
