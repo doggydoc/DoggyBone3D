@@ -296,7 +296,7 @@ class SegmentationMixin:
         self._invalidate_guide_surfaces()
         self.segmentation_status.setText(
             f"Bone removed ({removed * float(np.prod(spacing)):.0f} mm\N{SUPERSCRIPT THREE}, {note}). "
-            "For the next bone press 'Remove bone (click)' again. 'Delete' undoes all clean-up edits.")
+            "For the next bone press 'Remove bone (single click)' again. 'Delete' undoes all clean-up edits.")
 
     def onFillCavities(self):
         from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk

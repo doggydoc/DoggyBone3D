@@ -305,7 +305,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "fabellae) stay separate. 'Delete' undoes it.")
         self.fill_cavities_button.clicked.connect(self.onFillCavities)
         islands_row.addWidget(self.fill_cavities_button, 1)
-        self.remove_bone_button = qt.QPushButton("Remove bone (click)")
+        self.remove_bone_button = qt.QPushButton("Remove bone (single click)")
         self.remove_bone_button.setCheckable(True)
         self.remove_bone_button.setToolTip(
             "Click a bone in the 3D view (patella, fabella, tibia ...) to delete it from the segmentation - "
@@ -1338,7 +1338,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._current_panel().deactivate()
 
     def _stop_remove_bone(self):
-        """'Remove bone (click)' off - its 3D-view observer must never outlive the module tab / widget."""
+        """'Remove bone (single click)' off - its 3D-view observer must never outlive the module tab / widget."""
         button = getattr(self, "remove_bone_button", None)
         if button is not None and button.checked:
             button.setChecked(False)                  # removes the observer (onRemoveBoneToggled)
