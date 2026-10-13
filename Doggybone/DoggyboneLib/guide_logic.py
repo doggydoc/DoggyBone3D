@@ -501,6 +501,16 @@ def configure_slots(blade_thickness=None, block_height=None, bridge_size=None):
 PIN_THRESHOLD_MM = 15.0
 
 
+def pin_cut_margin(r_in, bores_carved=True):
+    """Minimum distance (mm) of a pin axis from a cutting plane.
+    bores_carved=True (saw block of two cuts, saw_block_pair): the bores are cut through the block as
+    well, so a sleeve may sit inside a wall that grew with the corner bridges - the rule keeps the
+    base wall (BASE_SLOT_WALL) and does not change with the corner bridge size.
+    bores_carved=False (single cut, exact plate shells): the bore must stay outside the plates."""
+    wall = BASE_SLOT_WALL if bores_carved else SLOT_WALL
+    return SLOT_WIDTH + wall + float(r_in) + 0.3
+
+
 def auto_pin_diameter(bone_diameter):
     """Clinic rule: bones up to 15 mm -> 1.2 mm pins, larger bones -> 1.6 mm pins."""
     if bone_diameter is None:
@@ -1392,13 +1402,15 @@ def _seat_heights(bone_obb, origin, e_u, e_v, e_w, lo, hi, step, gap):
 BLOCK_FRAME_ARRAY = "DoggyboneBlockFrame"
 
 
-def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, block=False):
+def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, block=False, pins=None):
     """ONE saw block for both cuts (closing wedge): the outer faces of the two blocks are extended until
     they close each other (no crossing plates, no mirrored remnants), the space between the blocks is
     filled, the underside follows the bone (+gap). Both kerfs run through the whole block (open at the
     sides, from the bone to the top); only at the top of both ends a bridge stays across each kerf -
     the break-off points that hold the block together until it is broken apart after sawing.
-    Signed distance field of planes -> iso-surface (closed, flat faces)."""
+    Signed distance field of planes -> iso-surface (closed, flat faces).
+    pins: the pin bores (radius r_in) are cut through the block as well - a sleeve that lies inside a
+    wall grown with the corner bridges is taken into the block and its bore stays open."""
     from vtk.util.numpy_support import numpy_to_vtk as _n2v
     from scipy.ndimage import distance_transform_edt
     half = 0.5 * SLOT_WIDTH
@@ -1461,6 +1473,14 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
         if zone.any():
             level = float(seat[zone].max())
             seat = np.where(end, np.maximum(seat, level), seat)
+    bores = []
+    for p in (pins or []):                    # only pins whose bore reaches into the block's grid
+        if "error" in p:
+            continue
+        E_pin, a_pin, r_pin = np.asarray(p["entry"], float), unit(np.asarray(p["axis"], float)), float(p["r_in"])
+        samples = (E_pin + np.linspace(-40.0, 40.0, 161)[:, None] * a_pin - origin) @ np.stack([e_u, e_v, e_w]).T
+        if np.any(np.all((samples >= lo - r_pin) & (samples <= hi + r_pin), axis=1)):
+            bores.append((E_pin, a_pin, r_pin))
     sdf = np.empty((nc, nb, na), dtype=np.float32)
     for jb, b in enumerate(Bs):
         X = origin + AA[..., None] * e_u + b * e_v + CC[..., None] * e_w       # (nc, na, 3)
@@ -1507,7 +1527,13 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
                 kerf = np.minimum(kerf, np.maximum(np.maximum(np.abs(s_n) - half, -bridge), h_term))
         f_u = np.maximum(a_lo - AA, AA - a_hi)                           # common block length
         solid = np.maximum(np.maximum(f_outer, f_u), np.maximum(f_top, seat - b))
-        sdf[:, jb, :] = np.maximum(solid, -kerf)
+        solid = np.maximum(solid, -kerf)
+        for E_pin, a_pin, r_pin in bores:                                    # pin bores through the block
+            rel = X - E_pin
+            along = rel @ a_pin
+            radial = np.sqrt(np.maximum(np.einsum("...k,...k->...", rel, rel) - along ** 2, 0.0))
+            solid = np.maximum(solid, r_pin - radial)
+        sdf[:, jb, :] = solid
     # close the surface at the grid border (a solid truncated there gets a flat face, never a hole)
     sdf[0, :, :] = np.maximum(sdf[0, :, :], voxel)
     sdf[-1, :, :] = np.maximum(sdf[-1, :, :], voxel)

@@ -308,8 +308,11 @@ class PinsMixin:
         if not planes:
             return None, "no cutting plane"
         p = np.asarray(point, float)
-        # the BORE must stay outside the saw block (sleeve may merge into the block)
-        margin = guide_logic.SLOT_WIDTH + guide_logic.SLOT_WALL + guide_logic.sleeve_radii(self._pin_diameter())[0] + 0.3
+        # two cuts: the bores are cut through the saw block too - the distance rule keeps the base wall
+        # and does not grow with the corner bridges (a sleeve in a thicker wall is taken into the block);
+        # one cut: the bore must stay outside the exact plates
+        margin = guide_logic.pin_cut_margin(guide_logic.sleeve_radii(self._pin_diameter())[0],
+                                            bores_carved=len(planes) == 2)
         if len(planes) == 2:
             for index, (label, o, n) in enumerate(planes):
                 o2 = planes[1 - index][1]
@@ -437,7 +440,7 @@ class PinsMixin:
         """(first-pin distance from the cut, spacing) from the pin diameter."""
         diameter = self._pin_diameter()
         r_in, r_out = guide_logic.sleeve_radii(diameter)
-        margin = guide_logic.SLOT_WIDTH + guide_logic.SLOT_WALL + r_in + 0.3      # as _pin_segment checks
+        margin = guide_logic.pin_cut_margin(r_in, bores_carved=len(self._cut_planes()) == 2)   # as _pin_segment
         first = np.ceil((margin + 1.0) * 2.0) / 2.0
         spacing = np.ceil(max(2.0 * r_out + 2.0, 3.0 * diameter) * 2.0) / 2.0
         return float(first), float(spacing)

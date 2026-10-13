@@ -93,7 +93,7 @@ class GuideBuildMixin:
                 if bone_seat is None or bone_seat.GetNumberOfPoints() == 0:
                     bone_seat = mesh
                 parts.append(guide_logic.saw_block_pair(slots[0], slots[1], self._pin_obb_tree(bone_seat), gap,
-                                                        block=block))
+                                                        block=block, pins=pins))
                 strut_box = getattr(self, "guide_hinge_strut", None)
                 if strut_box is not None and strut_box.currentText.startswith("Break"):
                     strut = guide_logic.hinge_strut(slots, block=parts[-1])
