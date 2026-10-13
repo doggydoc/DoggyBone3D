@@ -441,6 +441,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # bone shaft axis (reusing the same landmarks already placed for the angle measurements),
         # then handed off to Slicer's native, fully-interactive plane widget for fine adjustment.
         osteotomy_collapsible_button = ctk.ctkCollapsibleButton()
+        self._osteotomy_collapsible = osteotomy_collapsible_button
         osteotomy_collapsible_button.text = "Osteotomy Planning"
         osteotomy_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #c05621; color: white; font-weight: bold; }")
@@ -1163,6 +1164,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             item = guide_form.itemAt(row, qt.QFormLayout.LabelRole)
             if item is not None and item.widget() is not None and getattr(self, "_guide_label_width", 0):
                 item.widget().setFixedWidth(self._guide_label_width)
+        self._unify_panel_spacing()
         self._guide_observers = []
         self._guide_drag = False
         self._guide_active_tool = None
@@ -1278,6 +1280,24 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             return
         self._scene_reset_pending = True
         qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule("Doggybone"))
+
+    PANEL_SPACING = 3        # px between buttons / fields - the same as in the segmentation panel
+
+    def _unify_panel_spacing(self):
+        """Osteotomy and guide panel: the same gap between all buttons and fields as in the segmentation
+        panel (their button grids used 2 px vertically and 4-6 px horizontally)."""
+        for box in (getattr(self, "_osteotomy_collapsible", None), getattr(self, "_guide_collapsible", None)):
+            if box is None:
+                continue
+            layouts = [box.layout()] + list(box.findChildren(qt.QLayout))
+            for layout in layouts:
+                if layout is None:
+                    continue
+                if isinstance(layout, (qt.QGridLayout, qt.QFormLayout)):
+                    layout.setHorizontalSpacing(self.PANEL_SPACING)
+                    layout.setVerticalSpacing(self.PANEL_SPACING)
+                elif isinstance(layout, qt.QBoxLayout):
+                    layout.setSpacing(self.PANEL_SPACING)
 
     def _on_layout_changed(self, *_args):
         if hasattr(self, "_compare_layout_changed"):
