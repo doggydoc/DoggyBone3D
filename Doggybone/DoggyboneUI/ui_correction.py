@@ -1409,6 +1409,17 @@ class CorrectionMixin:
         keep = lambda nodes: [n for n in nodes if n is not None and n.GetDisplayNode() is not None]
         return keep(original), keep(corrected)
 
+    def _compare_guide_sets(self):
+        """(reduction guide nodes -> left view, saw guide nodes -> not shown) for the compare mode."""
+        if not hasattr(self, "_guide_nodes_of_mode"):
+            return [], []
+        get = lambda names: [n for n in (slicer.mrmlScene.GetFirstNodeByName(name) for name in names)
+                             if n is not None and n.GetDisplayNode() is not None]
+        reduction = get(self._guide_nodes_of_mode("reduction"))
+        saw = get(self._guide_nodes_of_mode("saw") + [getattr(self, "SAW_PINS_NAME", "")])
+        saw = [n for n in saw if n not in reduction]
+        return reduction, saw
+
     def _apply_compare_views(self):
         """Compare mode on: originals only in the left 3D view (+ slice views) and visible, corrected
         objects only in the right 3D view. Called again whenever the preview is redrawn."""
@@ -1429,6 +1440,18 @@ class CorrectionMixin:
             display = node.GetDisplayNode()
             display.RemoveAllViewNodeIDs()
             display.AddViewNodeID(right_id)
+        # guides: the reduction guide in the left view (its visibility as set by the guide panel),
+        # the saw guide in neither 3D view
+        reduction_guide, saw_guide = self._compare_guide_sets()
+        for node in reduction_guide:
+            display = node.GetDisplayNode()
+            display.RemoveAllViewNodeIDs()
+            display.AddViewNodeID(left_id)
+            display.SetVisibility(True)
+        for node in saw_guide:
+            display = node.GetDisplayNode()
+            display.RemoveAllViewNodeIDs()
+            display.AddViewNodeID("Doggybone compare - not shown")
         # the originals are shown again (in the left view), whatever the preview had hidden
         saved = self.__dict__.get("_hidden_original_overlay", {}).pop(side, None)
         for node_id, visible in (saved or {}).items():
@@ -1534,6 +1557,14 @@ class CorrectionMixin:
                     "'Show/update preview' has run.")
             return
         self._clear_compare_views()
+        if hasattr(self, "_guide_nodes_of_mode"):        # guides as the guide panel's mode says again
+            mode = getattr(self, "_guide_mode", "saw")
+            other = "saw" if mode == "reduction" else "reduction"
+            for visible, names in ((False, self._guide_nodes_of_mode(other)), (True, self._guide_nodes_of_mode(mode))):
+                for name in names:
+                    node = slicer.mrmlScene.GetFirstNodeByName(name)
+                    if node is not None and node.GetDisplayNode() is not None:
+                        node.GetDisplayNode().SetVisibility(visible)
         for i, linked in enumerate(getattr(self, "_linked_before_compare", []) or []):
             if i < layout_manager.threeDViewCount:
                 layout_manager.threeDWidget(i).mrmlViewNode().SetLinkedControl(bool(linked))
