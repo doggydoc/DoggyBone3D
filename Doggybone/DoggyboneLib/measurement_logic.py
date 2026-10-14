@@ -458,7 +458,8 @@ class TibialMetatarsalAngleMeasurement(BaseMeasurement):
     AXIS_LABELS = ["Tibial long axis", "Tibial condylar axis", "Talus-metatarsal axis"]
 
     def __init__(self):
-        super().__init__("Tibial Metatarsal Angle")
+        super().__init__("Tibial Metatarsal Angle")       # internal key (planning / export) - unchanged
+        self.display_name = "Tibio-metatarsal rotation"
 
     def _measure(self, point_dict, radius_dict):
         normal = vector_with_two_points(point_dict["distal tibia midpoint"], point_dict["proximal tibia midpoint"])

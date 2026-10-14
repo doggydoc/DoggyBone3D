@@ -574,7 +574,7 @@ class CorrectionMixin:
             return ""
         pairs = []
         if bone == "Tibia" and isinstance(predicted.get("tibia"), dict) and isinstance(chord.get("tibia"), dict):
-            names = {"tpa": "TPA", "ampta": "aMPTA", "amdta": "aMDTA", "torsion": "torsion", "tma": "tibia/metatarsus"}
+            names = {"tpa": "TPA", "ampta": "aMPTA", "amdta": "aMDTA", "torsion": "torsion", "tma": "tibio-metatarsal rotation"}
             pairs = [(names.get(k, k), predicted["tibia"][k], chord["tibia"][k])
                      for k in predicted["tibia"] if k in chord["tibia"]]
         else:
@@ -681,7 +681,7 @@ class CorrectionMixin:
         parts = []
         tibia = predicted.get("tibia") if isinstance(predicted, dict) else None
         if bone == "Tibia" and tibia and getattr(self, "tibia_target_rows", None):
-            names = {"tpa": "TPA", "ampta": "aMPTA", "amdta": "aMDTA", "torsion": "torsion", "tma": "tibia/metatarsus"}
+            names = {"tpa": "TPA", "ampta": "aMPTA", "amdta": "aMDTA", "torsion": "torsion", "tma": "tibio-metatarsal rotation"}
             for key, row in self.tibia_target_rows.items():
                 if key in tibia:
                     parts.append(f"{names[key]} {tibia[key]:.1f}{deg} (target {row['target'].value:.1f}{deg}"

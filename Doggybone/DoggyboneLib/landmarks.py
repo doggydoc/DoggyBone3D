@@ -56,7 +56,7 @@ LANDMARKS = [
                    "Choose the center of the talus.",
                    r"Resources/descriptions/taluscentre.png"),
     SimpleLandmark('Metatarsal centre',
-                   "Choose the center of the metatarsal bone, at the level used for the distal reference point of the tibial metatarsal angle.",
+                   "Choose the center of the metatarsal bone, at the level used for the distal reference point of the tibio-metatarsal rotation.",
                    r"Resources/descriptions/metatarsalcentre.png"),
     SphereLandmark('medial femur condyle',
                    "Place the center inside the medial condyle, then adjust the sphere's radius until it best matches the condyle surface.",

@@ -7,7 +7,7 @@
 """TibiaTargetsMixin: tibial osteotomy with several current / target values.
 
 Rows: TPA, aMPTA (proximal varus/valgus), aMDTA (distal varus/valgus), tibial torsion,
-tibia/metatarsus torsion. Each row shows the measured value, an editable target, a 'use'
+tibio-metatarsal rotation. Each row shows the measured value, an editable target, a 'use'
 checkbox and the value predicted after the planned correction.
 
 The correction of the moving fragment has three rotations - frontal (about the anatomical AP
@@ -30,8 +30,8 @@ TIBIA_TARGET_ROWS = [
      "Distal joint line vs. the anatomical (shaft) axis - distal varus (<) / valgus (>)."),
     ("torsion", "Torsion tibia", 0.0, True,
      "Tibial torsion (proximal condylar axis vs. cochlea axis). + = internal torsion."),
-    ("tma", "Torsion tibia/metatarsus", 0.0, False,
-     "Tibial metatarsal angle: foot axis vs. proximal condylar axis. + = internal."),
+    ("tma", "Tibio-metatarsal rotation", 0.0, False,
+     "Tibio-metatarsal rotation: foot axis vs. proximal condylar axis. + = internal."),
 ]
 
 
@@ -278,7 +278,7 @@ class TibiaTargetsMixin:
 
         regularisation = 0.05
         # a rotation is only free when a checked target asks for it: frontal <- aMPTA / aMDTA,
-        # sagittal <- TPA, torsion <- torsion tibia / tibia-metatarsus. Otherwise it stays 0, so
+        # sagittal <- TPA, torsion <- torsion tibia / tibio-metatarsal rotation. Otherwise it stays 0, so
         # e.g. the TPA is never changed as a side effect of a varus correction.
         free = np.array([("ampta" in used) or ("amdta" in used), "tpa" in used,
                          ("torsion" in used) or ("tma" in used)])
