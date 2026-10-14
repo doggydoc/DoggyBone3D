@@ -1512,6 +1512,13 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         result, result_other = self.laterality_check(current), self.laterality_check(other)
         button = self.laterality_move_button
         button.setVisible(False)
+        if self._landmark_points(current):
+            # manual transfer is always possible (wrong list chosen while placing)
+            button.setText(f"Transfer to {other}...")
+            button.setToolTip(f"Transfer the femur and / or tibia landmarks of the {current} list to the {other} "
+                              f"list (swapped with landmarks of the same bone already there). Positions and sphere "
+                              f"radii are kept. Osteotomy planes and guides are NOT moved.")
+            button.setVisible(True)
         label.setToolTip(laterality.summary(result) or
                          "The side is computed from the femur landmarks (shaft midpoints + condyles) or the "
                          "tibia landmarks (axis points, condyles, cranial / caudal plateau point).")
@@ -1541,18 +1548,16 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             label.setStyleSheet(STATUS_OK_STYLE)
             label.setText(f"\u2713 Side check: the landmarks form a {current.lower()} limb.")
 
-    def onLateralityMove(self):
-        """Move the landmarks of the shown list to the other list - or swap both lists."""
+    @staticmethod
+    def _landmark_bone(name):
+        return "Femur" if "femur" in (name or "").lower() else "Tibia"
+
+    def onLateralityMove(self, bones=None):
+        """Transfer landmarks of the shown list to the other list - all, or only the femur / tibia ones.
+        Landmarks of the same bone already in the other list are swapped back, nothing is lost."""
         current = self.side_selector.currentText
         other = "Right" if current == "Left" else "Left"
         source, target = self._panel_for_side(current), self._panel_for_side(other)
-        swap = bool(self._landmark_points(other))
-        question = (f"Swap ALL landmarks between the Left and the Right list?" if swap else
-                    f"Move all landmarks from the {current} list to the {other} list?")
-        if not slicer.util.confirmOkCancelDisplay(
-                question + "\n\nOsteotomy planes, corrections and guides stay with their side - check "
-                           "them afterwards.", windowTitle="Side check"):
-            return
 
         def collect(panel):
             node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
@@ -1567,6 +1572,35 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 items.append((name, position, node.GetAttribute(f"Doggybone.radius.{name}")))
             return items
 
+        source_items, target_items = collect(source), collect(target)
+        present = sorted({self._landmark_bone(name) for name, _p, _r in source_items})
+        if not present:
+            return
+        if bones is None:
+            box = qt.QMessageBox(slicer.util.mainWindow())
+            box.setWindowTitle("Transfer landmarks")
+            box.setIcon(qt.QMessageBox.Question)
+            box.setText(f"Which landmarks of the {current} list belong to the {other} side?")
+            box.setInformativeText(
+                "Landmarks of the same bone already in the " + other + " list come back to the " + current +
+                " list (swap). Osteotomy planes, corrections and guides stay with their side - check them afterwards.")
+            choices = {}
+            for bone in present:
+                count = sum(1 for name, _p, _r in source_items if self._landmark_bone(name) == bone)
+                choices[box.addButton(f"{bone} ({count})", qt.QMessageBox.AcceptRole)] = (bone,)
+            if len(present) > 1:
+                choices[box.addButton(f"All ({len(source_items)})", qt.QMessageBox.AcceptRole)] = tuple(present)
+            box.addButton(qt.QMessageBox.Cancel)
+            box.exec_()
+            bones = choices.get(box.clickedButton())
+            if not bones:
+                return
+        bones = set(bones)
+        moving = [item for item in source_items if self._landmark_bone(item[0]) in bones]
+        coming_back = [item for item in target_items if self._landmark_bone(item[0]) in bones]
+        new_source = [item for item in source_items if self._landmark_bone(item[0]) not in bones] + coming_back
+        new_target = [item for item in target_items if self._landmark_bone(item[0]) not in bones] + moving
+
         def place(panel, items):
             node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
             for name, position, radius in items:
@@ -1576,15 +1610,15 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                     node.SetAttribute(f"Doggybone.radius.{name}", radius)
             self._relink_existing_landmarks(panel)
 
-        moving, staying = collect(source), collect(target) if swap else []
         source.clear_all_landmarks()
-        if swap:
-            target.clear_all_landmarks()
-        place(target, moving)
-        if swap:
-            place(source, staying)
-        self.side_selector.setCurrentText(other)       # show the moved landmarks
+        target.clear_all_landmarks()
+        place(source, new_source)
+        place(target, new_target)
+        self.side_selector.setCurrentText(other)       # show the transferred landmarks
         self._schedule_values_refresh()
+        slicer.util.showStatusMessage(
+            f"{len(moving)} landmark(s) ({', '.join(sorted(bones))}) moved {current} -> {other}"
+            + (f", {len(coming_back)} swapped back" if coming_back else "") + ".", 6000)
 
     def _on_osteotomy_bone_changed(self, index):
         bone = self.osteotomy_bone.currentText
