@@ -1444,21 +1444,6 @@ class CorrectionMixin:
         return (layout_manager.threeDWidget(0).mrmlViewNode().GetID(),
                 layout_manager.threeDWidget(1).mrmlViewNode().GetID(), slice_ids)
 
-    def _compare_node_sets(self, side, bone):
-        """(original nodes, corrected nodes) of this side / bone for the two 3D views."""
-        original = [slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)]
-        original += list(self._original_overlay_nodes(side))
-        if hasattr(self, "_cutting_plane_nodes"):
-            original += list(self._cutting_plane_nodes())
-        names = self._preview_node_names(side, bone)
-        original.append(slicer.mrmlScene.GetFirstNodeByName(names[4]))          # the wedge to remove
-        corrected = [slicer.mrmlScene.GetFirstNodeByName(names[i]) for i in (0, 1, 3)]
-        prefix = self.CORRECTED_PREFIX.format(side=side)
-        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode"):
-            corrected += [n for n in slicer.util.getNodesByClass(class_name) if (n.GetName() or "").startswith(prefix)]
-        keep = lambda nodes: [n for n in nodes if n is not None and n.GetDisplayNode() is not None]
-        return keep(original), keep(corrected)
-
     def _compare_guide_sets(self):
         """(reduction guide nodes, saw guide nodes) - both hidden in the compare mode."""
         if not hasattr(self, "_guide_nodes_of_mode"):
@@ -1470,33 +1455,53 @@ class CorrectionMixin:
         saw = [n for n in saw if n not in reduction]
         return reduction, saw
 
+    @staticmethod
+    def _compare_role(name):
+        """Which 3D view an object belongs to in the compare mode: 'right' = corrected bone and
+        everything drawn on it, 'left' = original bone, its landmarks / spheres / axes / planes and
+        any helper drawn for them. Decided by NAME for every object, also ones created later."""
+        lname = (name or "").lower()
+        if (" corrected" in lname or "fragment" in lname or "final corrected bone" in lname
+                or "fine shift gizmo" in lname):
+            return "right"
+        return "left"
+
     def _apply_compare_views(self):
-        """Compare mode on: originals only in the left 3D view (+ slice views) and visible, corrected
-        objects only in the right 3D view. Called again whenever the preview is redrawn."""
+        """Compare mode on: EVERY object of the module gets a fixed view - original objects only in the
+        left 3D view (+ slice views), corrected objects only in the right one, guides in neither.
+        Called again whenever the preview is redrawn and whenever an object is added to the scene."""
         if not self._compare_mode():
             return
         left_id, right_id, slice_ids = self._compare_view_ids()
         if left_id is None:
             return
         side = self.osteotomy_side.currentText.lower()
-        bone = self.osteotomy_bone.currentText
-        original, corrected = self._compare_node_sets(side, bone)
-        for node in original:
-            display = node.GetDisplayNode()
-            display.RemoveAllViewNodeIDs()
-            for view_id in [left_id] + slice_ids:
-                display.AddViewNodeID(view_id)
-        for node in corrected:
-            display = node.GetDisplayNode()
-            display.RemoveAllViewNodeIDs()
-            display.AddViewNodeID(right_id)
-        # no guide in the comparison (neither saw nor reduction guide, in neither view); their own
-        # visibility is untouched and applies again when compare mode is switched off
         reduction_guide, saw_guide = self._compare_guide_sets()
-        for node in reduction_guide + saw_guide:
-            display = node.GetDisplayNode()
-            display.RemoveAllViewNodeIDs()
-            display.AddViewNodeID("Doggybone compare - not shown")
+        guide_ids = {n.GetID() for n in reduction_guide + saw_guide}
+        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsNode", "vtkMRMLSegmentationNode"):
+            for node in slicer.util.getNodesByClass(class_name):
+                name = node.GetName() or ""
+                if not name.startswith("Doggybone") and name != self.SEGMENTATION_NODE_NAME:
+                    continue
+                if node.IsA("vtkMRMLSegmentationNode") and name != self.SEGMENTATION_NODE_NAME:
+                    continue
+                guide = node.GetID() in guide_ids or name.startswith(("Doggybone guide", "Doggybone saw box",
+                                                                      "Doggybone pin", "Doggybone saw guide pin"))
+                if guide:
+                    views = ["Doggybone compare - not shown"]
+                elif self._compare_role(name) == "right":
+                    views = [right_id]
+                else:
+                    views = [left_id] + slice_ids
+                for i in range(node.GetNumberOfDisplayNodes()):
+                    display = node.GetNthDisplayNode(i)
+                    if display is None:
+                        continue
+                    current = [display.GetNthViewNodeID(k) for k in range(display.GetNumberOfViewNodeIDs())]
+                    if current != views:
+                        display.RemoveAllViewNodeIDs()
+                        for view_id in views:
+                            display.AddViewNodeID(view_id)
         # the originals are shown again (in the left view), whatever the preview had hidden
         saved = self.__dict__.get("_hidden_original_overlay", {}).pop(side, None)
         for node_id, visible in (saved or {}).items():
@@ -1508,6 +1513,25 @@ class CorrectionMixin:
             segmentation.GetDisplayNode().SetVisibility(True)
             segmentation.GetDisplayNode().SetVisibility3D(True)
         slicer.util.forceRenderAllViews()
+
+    def _compare_watch_scene(self, on):
+        """While comparing, objects created later (spheres, sphere preview, landmarks ...) get their view too."""
+        tag = getattr(self, "_compare_scene_tag", None)
+        if tag is not None:
+            slicer.mrmlScene.RemoveObserver(tag)
+            self._compare_scene_tag = None
+        if not on:
+            return
+
+        def added(_caller, _event):
+            if not getattr(self, "_compare_apply_pending", False):
+                self._compare_apply_pending = True
+
+                def run():
+                    self._compare_apply_pending = False
+                    self._apply_compare_views()
+                qt.QTimer.singleShot(50, run)
+        self._compare_scene_tag = slicer.mrmlScene.AddObserver(slicer.mrmlScene.NodeAddedEvent, added)
 
     def _clear_compare_views(self):
         """Every object back in all views."""
@@ -1596,12 +1620,14 @@ class CorrectionMixin:
                        .GetFirstRenderer().GetActiveCamera() for i in range(2)]
             cameras[1].DeepCopy(cameras[0])
             self._apply_compare_views()
+            self._compare_watch_scene(True)
             combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
             if combined is None:
                 self.correction_status.setText(
                     "Compare mode: left the original bone. The right view shows the corrected bone once "
                     "'Show/update preview' has run.")
             return
+        self._compare_watch_scene(False)
         self._clear_compare_views()
         if hasattr(self, "_guide_nodes_of_mode"):        # guides as the guide panel's mode says again
             mode = getattr(self, "_guide_mode", "saw")
