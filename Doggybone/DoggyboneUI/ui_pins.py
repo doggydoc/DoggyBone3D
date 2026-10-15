@@ -540,12 +540,41 @@ class PinsMixin:
         inside = vtk.vtkImplicitPolyDataDistance()
         inside.SetInput(bone)
         if inside.EvaluateFunction([float(v) for v in centre]) > 0.0:
-            return {"error": "the row line leaves the bone (end of the fragment)"}
+            # the row line runs out of the bone here (e.g. distal femur: the condyles recede) - the pin
+            # only has to pass THROUGH the bone: slide its centre along its own axis (same pin line, same
+            # distance from the cut) into the middle of the nearest bone chord
+            moved_centre = self._pin_axis_chord_centre(bone, inside, centre, direction)
+            if moved_centre is None:
+                return {"error": "the row line leaves the bone (end of the fragment)"}
+            centre = moved_centre
         pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(), float(self.guide_gap.value),
                                    guide_logic.BLOCK_HEIGHT)
         if "error" not in pin:
             pin["segment"], pin["centre"] = segment, np.asarray(centre, float)
         return pin
+
+    def _pin_axis_chord_centre(self, bone, inside, centre, direction, reach=10.0):
+        """Middle of the bone chord nearest to `centre` on the pin axis (centre + t * direction), at
+        most `reach` mm away and long enough to hold the pin - or None."""
+        d = np.asarray(direction, float)
+        d = d / max(np.linalg.norm(d), 1e-9)
+        c = np.asarray(centre, float)
+        tree = vtk.vtkOBBTree()
+        tree.SetDataSet(bone)
+        tree.BuildLocator()
+        points = vtk.vtkPoints()
+        tree.IntersectWithLine(list(c - 60.0 * d), list(c + 60.0 * d), points, None)
+        ts = sorted(float((np.array(points.GetPoint(i)) - c) @ d) for i in range(points.GetNumberOfPoints()))
+        minimum = max(2.0, 1.5 * self._pin_diameter())
+        best = None
+        for a, b in zip(ts, ts[1:]):
+            mid = 0.5 * (a + b)
+            if b - a < minimum or inside.EvaluateFunction([float(v) for v in c + mid * d]) > 0.0:
+                continue
+            gap = 0.0 if a <= 0.0 <= b else min(abs(a), abs(b))
+            if gap <= reach and (best is None or gap < best[0]):
+                best = (gap, mid)
+        return None if best is None else c + best[1] * d
 
     def _pin_distribution_manual(self):
         box = getattr(self, "pin_row_pattern", None)
@@ -1263,6 +1292,10 @@ class PinsMixin:
             while target < minimum + 0.02:
                 target += 0.5
             tag = segment[0].upper()
+            expected = int(self.pin_row_count.value) + self._shortening_holes(segment) if hasattr(self, "pin_row_count") else 0
+            if not manual and len(steps) < expected:
+                bad.append(f"{tag} only {len(steps)} of {expected} pin positions fit on the bone")
+                continue
             if manual:
                 listed.append(f"{tag} " + "|".join(f"{x:.1f}" for x in steps))
                 continue
@@ -1332,8 +1365,8 @@ class PinsMixin:
         elif all(state == "current" for state in states.values()) and spacing_ok is not False:
             self.guide_status.setStyleSheet(STATUS_OK_STYLE)
             self.guide_status.setText(text + "\n\u2713 Both guides up to date - ready to export")
-        else:
-            self.guide_status.setStyleSheet(STATUS_OK_STYLE if spacing_ok else "")
+        else:                                 # a guide not extruded yet: not finished - no colour
+            self.guide_status.setStyleSheet("")
             self.guide_status.setText(text)
 
     def _shortening_holes(self, segment):
