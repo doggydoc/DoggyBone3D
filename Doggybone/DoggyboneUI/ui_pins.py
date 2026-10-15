@@ -464,10 +464,11 @@ class PinsMixin:
             origin = np.asarray(origin, float)
             if segment == moved:
                 origin = (M @ np.append(origin, 1.0))[:3]
-            from vtk.util.numpy_support import vtk_to_numpy
-            centroid = vtk_to_numpy(polydata.GetPoints().GetData()).astype(float).mean(axis=0)
-            s_dir = shafts[segment]
-            if float(np.dot(centroid - origin, s_dir)) < 0.0:
+            # INTO the fragment from the anatomy (shafts run proximal -> distal), never from the
+            # fragment's centroid: the distal "fragment" holds everything below the cut (tibia,
+            # tarsus ...), and with a flexed stifle its centroid lies on the proximal side of the cut
+            s_dir = guide_logic.unit(np.asarray(shafts[segment], float))
+            if segment == "proximal":
                 s_dir = -s_dir
             frames[segment] = (origin, s_dir)
         return frames
@@ -481,12 +482,47 @@ class PinsMixin:
         normal = shaft - float(np.dot(shaft, direction)) * direction
         return guide_logic.unit(normal) if np.linalg.norm(normal) > 1e-6 else guide_logic.unit(shaft)
 
-    def _row_pin(self, segment, level_point, s_dir, fragments, direction):
+    def _cut_bone_part(self, segment, polydata, origin, s_dir):
+        """Only the bone that is CUT: the connected surface pieces (outer cortex, medullary canal) that
+        reach the cut plane near its centre. The fragment also holds the neighbouring bones (tibia and
+        tarsus below a femur cut, femur above a tibia cut) - pins must never go there. Cached."""
+        key = (segment, polydata.GetMTime(), tuple(np.round(origin, 2)), tuple(np.round(s_dir, 3)))
+        cache = self.__dict__.setdefault("_cut_part_cache", {})
+        if key in cache:
+            return cache[key]
+        from vtk.util.numpy_support import vtk_to_numpy
+        P = vtk_to_numpy(polydata.GetPoints().GetData()).astype(float)
+        rel = P - np.asarray(origin, float)
+        along = rel @ s_dir
+        radial = np.linalg.norm(rel - np.outer(along, s_dir), axis=1)
+        diameter = self._bone_diameter_at_cuts() or 10.0
+        seeds = np.where((np.abs(along) < 2.0) & (radial < 1.5 * float(diameter) + 5.0))[0]
+        if len(seeds) == 0:
+            cache[key] = polydata
+            return polydata
+        connectivity = vtk.vtkPolyDataConnectivityFilter()
+        connectivity.SetInputData(polydata)
+        connectivity.SetExtractionModeToPointSeededRegions()
+        for index in seeds[:: max(1, len(seeds) // 400)]:
+            connectivity.AddSeed(int(index))
+        cleaner = vtk.vtkCleanPolyData()
+        cleaner.SetInputConnection(connectivity.GetOutputPort())
+        cleaner.Update()
+        part = vtk.vtkPolyData()
+        part.DeepCopy(cleaner.GetOutput())
+        if part.GetNumberOfPoints() < 50:
+            part = polydata
+        cache.clear()                       # keep only the current pose
+        cache[key] = part
+        return part
+
+    def _row_pin(self, segment, level_point, s_dir, fragments, direction, origin=None):
         polydata, obb, _loc = fragments[segment]
-        centre = self._section_centroid(polydata, level_point, self._pin_section_normal(s_dir, direction),
+        bone = polydata if origin is None else self._cut_bone_part(segment, polydata, origin, s_dir)
+        centre = self._section_centroid(bone, level_point, self._pin_section_normal(s_dir, direction),
                                         largest=True)
         if centre is None:
-            return {"error": "no bone at that level"}
+            return {"error": "no bone at that level (end of the fragment)"}
         pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(), float(self.guide_gap.value),
                                    guide_logic.BLOCK_HEIGHT)
         if "error" not in pin:
@@ -583,7 +619,7 @@ class PinsMixin:
                 pin = None
                 for _attempt in range(6):
                     level = origin + (distances[segment] + shift + k * spacing) * s_dir
-                    pin = self._row_pin(segment, level, s_dir, fragments, direction)
+                    pin = self._row_pin(segment, level, s_dir, fragments, direction, origin=origin)
                     if "error" in pin:
                         break
                     raw_entry = pin["entry"] if segment != moved else (Minv @ np.append(pin["entry"], 1.0))[:3]
