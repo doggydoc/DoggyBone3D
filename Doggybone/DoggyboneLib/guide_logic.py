@@ -479,17 +479,25 @@ BRIDGE_HEIGHT = 3.0          # minimum height of a bridge (mm)
 BRIDGE_FRACTION = 0.30       # bridges close the top 30 % of the local block height; below open to the bone
 
 
-def configure_slots(blade_thickness=None, block_height=None, bridge_size=None):
+MIN_PIN_WEB = 1.0           # carved pin bore at least this far from the saw slot (material between them)
+
+
+def configure_slots(blade_thickness=None, block_height=None, bridge_size=None, wall=None):
     """Set blade thickness (slot = blade + clearance), saw block height and the size of the corner
     bridges (end caps of the slots, mm along the slot; the block grows sideways by the same amount).
     The corner bridge size also sets the width of the whole frame: every mm above the default adds
     1 mm to the wall on each side of the slot (block guide: behind the cutting face); below the
     default the walls keep their base thickness."""
     global BLADE_THICKNESS, SLOT_WIDTH, BLOCK_HEIGHT, BRIDGE_WIDTH, BREAK_BRIDGE_LENGTH, BREAK_BRIDGE_HEIGHT
-    global SLOT_WALL, BLOCK_WALL
+    global SLOT_WALL, BLOCK_WALL, BASE_SLOT_WALL, BASE_BLOCK_WALL
+    if wall is not None:
+        # box wall (UI 'Box wall'): small dogs - thinner walls, smaller saw box, pins closer to the cut
+        BASE_SLOT_WALL = max(1.0, float(wall))
+        BASE_BLOCK_WALL = BASE_SLOT_WALL + 1.0
     if bridge_size is not None:
         BRIDGE_WIDTH = max(1.5, float(bridge_size))
         BREAK_BRIDGE_LENGTH = BREAK_BRIDGE_HEIGHT = BRIDGE_WIDTH - 0.5
+    if bridge_size is not None or wall is not None:
         extra = max(0.0, BRIDGE_WIDTH - DEFAULT_BRIDGE_WIDTH)
         SLOT_WALL = BASE_SLOT_WALL + extra
         BLOCK_WALL = BASE_BLOCK_WALL + extra
@@ -504,11 +512,12 @@ PIN_THRESHOLD_MM = 15.0
 def pin_cut_margin(r_in, bores_carved=True):
     """Minimum distance (mm) of a pin axis from a cutting plane.
     bores_carved=True (saw block of two cuts, saw_block_pair): the bores are cut through the block as
-    well, so a sleeve may sit inside a wall that grew with the corner bridges - the rule keeps the
-    base wall (BASE_SLOT_WALL) and does not change with the corner bridge size.
+    well, so the pin may sit right at the saw box - its bore inside the box wall, with at least
+    MIN_PIN_WEB of material left between bore and slot (never more than the box wall itself).
     bores_carved=False (single cut, exact plate shells): the bore must stay outside the plates."""
-    wall = BASE_SLOT_WALL if bores_carved else SLOT_WALL
-    return SLOT_WIDTH + wall + float(r_in) + 0.3
+    if bores_carved:
+        return SLOT_WIDTH + min(MIN_PIN_WEB, BASE_SLOT_WALL) + float(r_in)
+    return SLOT_WIDTH + SLOT_WALL + float(r_in) + 0.3
 
 
 def auto_pin_diameter(bone_diameter):

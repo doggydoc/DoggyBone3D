@@ -1059,9 +1059,16 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.guide_blade = combo(["0.4 mm", "0.6 mm", "0.8 mm", "1.0 mm", "1.27 mm"], "1.0 mm",
                                  "Saw blade thickness. Slot = blade + 0.2 mm clearance; the kerf lies in the wedge.")
         guide_fields.append(("Saw blade", self.guide_blade))
-        self.guide_block_height = combo(["6 mm", "8 mm", "10 mm", "12 mm", "15 mm"], "10 mm",
-                                        "Height of the saw blocks above the highest bone point (blade guidance).")
+        self.guide_block_height = combo(["4 mm", "5 mm", "6 mm", "8 mm", "10 mm", "12 mm", "15 mm"], "10 mm",
+                                        "Height of the saw blocks above the highest bone point (blade guidance). "
+                                        "Small dogs: 4-6 mm.")
         guide_fields.append(("Slot height", self.guide_block_height))
+        self.guide_box_wall = spin(1.0, 4.0, 2.5, 0.5, " mm",
+                                   "Wall thickness of the saw box on each side of the slot. Small dogs: 1.0-1.5 mm "
+                                   "for a smaller box. The pins may reach right to the box - their bores go into "
+                                   "the box wall, at least 1 mm of material is kept between bore and slot.")
+        self.guide_box_wall.valueChanged.connect(lambda _v: self._on_box_wall_changed())
+        guide_fields.append(("Box wall", self.guide_box_wall))
         self.guide_slot_extent = combo(["Whole bone", "Guide side"], "Whole bone",
                                        "Length of the slots along the cut:\n"
                                        "Whole bone: the full width of the bone cross-section in the cutting plane "

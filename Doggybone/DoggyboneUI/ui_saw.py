@@ -288,13 +288,24 @@ class SawMixin:
         spin = getattr(self, "guide_bridge_size", None)
         return float(spin.value) if spin is not None else guide_logic.BRIDGE_WIDTH
 
+    def _box_wall(self):
+        """Saw box wall thickness (mm) from the UI ('Box wall')."""
+        spin = getattr(self, "guide_box_wall", None)
+        return float(spin.value) if spin is not None else guide_logic.BASE_SLOT_WALL
+
     def _on_bridge_size_changed(self):
-        guide_logic.configure_slots(bridge_size=self._bridge_size())
+        guide_logic.configure_slots(bridge_size=self._bridge_size(), wall=self._box_wall())
+        self._refresh_guide_body_if_present()
+
+    def _on_box_wall_changed(self):
+        guide_logic.configure_slots(bridge_size=self._bridge_size(), wall=self._box_wall())
+        if hasattr(self, "_pin_rows_changed"):
+            self._pin_rows_changed()           # the pins may now come closer to (or must keep off) the box
         self._refresh_guide_body_if_present()
 
     def _plan_saw_slots(self, patch, gap):
         """Slots for the cutting planes that exist. Returns (slots, notes, pin text)."""
-        guide_logic.configure_slots(bridge_size=self._bridge_size())
+        guide_logic.configure_slots(bridge_size=self._bridge_size(), wall=self._box_wall())
         from vtk.util.numpy_support import vtk_to_numpy
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
