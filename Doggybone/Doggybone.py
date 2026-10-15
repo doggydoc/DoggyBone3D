@@ -793,12 +793,13 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.pin_row_count.setRange(1, 4)
         self.pin_row_count.setValue(2)
         self.pin_row_count.setToolTip("Number of pins per fragment.")
-        self.pin_row_spacing = row_spin(0.0, 30.0, 0.5, " mm", "Distance between the pins of a row (auto: from "
-                                        "the pin diameter - sleeve + 2 mm, at least 3 x pin).", special="auto")
-        self.pin_row_distance_proximal = row_spin(0.0, 60.0, 0.5, " mm", "Proximal fragment: distance of the "
-                                                  "first pin from its cut (auto: slot + wall + pin + 1 mm).", special="auto")
-        self.pin_row_distance_distal = row_spin(0.0, 60.0, 0.5, " mm", "Distal fragment: distance of the first "
-                                                "pin from its cut (auto: slot + wall + pin + 1 mm).", special="auto")
+        # one spacing per fragment: cut -> first pin = pin -> pin (the same step), so the saw guide can be
+        # moved one hole along the pins (shortening) and still meets the reduction guide's pins
+        spacing_tip = ("{0} fragment: distance cut -> first pin AND pin -> pin (one step). auto: from the pin "
+                       "diameter (sleeve + 2 mm, at least 3 x pin). If the step is below the saw guide's minimum "
+                       "distance from the cut, it is raised in 0.5 mm steps until it is above it.")
+        self.pin_row_spacing_proximal = row_spin(0.0, 30.0, 0.5, " mm", spacing_tip.format("Proximal"), special="auto")
+        self.pin_row_spacing_distal = row_spin(0.0, 30.0, 0.5, " mm", spacing_tip.format("Distal"), special="auto")
         self.place_pin_rows_button = qt.QPushButton("Place pins")
         self.place_pin_rows_button.setToolTip(
             "One row of centred, parallel pins per fragment (parallel to the cut plane(s)). Drag the "
@@ -867,13 +868,14 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._reduction_diam_label = red_label("Pin size")    # pin diameter field placed next to it in reduction mode
         for row, (l1, f1, l2, f2) in enumerate((
                 ("Height", self.reduction_standoff, "Width", self.reduction_bar_diameter),
-                ("Pins", self.pin_row_count, "Spacing", self.pin_row_spacing),
-                ("Prox.", self.pin_row_distance_proximal, "Dist.", self.pin_row_distance_distal),
-                (None, None, "Pattern", self.pin_row_pattern),
-                ("Pin tilt", self.pin_tilt, "Clearance", self.reduction_clearance))):
+                ("Pins", self.pin_row_count, "Pattern", self.pin_row_pattern),
+                ("Spacing P", self.pin_row_spacing_proximal, "Spacing D", self.pin_row_spacing_distal),
+                (None, None, "Pin tilt", self.pin_tilt),
+                ("Red. gap", None, "Clearance", self.reduction_clearance))):
             if l1 is not None:
                 reduction_grid.addWidget(red_label(l1), row, 0)
-                reduction_grid.addWidget(f1, row, 1)
+                if f1 is not None:
+                    reduction_grid.addWidget(f1, row, 1)
             else:
                 reduction_grid.addWidget(self._reduction_diam_label, row, 0)
             reduction_grid.addWidget(red_label(l2), row, 2)
@@ -899,8 +901,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             source.valueChanged.connect(copy)
         link(self.reduction_gap, self.reduction_gap_guide)
         link(self.reduction_gap_guide, self.reduction_gap)
-        reduction_grid.addWidget(red_label("Red. gap"), 5, 0)
-        reduction_grid.addWidget(self.reduction_gap_guide, 5, 1)
+        reduction_grid.addWidget(self.reduction_gap_guide, 4, 1)     # its label 'Red. gap' is set above
         # shortening: empty extra holes in the SAW guide continuing the pin row (same step)
         self.shortening_holes_proximal = qt.QSpinBox()
         self.shortening_holes_distal = qt.QSpinBox()
@@ -932,8 +933,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             self.reduction_contact_only_checkbox.toolTip + " 'Clearance' sets that free space.")
         self.reduction_ring_checkbox.setToolTip(
             "Closed frame around all pins: " + self.reduction_ring_checkbox.toolTip)
-        for box in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
-                    self.pin_row_distance_distal, self.pin_tilt):
+        for box in (self.pin_row_count, self.pin_row_spacing_proximal, self.pin_row_spacing_distal,
+                    self.pin_tilt):
             box.valueChanged.connect(lambda _v: self._pin_rows_changed())
         self.reduction_type.currentIndexChanged.connect(lambda _i: self._update_guide_tool_visibility())
         # same look as the guide parameters below: label | field | label | field, two equal field
@@ -942,8 +943,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         reduction_grid.setColumnStretch(3, 1)
         reduction_grid.setVerticalSpacing(2)
         row_height = qt.QPushButton("X").sizeHint.height()
-        for widget in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
-                       self.pin_row_distance_distal, self.pin_row_pattern, self.place_pin_rows_button,
+        for widget in (self.pin_row_count, self.pin_row_spacing_proximal, self.pin_row_spacing_distal,
+                       self.pin_row_pattern, self.place_pin_rows_button,
                        self.reduction_delete_pins_button, self.pin_tilt, self.reduction_clearance,
                        self.reduction_gap_guide,
                        self.reduction_standoff, self.reduction_bar_diameter):

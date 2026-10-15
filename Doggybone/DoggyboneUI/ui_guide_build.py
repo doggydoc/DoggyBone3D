@@ -731,7 +731,7 @@ class GuideBuildMixin:
     PAINT_TOOLS = ("brush_add", "brush_remove", "lasso_add", "lasso_remove")
 
     def _place_diameter_field(self):
-        """The one pin-diameter field: under 'Prox. / Dist.' in reduction mode, top left of the guide
+        """The one pin-diameter field: under 'Spacing P / D' in reduction mode, top left of the guide
         parameters in saw mode."""
         pair = getattr(self, "_guide_field_labels", {}).get("Pin size")
         grid = self.reduction_options_widget.layout() if getattr(self, "reduction_options_widget", None) else None
