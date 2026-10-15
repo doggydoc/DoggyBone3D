@@ -1200,7 +1200,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_form.addRow(extrude_widget)
 
 
-        self.guide_status = StatusLabel("No footprint yet.", compact_lines=7)
+        self.guide_status = StatusLabel("No footprint yet.", compact_lines=12)
         self.guide_status.setWordWrap(True)
         self.guide_status.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         guide_form.addRow("Status", self.guide_status)

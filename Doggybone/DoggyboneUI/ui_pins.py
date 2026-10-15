@@ -1157,7 +1157,79 @@ class PinsMixin:
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetVisibility(False)
 
-    GUIDE_STATE_MARKERS = ("\nPin spacing", "\n\u2713 Pin spacing", "\nGUIDES OUTDATED", "\n\u2713 Both guides")
+    GUIDE_STATE_MARKERS = ("\n\u2022 ", "\nPin spacing", "\n\u2713 Pin spacing", "\nGUIDES OUTDATED",
+                           "\n\u2713 Both guides")
+    GUIDE_LINE_NAMES = {"reduction": "Reduction guide", "saw": "Saw guide (cutting)"}
+
+    def _guide_body_node(self, mode):
+        bone = self.osteotomy_bone.currentText
+        tag = " tibia" if bone == "Tibia" else ""
+        node = slicer.mrmlScene.GetFirstNodeByName("Doggybone guide body" + tag + (" (reduction)" if mode == "reduction" else ""))
+        if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
+            return None
+        return node
+
+    @staticmethod
+    def _guide_summary_from_status(text, mode):
+        """(summary, [problem lines]) of a guide, read from the status text written when it was built."""
+        found = []
+
+        def grab(pattern, fmt="{0}"):
+            match = re.search(pattern, text)
+            if match:
+                found.append(fmt.format(*match.groups()) if match.groups() else match.group(0))
+        if mode == "reduction":
+            grab(r"over (\d+) pins \((\d+) proximal, (\d+) distal\)", "{0} pins ({1} P / {2} D)")
+            grab(r"bores \u00d8 ?([\d.]+) mm", "bores \u00d8 {0} mm")
+            grab(r"([\d.]+-[\d.]+|[\d.]+) mm high", "{0} mm high")
+            if "single chain" in text:
+                found.append("chain")
+            elif re.search(r"ring", text, re.IGNORECASE):
+                found.append("ring")
+        else:
+            grab(r"Saw slots ([\d.]+) mm", "slots {0} mm")
+            grab(r"(\d+) proximal, (\d+) distal(?: \(incl\. (\d+) empty shortening)?",
+                 "sleeves {0} P / {1} D")
+            grab(r"incl\. (\d+) empty shortening", "{0} shortening holes")
+            grab(r"Pins: ([\d.]+) mm", "pins {0} mm")
+            grab(r"wall ([\d.]+) mm", "wall {0} mm")
+        grab(r"fit gap ([\d.]+) mm", "fit gap {0} mm")
+        if re.search(r"NOT closed", text):
+            found.append("NOT closed")
+        problems = []
+        for line in text.split("\n"):
+            if line.strip() and status_style_for(line) == STATUS_WARN_STYLE and line not in problems:
+                problems.append(line.strip())
+        return ", ".join(found), problems
+
+    def _store_guide_summary(self, mode, text):
+        node = self._guide_body_node(mode)
+        if node is None:
+            return
+        summary, problems = self._guide_summary_from_status(text, mode)
+        node.SetAttribute("Doggybone.Summary", summary)
+        node.SetAttribute("Doggybone.Problems", "\n".join(problems))
+
+    def _guide_lines(self, states):
+        """One line per guide: state + key values (+ its own problems from the last build)."""
+        lines = []
+        for mode in ("reduction", "saw"):
+            name = self.GUIDE_LINE_NAMES[mode]
+            node = self._guide_body_node(mode)
+            if states.get(mode) == "missing" or node is None:
+                lines.append(f"\u2022 {name}: not extruded yet")
+                continue
+            summary = node.GetAttribute("Doggybone.Summary") or ""
+            problems = [p for p in (node.GetAttribute("Doggybone.Problems") or "").split("\n") if p.strip()]
+            if states.get(mode) == "outdated":
+                head = f"\u2022 {name}: OUTDATED - extrude again"
+            elif problems:
+                head = f"\u2022 {name}: built, with warnings"
+            else:
+                head = f"\u2022 {name}: \u2713 up to date"
+            lines.append(head + (f" - {summary}" if summary else ""))
+            lines += [f"   \u2013 {p}" for p in problems]
+        return lines
 
     def _pin_spacing_report(self):
         """(ok, text) - checks the pin rows: cut -> first pin and pin -> pin (incl. the empty
@@ -1245,6 +1317,7 @@ class PinsMixin:
         text = self._strip_guide_state_note(getattr(self.guide_status, "full_text", self.guide_status.text))
         spacing_ok, spacing_text = self._pin_spacing_report() if self._guide_mode_is_reduction() or \
             states.get("reduction") != "missing" else (None, "")
+        text += "\n" + "\n".join(self._guide_lines(states))
         if spacing_text:
             text += "\n" + spacing_text
         if spacing_ok is False:
@@ -1256,7 +1329,7 @@ class PinsMixin:
             self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
             self.guide_status.setText(text + "\nGUIDES OUTDATED: extrude the " + " and the ".join(stale)
                                       + " again (export blocked until then)")
-        elif all(state == "current" for state in states.values()):
+        elif all(state == "current" for state in states.values()) and spacing_ok is not False:
             self.guide_status.setStyleSheet(STATUS_OK_STYLE)
             self.guide_status.setText(text + "\n\u2713 Both guides up to date - ready to export")
         else:

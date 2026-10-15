@@ -85,17 +85,26 @@ def _short_line(line, limit=110, first_clause=False):
     return line
 
 
-def compact_status(text, max_lines=6):
-    """The short form of a long status: the headline, every line with a problem and every line with a
-    check mark - the rest (plain information) only in the full text (tooltip)."""
+def compact_status(text, max_lines=10):
+    """The short form of a long status: the headline, the per-guide lines (starting with a bullet,
+    with their own warnings), any other line with a problem and the lines with a check mark - plain
+    information only in the full text (tooltip)."""
     lines = [l for l in (text or "").split("\n") if l.strip()]
     if len(lines) <= 2 and len(text or "") <= 220:
         return text or ""
-    keep = [_short_line(lines[0], first_clause=True)]
+    head = [_short_line(lines[0], first_clause=True)]
+    bullets, problems, checks = [], [], []
     for line in lines[1:]:
-        if _STATUS_PROBLEM.search(line) or "\u2713" in line:
-            keep.append(_short_line(line))
-    dropped = len(lines) > len(keep) or any(len(l.strip()) > 110 for l in lines)
+        if line.lstrip().startswith(("\u2022", "\u2013")):
+            bullets.append(_short_line(line, limit=160))
+        elif _STATUS_PROBLEM.search(line):
+            problems.append(_short_line(line))
+        elif "\u2713" in line:
+            checks.append(_short_line(line))
+    in_bullets = " ".join(bullets)
+    problems = [p for p in dict.fromkeys(problems) if p.rstrip(" \u2026")[:60] not in in_bullets]
+    keep = head + bullets + problems + checks
+    dropped = len(lines) > len(keep) or any(len(l.strip()) > 160 for l in lines)
     if len(keep) > max_lines:
         keep = keep[:max_lines]
         dropped = True

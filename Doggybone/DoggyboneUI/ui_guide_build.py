@@ -56,6 +56,17 @@ class GuideBuildMixin:
     GUIDE_MIN_FEATURE = 0.3        # mm, thinner parts of the guide are removed
 
     def _extrude_guide_body(self):
+        """Builds the guide of the current mode; afterwards its key values and warnings are kept on the
+        guide itself (shown in the per-guide lines of the status)."""
+        mode = "reduction" if self._guide_mode_is_reduction() else "saw"
+        before = self._guide_body_node(mode) if hasattr(self, "_guide_body_node") else None
+        before_time = before.GetMTime() if before is not None else -1
+        self._extrude_guide_body_now()
+        after = self._guide_body_node(mode) if hasattr(self, "_guide_body_node") else None
+        if after is not None and (after is not before or after.GetMTime() != before_time):
+            self._store_guide_summary(mode, getattr(self.guide_status, "full_text", self.guide_status.text))
+
+    def _extrude_guide_body_now(self):
         self._pins_dirty = False
         if self._guide_mode_is_reduction() and self._reduction_is_bar():
             self._build_reduction_bar()
