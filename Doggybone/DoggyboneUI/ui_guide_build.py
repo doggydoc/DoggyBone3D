@@ -31,7 +31,7 @@ class GuideBuildMixin:
         other = "saw" if first == "reduction" else "reduction"
         if self._guide_states().get(other) != "outdated":
             return
-        first_text = self._strip_guide_state_note(self.guide_status.text)
+        first_text = self._strip_guide_state_note(getattr(self.guide_status, "full_text", self.guide_status.text))
         first_style = self.guide_status.styleSheet
         buttons = {"reduction": self.guide_mode_reduction, "saw": self.guide_mode_saw}
         qt.QApplication.setOverrideCursor(qt.Qt.WaitCursor)
@@ -39,7 +39,7 @@ class GuideBuildMixin:
             buttons[other].setChecked(True)            # -> onGuideModeChanged (scene shows the other guide)
             slicer.app.processEvents()
             self._extrude_guide_body()
-            other_text = self._strip_guide_state_note(self.guide_status.text)
+            other_text = self._strip_guide_state_note(getattr(self.guide_status, "full_text", self.guide_status.text))
             other_style = self.guide_status.styleSheet
         finally:
             buttons[first].setChecked(True)            # back to the guide the user extruded
@@ -47,8 +47,8 @@ class GuideBuildMixin:
         names = {"reduction": "Reduction guide", "saw": "Saw guide"}
         worst = STATUS_WARN_STYLE if STATUS_WARN_STYLE in (first_style, other_style) else ""
         self.guide_status.setStyleSheet(worst)
-        self.guide_status.setText(first_text + f"\n\n{names[other]} rebuilt as well (the plan had changed "
-                                  f"since it was built): " + other_text)
+        self.guide_status.setText(first_text + f"\n\u2713 {names[other]} rebuilt as well (the plan had changed)\n"
+                                  + "\n".join(f"{names[other]}: {line}" for line in other_text.split("\n") if line.strip()))
 
     # fixed guide-body parameters (the former fields Rim smoothing / Top smoothing / Min. thickness)
     GUIDE_RIM_ROUND = 1.0          # mm, rounded rim where the painted region ends

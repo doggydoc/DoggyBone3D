@@ -72,14 +72,50 @@ def status_style_for(text):
 _STATUS_RANK = {"": 0, STATUS_OK_STYLE: 1, STATUS_WARN_STYLE: 2, STATUS_ERROR_STYLE: 3}
 
 
+def _short_line(line, limit=110, first_clause=False):
+    """One status line, shortened: (optionally) only its first clause, at most `limit` characters."""
+    line = line.strip()
+    if first_clause:
+        for sep in ("; ", ". "):
+            cut = line.find(sep, 20)
+            if cut > 0:
+                line = line[:cut]
+    if len(line) > limit:
+        line = line[:limit].rsplit(" ", 1)[0] + " \u2026"
+    return line
+
+
+def compact_status(text, max_lines=6):
+    """The short form of a long status: the headline, every line with a problem and every line with a
+    check mark - the rest (plain information) only in the full text (tooltip)."""
+    lines = [l for l in (text or "").split("\n") if l.strip()]
+    if len(lines) <= 2 and len(text or "") <= 220:
+        return text or ""
+    keep = [_short_line(lines[0], first_clause=True)]
+    for line in lines[1:]:
+        if _STATUS_PROBLEM.search(line) or "\u2713" in line:
+            keep.append(_short_line(line))
+    dropped = len(lines) > len(keep) or any(len(l.strip()) > 110 for l in lines)
+    if len(keep) > max_lines:
+        keep = keep[:max_lines]
+        dropped = True
+    if dropped:
+        keep.append("(details: hold the mouse over this field)")
+    return "\n".join(keep)
+
+
 class StatusLabel(qt.QLabel):
     """Status field of a section: green when all is well, orange when there is a problem - decided
     from the text itself. A warning / error colour set explicitly just before the text is kept
-    (the more severe of the two wins); a colour set after the text replaces it."""
+    (the more severe of the two wins); a colour set after the text replaces it.
+    compact_lines: show only a short form (headline, problems, check marks); the full text is in
+    the tooltip and in full_text (read that, not .text, to build on the status)."""
 
-    def __init__(self, text=""):
+    def __init__(self, text="", compact_lines=None):
         qt.QLabel.__init__(self, "")
         self._explicit = None
+        self._compact_lines = compact_lines
+        self.full_text = ""
         self.setText(text)
 
     def setStyleSheet(self, style):
@@ -88,9 +124,18 @@ class StatusLabel(qt.QLabel):
 
     def setText(self, text):
         text = "" if text is None else str(text)
+        self.full_text = text
         auto = status_style_for(text)
         explicit = getattr(self, "_explicit", None)
         style = explicit if explicit is not None and _STATUS_RANK.get(explicit, 0) > _STATUS_RANK.get(auto, 0) else auto
-        qt.QLabel.setText(self, text)
+        shown = text
+        if getattr(self, "_compact_lines", None):
+            shown = compact_status(text, self._compact_lines)
+            if shown != text:
+                import html
+                self.setToolTip("<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>")
+            else:
+                self.setToolTip("")
+        qt.QLabel.setText(self, shown)
         qt.QLabel.setStyleSheet(self, style)
         self._explicit = None

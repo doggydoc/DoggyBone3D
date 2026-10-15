@@ -1157,7 +1157,7 @@ class PinsMixin:
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetVisibility(False)
 
-    GUIDE_STATE_MARKERS = ("\nPin spacing check", "\nGUIDES OUTDATED", "\n\u2713 Both guides")
+    GUIDE_STATE_MARKERS = ("\nPin spacing", "\n\u2713 Pin spacing", "\nGUIDES OUTDATED", "\n\u2713 Both guides")
 
     def _pin_spacing_report(self):
         """(ok, text) - checks the pin rows: cut -> first pin and pin -> pin (incl. the empty
@@ -1174,7 +1174,7 @@ class PinsMixin:
         minimum = guide_logic.pin_cut_margin(r_in, bores_carved=len(self._cut_planes()) == 2)
         boxes = {"proximal": getattr(self, "pin_row_spacing_proximal", None),
                  "distal": getattr(self, "pin_row_spacing_distal", None)}
-        lines, bad = [], []
+        good, bad, listed = [], [], []
         for segment in ("proximal", "distal"):
             if segment not in frames or normals.get(segment) is None:
                 continue
@@ -1190,26 +1190,23 @@ class PinsMixin:
             target = (float(box.value) if box is not None else 0.0) or auto_spacing
             while target < minimum + 0.02:
                 target += 0.5
-            shown = " | ".join(f"{x:.2f}" for x in steps)
+            tag = segment[0].upper()
             if manual:
-                lines.append(f"{segment}: cut -> pin -> pin {shown} mm (manual pins - not checked)")
+                listed.append(f"{tag} " + "|".join(f"{x:.1f}" for x in steps))
                 continue
             off = [(k, x) for k, x in enumerate(steps) if abs(x - target) > 0.1]
             if off:
-                bad.append(segment)
-                lines.append(f"{segment}: cut -> pin -> pin {shown} mm - DEVIATES from {target:.1f} mm at "
-                             + ", ".join(("cut -> 1st pin" if k == 0 else f"step {k + 1}") + f" ({x:.2f})"
-                                         for k, x in off))
+                bad.append(f"{tag} " + ", ".join(("cut-pin" if k == 0 else f"step {k + 1}") + f" {x:.2f}"
+                                                 for k, x in off) + f" instead of {target:.1f} mm")
             else:
-                lines.append(f"{segment}: cut -> 1st pin and every pin -> pin = {target:.1f} mm "
-                             f"({len(steps)} positions, max. difference "
-                             f"{max(abs(x - target) for x in steps):.2f} mm) \u2713")
-        if not lines:
-            return None, ""
-        ok = None if manual else not bad
-        head = ("Pin spacing check (perpendicular to the cut): " if ok is not False
-                else "Pin spacing check - SPACING DEVIATES (perpendicular to the cut): ")
-        return ok, head + "\n  " + "\n  ".join(lines)
+                good.append(f"{tag} {target:.1f} mm (x{len(steps)})")
+        if manual:
+            return (None, "Pin spacing (manual pins) cut-pin-pin: " + "; ".join(listed) + " mm") if listed else (None, "")
+        if bad:
+            return False, "Pin spacing DEVIATES: " + "; ".join(bad)
+        if good:
+            return True, "\u2713 Pin spacing " + ", ".join(good) + ": cut-pin = pin-pin"
+        return None, ""
 
     def _guide_states(self):
         """{'reduction'/'saw': 'missing' | 'outdated' | 'current'} for the guides of this side and bone."""
@@ -1245,24 +1242,23 @@ class PinsMixin:
         states = self._guide_states()
         labels = {"reduction": "reduction guide", "saw": "saw guide"}
         stale = [labels[m] for m in ("reduction", "saw") if states[m] == "outdated"]
-        text = self._strip_guide_state_note(self.guide_status.text)
+        text = self._strip_guide_state_note(getattr(self.guide_status, "full_text", self.guide_status.text))
         spacing_ok, spacing_text = self._pin_spacing_report() if self._guide_mode_is_reduction() or \
             states.get("reduction") != "missing" else (None, "")
         if spacing_text:
             text += "\n" + spacing_text
         if spacing_ok is False:
             self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
-            self.guide_status.setText(text + (("\nGUIDES OUTDATED - the plan changed: extrude the "
-                                              + " and the ".join(stale) + " again.") if stale else ""))
+            self.guide_status.setText(text + (("\nGUIDES OUTDATED: extrude the " + " and the ".join(stale)
+                                               + " again") if stale else ""))
             return
         if stale:
             self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
-            self.guide_status.setText(text + "\nGUIDES OUTDATED - the plan changed: extrude the "
-                                      + " and the ".join(stale) + " again. 'Export guides' writes them only after that.")
+            self.guide_status.setText(text + "\nGUIDES OUTDATED: extrude the " + " and the ".join(stale)
+                                      + " again (export blocked until then)")
         elif all(state == "current" for state in states.values()):
             self.guide_status.setStyleSheet(STATUS_OK_STYLE)
-            self.guide_status.setText(text + "\n\u2713 Both guides (reduction and saw guide) match the current plan "
-                                      "- ready for 'Export guides'.")
+            self.guide_status.setText(text + "\n\u2713 Both guides up to date - ready to export")
         else:
             self.guide_status.setStyleSheet(STATUS_OK_STYLE if spacing_ok else "")
             self.guide_status.setText(text)

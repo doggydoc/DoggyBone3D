@@ -233,7 +233,7 @@ class GuideEditMixin:
             # No surface yet (e.g. new scene): prepare it now instead of refusing the tool.
             self.onSuggestGuideFootprint(empty=True)
         if self._guide_mesh_node() is None:
-            message = self.guide_status.text   # why the surface could not be prepared
+            message = getattr(self.guide_status, "full_text", self.guide_status.text)   # why the surface could not be prepared
             button = self._guide_tool_buttons[key]
             was_blocked = button.blockSignals(True)
             button.setChecked(False)
