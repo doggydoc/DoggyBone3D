@@ -31,6 +31,8 @@ class GuideBuildMixin:
         other = "saw" if first == "reduction" else "reduction"
         if self._guide_states().get(other) != "outdated":
             return
+        if self._guide_footprint_lost(other):
+            return          # nothing to extrude from - the guide line in the status says what to do
         first_text = self._strip_guide_state_note(getattr(self.guide_status, "full_text", self.guide_status.text))
         first_style = self.guide_status.styleSheet
         buttons = {"reduction": self.guide_mode_reduction, "saw": self.guide_mode_saw}

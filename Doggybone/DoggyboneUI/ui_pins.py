@@ -1239,6 +1239,16 @@ class PinsMixin:
         node.SetAttribute("Doggybone.Summary", summary)
         node.SetAttribute("Doggybone.Problems", "\n".join(problems))
 
+    def _guide_footprint_lost(self, mode):
+        """True when this guide is built on a painted footprint and that footprint (on its prepared
+        bone surface) is gone - e.g. removed after the segmentation changed. 'Extrude' alone cannot
+        rebuild it then; the footprint has to be painted again."""
+        if mode == "reduction" and self._reduction_is_bar():
+            return False
+        name = "Doggybone guide bone surface" + self._bone_tag() + (" (reduction)" if mode == "reduction" else "")
+        node = slicer.mrmlScene.GetFirstNodeByName(name)
+        return node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0
+
     def _guide_lines(self, states):
         """One line per guide: state + key values (+ its own problems from the last build)."""
         lines = []
@@ -1251,7 +1261,18 @@ class PinsMixin:
             summary = node.GetAttribute("Doggybone.Summary") or ""
             problems = [p for p in (node.GetAttribute("Doggybone.Problems") or "").split("\n") if p.strip()]
             if states.get(mode) == "outdated":
-                head = f"\u2022 {name}: OUTDATED - extrude again"
+                try:
+                    why = self._guide_changed_parts(node, self.osteotomy_side.currentText,
+                                                    self.osteotomy_bone.currentText, mode) or []
+                except Exception:
+                    why = []
+                reason = f" ({', '.join(why)} changed)" if why else ""
+                if self._guide_footprint_lost(mode):
+                    head = (f"\u2022 {name}: OUTDATED{reason} - footprint lost: paint it again in this "
+                            "mode, then Extrude")
+                    lines.append(head)
+                    continue
+                head = f"\u2022 {name}: OUTDATED{reason} - extrude again"
             elif problems:
                 head = f"\u2022 {name}: built, with warnings"
             else:
@@ -1281,11 +1302,14 @@ class PinsMixin:
                 continue
             origin = np.asarray(frames[segment][0], float)
             n_cut = np.asarray(normals[segment], float)
-            levels = sorted(abs(float(np.dot(np.array(node.GetNthControlPointPositionWorld(i)) - origin, n_cut)))
-                            for i in range(node.GetNumberOfControlPoints())
-                            if (node.GetNthControlPointDescription(i) or "").split("|")[0] == segment)
-            if not levels:
+            marks = sorted((abs(float(np.dot(np.array(node.GetNthControlPointPositionWorld(i)) - origin, n_cut))),
+                            node.GetNthControlPointLabel(i), (node.GetNthControlPointDescription(i) or "") + "|")
+                           for i in range(node.GetNumberOfControlPoints())
+                           if (node.GetNthControlPointDescription(i) or "").split("|")[0] == segment)
+            if not marks:
                 continue
+            levels = [m[0] for m in marks]
+            by_hand = [m[1] for m in marks if m[2].split("|")[1] in ("free", "manual")]
             steps = [levels[0]] + [b - a for a, b in zip(levels, levels[1:])]
             box = boxes[segment]
             target = (float(box.value) if box is not None else 0.0) or auto_spacing
@@ -1302,7 +1326,8 @@ class PinsMixin:
             off = [(k, x) for k, x in enumerate(steps) if abs(x - target) > 0.1]
             if off:
                 bad.append(f"{tag} " + ", ".join(("cut-pin" if k == 0 else f"step {k + 1}") + f" {x:.2f}"
-                                                 for k, x in off) + f" instead of {target:.1f} mm")
+                                                 for k, x in off) + f" instead of {target:.1f} mm"
+                           + (f" ({', '.join(by_hand)} moved by hand: click twice to remove, then 'Place pins')" if by_hand else ""))
             else:
                 good.append(f"{tag} {target:.1f} mm (x{len(steps)})")
         if manual:

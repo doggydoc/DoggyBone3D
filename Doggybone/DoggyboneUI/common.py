@@ -98,7 +98,7 @@ def compact_status(text, max_lines=10):
         if line.lstrip().startswith(("\u2022", "\u2013")):
             bullets.append(_short_line(line, limit=160))
         elif _STATUS_PROBLEM.search(line):
-            problems.append(_short_line(line))
+            problems.append(_short_line(line, limit=150))
         elif "\u2713" in line:
             checks.append(_short_line(line))
     in_bullets = " ".join(bullets)
