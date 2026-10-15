@@ -908,11 +908,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             box.setRange(0, 4)
             box.setValue(0)
             box.setToolTip(
-                f"Bone shortening: empty extra holes in the SAW guide that continue the {where} pin row with the "
-                "same step. Then the first pin sits as far from the cut as the pins from each other. After the "
-                "first cut: pull the pin next to the cut, set a new pin through the next empty hole and slide the "
-                "saw guide one step along the pins - the second cut is exactly parallel, one step further, and the "
-                "remaining pins sit where the reduction guide expects them.")
+                f"Bone shortening: empty extra holes in the SAW guide only, continuing the {where} pin row with "
+                "the same step as the pins. The pins themselves and the reduction guide stay unchanged. To cut "
+                "further: set a pin through an empty hole and slide the saw guide along the pins - the next cut "
+                "is exactly parallel.")
             box.valueChanged.connect(lambda _v: self._pin_rows_changed())
         reduction_grid.addWidget(red_label("+Holes P"), 6, 0)
         reduction_grid.addWidget(self.shortening_holes_proximal, 6, 1)
