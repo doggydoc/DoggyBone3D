@@ -245,10 +245,11 @@ class GuideBuildMixin:
             origin, normal = self._get_plane_origin_normal(node)
             return ",".join(f"{v:.2f}" for v in list(origin) + list(normal))
 
-        def markups_text(node):
+        def markups_text(node, skip_extra=False):
             if node is None:
                 return "none"
-            points = [node.GetNthControlPointPositionWorld(i) for i in range(node.GetNumberOfControlPoints())]
+            points = [node.GetNthControlPointPositionWorld(i) for i in range(node.GetNumberOfControlPoints())
+                      if not (skip_extra and (node.GetNthControlPointDescription(i) or "").endswith("|extra"))]
             attributes = [f"{name}={node.GetAttribute(name)}" for name in sorted(node.GetAttributeNames() or [])
                           if name.startswith("Doggybone.")]
             return ";".join(",".join(f"{v:.2f}" for v in p) for p in points) + "|" + ";".join(attributes)
@@ -266,7 +267,9 @@ class GuideBuildMixin:
             matrix = vtk.vtkMatrix4x4()
             transform.GetMatrixTransformToWorld(matrix)
             parts["correction"] = digest(";".join(f"{matrix.GetElement(r, c):.3f}" for r in range(3) for c in range(4)))
-        parts["reduction pins"] = digest(markups_text(get("Doggybone guide pins" + tag + " (reduction)")))
+        # the empty shortening holes are built into the saw guide only - they never date the reduction guide
+        parts["reduction pins"] = digest(markups_text(get("Doggybone guide pins" + tag + " (reduction)"),
+                                                      skip_extra=(mode == "reduction")))
         if mode == "saw":
             parts["saw pins"] = digest(markups_text(get("Doggybone guide pins" + tag)))
             parts["saw blocks"] = digest("|".join(markups_text(get(f"Doggybone saw box{tag} {label}"))
@@ -383,6 +386,25 @@ class GuideBuildMixin:
                 "SIDE CHECK FAILED - file names and guide labels (dx / sx) may carry the wrong side:\n\n"
                 + "\n".join(wrong) + "\n\nExport anyway?", windowTitle="Export guides"):
             return
+        # guides that no longer match the plan (pins / planes / correction changed) are NOT written -
+        # they have to be extruded again first
+        outdated, fresh = [], []
+        for job in jobs:
+            node, side, side_text, bone, mode, path = job
+            changed = self._guide_changed_parts(node, side, bone, mode)
+            if changed:
+                kind = "reduction guide" if mode == "reduction" else "osteotomy guide"
+                outdated.append(f"{side_text} {bone.lower()} {kind}: changed since it was built ({', '.join(changed)}) "
+                                f"- press 'Extrude' for this guide, then export again")
+            else:
+                fresh.append(job)
+        jobs = fresh
+        if not jobs:
+            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+            self.guide_status.setText("Nothing exported - every guide is outdated:\n" + "\n".join(outdated))
+            slicer.util.warningDisplay("No guide exported - extrude them again first:\n\n" + "\n".join(outdated),
+                                       windowTitle="Export guides")
+            return
         existing = [os.path.basename(job[-1]) for job in jobs if os.path.exists(job[-1])]
         if existing and not slicer.util.confirmOkCancelDisplay(
                 "These files already exist and will be replaced:\n" + "\n".join(existing),
@@ -418,13 +440,17 @@ class GuideBuildMixin:
             lines.append(f"{'OK' if ok and not notes else 'CHECK'}  {label}: {os.path.basename(path)} "
                          f"({b[1] - b[0]:.0f} x {b[3] - b[2]:.0f} x {b[5] - b[4]:.0f} mm)"
                          + (" - " + "; ".join(notes) if notes else ""))
+        for text in outdated:
+            lines.append("NOT EXPORTED  " + text)
+            problems += 1
         self._last_stl_dir = folder
         self.guide_status.setStyleSheet(STATUS_WARN_STYLE if problems else STATUS_OK_STYLE)
         self.guide_status.setText(f"{len(jobs)} guide(s) exported to {folder} (each centred at 0,0,0):\n"
                                   + "\n".join(lines))
         if problems:
             slicer.util.warningDisplay(
-                "Check the exported guides before printing:\n\n" + "\n".join(l for l in lines if l.startswith("CHECK")),
+                "Check the exported guides before printing:\n\n"
+                + "\n".join(l for l in lines if l.startswith(("CHECK", "NOT EXPORTED"))),
                 windowTitle="Export guides")
 
     def onExportGuideStl(self):

@@ -913,13 +913,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 "first cut: pull the pin next to the cut, set a new pin through the next empty hole and slide the "
                 "saw guide one step along the pins - the second cut is exactly parallel, one step further, and the "
                 "remaining pins sit where the reduction guide expects them.")
-            box.valueChanged.connect(lambda _v: self._pin_rows_changed())
-        reduction_grid.addWidget(red_label("+Holes P"), 6, 0)
-        reduction_grid.addWidget(self.shortening_holes_proximal, 6, 1)
-        reduction_grid.addWidget(red_label("+Holes D"), 6, 2)
-        reduction_grid.addWidget(self.shortening_holes_distal, 6, 3)
-        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 7, 0, 1, 2)
-        reduction_grid.addWidget(self.reduction_ring_checkbox, 7, 2, 1, 2)
+            box.valueChanged.connect(lambda _v: self._on_shortening_holes_changed())
+        # (placed with the saw guide parameters below - the holes are built into the saw guide only)
+        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 6, 0, 1, 2)
+        reduction_grid.addWidget(self.reduction_ring_checkbox, 6, 2, 1, 2)
         self._reduction_pin_buttons = qt.QGridLayout()
         self._reduction_pin_buttons.setContentsMargins(0, 0, 0, 0)
         self._reduction_pin_buttons.setHorizontalSpacing(6)
@@ -927,7 +924,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._reduction_pin_buttons.addWidget(self.reduction_delete_pins_button, 0, 2)
         for col in range(3):
             self._reduction_pin_buttons.setColumnStretch(col, 1)
-        reduction_grid.addLayout(self._reduction_pin_buttons, 8, 0, 1, 4)
+        reduction_grid.addLayout(self._reduction_pin_buttons, 7, 0, 1, 4)
         self.reduction_delete_pins_button.setText("Delete all")
         self.pin_row_pattern.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.pin_row_pattern.setMinimumContentsLength(4)
@@ -948,7 +945,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         for widget in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
                        self.pin_row_distance_distal, self.pin_row_pattern, self.place_pin_rows_button,
                        self.reduction_delete_pins_button, self.pin_tilt, self.reduction_clearance,
-                       self.reduction_gap_guide, self.shortening_holes_proximal, self.shortening_holes_distal,
+                       self.reduction_gap_guide,
                        self.reduction_standoff, self.reduction_bar_diameter):
             widget.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             widget.setMinimumWidth(60)
@@ -1086,6 +1083,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                                    "the box wall, at least 1 mm of material is kept between bore and slot.")
         self.guide_box_wall.valueChanged.connect(lambda _v: self._on_box_wall_changed())
         guide_fields.append(("Box wall", self.guide_box_wall))
+        guide_fields.append(("+Holes P", self.shortening_holes_proximal))
+        guide_fields.append(("+Holes D", self.shortening_holes_distal))
         self.guide_slot_extent = combo(["Whole bone", "Guide side"], "Whole bone",
                                        "Length of the slots along the cut:\n"
                                        "Whole bone: the full width of the bone cross-section in the cutting plane "

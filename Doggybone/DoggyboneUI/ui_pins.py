@@ -432,6 +432,7 @@ class PinsMixin:
         if self._guide_mode_is_reduction():
             self._show_reduction_pin_axes()
             self._place_pin_gizmo()
+        self._warn_guides_outdated()
 
     # --- automatic pin rows (reduction mode) -------------------------------------------------
     PIN_ROW_HANDLES = property(lambda self: "Doggybone pin row handles" + self._bone_tag())
@@ -763,6 +764,7 @@ class PinsMixin:
                      + " - move one with the gizmo.")
         self.guide_status.setStyleSheet(STATUS_WARN_STYLE if close else "")
         self.guide_status.setText(text)
+        self._warn_guides_outdated()
 
     def _pin_row_staggered(self):
         box = getattr(self, "pin_row_pattern", None)
@@ -1086,6 +1088,46 @@ class PinsMixin:
         pin["segment"] = segment
         pin["centre"] = centre
         return pin
+
+    def _on_shortening_holes_changed(self):
+        """+Holes changed (saw guide parameters): the pin rows follow (the first pin may move to the
+        pin step), whichever guide mode is shown."""
+        if self._pin_distribution_manual() or not getattr(self, "_pin_rows_active", False):
+            self._warn_guides_outdated()
+            return
+        saved = getattr(self, "_guide_mode", "saw")
+        self._guide_mode = "reduction"
+        try:
+            self._place_pin_rows()
+        finally:
+            self._guide_mode = saved
+
+    def _warn_guides_outdated(self):
+        """After any pin change: name the existing guides of this bone that no longer match the plan -
+        they must be extruded again (the export refuses them until then)."""
+        if not hasattr(self, "_guide_changed_parts") or not hasattr(self, "guide_status"):
+            return
+        side = self.osteotomy_side.currentText
+        bone = self.osteotomy_bone.currentText
+        tag = " tibia" if bone == "Tibia" else ""
+        stale = []
+        for mode, name, label in (("reduction", "Doggybone guide body" + tag + " (reduction)", "reduction guide"),
+                                  ("saw", "Doggybone guide body" + tag, "saw guide")):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
+                continue
+            try:
+                changed = self._guide_changed_parts(node, side, bone, mode)
+            except Exception:
+                changed = None
+            if changed:
+                stale.append(label)
+        if not stale:
+            return
+        text = self.guide_status.text.split("\nGUIDES OUTDATED")[0]
+        self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+        self.guide_status.setText(text + "\nGUIDES OUTDATED - the pins changed: extrude the " + " and the ".join(stale)
+                                  + " again. 'Export guides' writes them only after that.")
 
     def _shortening_holes(self, segment):
         """Number of empty extra holes (saw guide only) beyond the pin row of this fragment."""
@@ -1494,6 +1536,7 @@ class PinsMixin:
             self.guide_status.setText(text)
         if getattr(self, "_guide_active_tool", None) != "pins":
             self._rebuild_after_pin_change()
+        self._warn_guides_outdated()
 
     def _show_reduction_pin_axes(self):
         """Axes of the pins set after the reduction (corrected pose) - ALWAYS into the reduction node,
@@ -1574,6 +1617,7 @@ class PinsMixin:
             "each other and to the cut plane(s). Fine-tune it with the small gizmo; press 'Place pins' "
             "again when all pins are set - the reduction guide is then built." + (f"\nMoved {shift:.1f} mm away from the cut so the saw guide can take it."
                                             if shift > 0 else ""))
+        self._warn_guides_outdated()
 
     def _snap_to_pin_line(self, pin):
         """At least two pins already in this fragment: the new pin goes onto their common line (same
