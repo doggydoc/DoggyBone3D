@@ -38,10 +38,13 @@ class SawMixin:
             if "error" in planned:
                 rejected.append(f"{pin['label']}: {planned['error']} (outside the saw-guide surface)")
                 continue
-            planned["label"], planned["segment"] = pin["label"], pin["segment"]
+            planned["label"], planned["segment"], planned["extra"] = pin["label"], pin["segment"], pin.get("extra", False)
             pins.append(planned)
             lengths.append(planned["bone_length"])
             counts[pin["segment"]] = counts.get(pin["segment"], 0) + 1
+        capped = guide_logic.cap_pin_lengths([p for p in pins if not p.get("extra")])
+        if capped:
+            lengths = [p["bone_length"] for p in pins]
         touching = []
         for a_index in range(len(pins)):
             for b_index in range(a_index + 1, len(pins)):
@@ -56,6 +59,9 @@ class SawMixin:
         if touching:
             note += ("\nSleeves touching (" + ", ".join(touching) + "): merged into one block, every bore "
                      "is cut through - no sleeve reaches into a neighbouring bore.")
+        if capped:
+            note += ("\nShortened to the mean length of the other pins (would run on into another bone): "
+                     + ", ".join(str(c) for c in capped) + ".")
         if rejected:
             note += "\nNot built: " + "; ".join(rejected)
         return pins, note

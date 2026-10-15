@@ -878,7 +878,35 @@ def plan_pin(obb, point, axis, pin_diameter, gap, height, reach=90.0):
     r_in, r_out = sleeve_radii(pin_diameter)
     top = entry + (gap + height) * a
     return dict(point=p, axis=a, entry=entry, far=far, bone_length=float(np.linalg.norm(far - entry)),
-                hits=len(hits), top=top, r_in=r_in, r_out=r_out, diameter=float(pin_diameter))
+                hits=len(hits), hit_points=[np.asarray(h, float) for h in hits], top=top, r_in=r_in, r_out=r_out,
+                diameter=float(pin_diameter))
+
+
+def cap_pin_lengths(pins, tolerance=1.15):
+    """No pin longer than the MEAN length of all the other pins (x tolerance): a pin whose axis runs on
+    into another bone (patella, fabella, tibia ...) ends at the bone exit nearest to that length - or
+    exactly at that length when there is no exit near it. Changes the pins in place; returns the
+    labels (or indices) of the shortened pins."""
+    usable = [p for p in pins if "error" not in p and p.get("bone_length")]
+    if len(usable) < 2:
+        return []
+    lengths = [float(p["bone_length"]) for p in usable]
+    shortened = []
+    for index, pin in enumerate(usable):
+        others = lengths[:index] + lengths[index + 1:]
+        limit = tolerance * float(np.mean(others))
+        if lengths[index] <= limit:
+            continue
+        entry, axis = np.asarray(pin["entry"], float), unit(np.asarray(pin["axis"], float))
+        depth = [float(np.dot(entry - np.asarray(h, float), axis)) for h in pin.get("hit_points", [])]
+        # exits of bone material: odd hits (entry 0 = into bone, 1 = out (canal / soft tissue), ...)
+        exits = [d for k, d in enumerate(depth) if k % 2 == 1 and 0.0 < d <= limit]
+        new_length = max(exits) if exits else limit
+        pin["far"] = entry - new_length * axis
+        pin["bone_length"] = float(new_length)
+        pin["capped"] = True
+        shortened.append(pin.get("label", index))
+    return shortened
 
 
 def sleeve_shell(obb, pin, gap):

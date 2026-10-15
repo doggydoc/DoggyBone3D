@@ -1164,6 +1164,8 @@ class PinsMixin:
             pin["label"] = label
             pin["extra"] = kind == "extra"
             pins.append(pin)
+        # no pin through a neighbouring bone: at most as long as the mean of the other pins
+        self._capped_pins = guide_logic.cap_pin_lengths([p for p in pins if not p.get("extra")])
         return pins, rejected
 
     def _reduction_guide_pins(self):
