@@ -1127,6 +1127,19 @@ class PinsMixin:
             self._place_pin_rows()
         finally:
             self._guide_mode = saved
+            self._hide_other_mode_objects()
+
+    def _hide_other_mode_objects(self):
+        """Objects of the guide mode NOT shown (e.g. the reduction pins in the corrected pose while the
+        saw guide is shown) stay hidden - they would stand beside the bone in the other pose."""
+        if not hasattr(self, "_guide_nodes_of_mode"):
+            return
+        mode = getattr(self, "_guide_mode", "saw")
+        other = "saw" if mode == "reduction" else "reduction"
+        for name in self._guide_nodes_of_mode(other):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(False)
 
     def _warn_guides_outdated(self):
         """After any pin change: name the existing guides of this bone that no longer match the plan -
