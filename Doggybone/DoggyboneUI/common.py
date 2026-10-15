@@ -46,9 +46,10 @@ STATUS_ERROR_STYLE = "QLabel { background-color: #F8CBCB; color: #5A1010; paddin
 _STATUS_PROBLEM = re.compile(
     r"(warning|outdated|not exported|not written|not built|not applied|not aligned|not confirmed|not checked|"
     r"cannot|could not|can't|failed|error|too close|does not fit|doesn't fit|not fit|missing|rejected|skipped|"
-    r"uncertain|conflict|check the|check them|check it|check before|\bfirst[.!]|^no |\bno [a-z]|nothing|"
-    r"empty|not found|not possible|"
-    r"only \d+ of|leaves the bone|end of the fragment|misses|touch|below the saw guide|outside|inside the wedge|"
+    r"uncertain|conflict|check the|check them|check it|check before|\bfirst[.!]|^no |nothing|deviates|"
+    r"\bno (pins?|corrected|cut|guide|correction|bone|fragment|footprint|preview|landmarks?|segment|plane)\b|"
+    r"is empty|are empty|not found|(?<!ring )not possible|sleeves touch\)|"
+    r"only \d+ of|leaves the bone|end of the fragment|misses|below the saw guide|outside|"
     r"place the|insert the|set the missing|press 'extrude'|extrude .* again)",
     re.IGNORECASE)
 _STATUS_OK = re.compile(

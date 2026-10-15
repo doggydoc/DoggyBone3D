@@ -1157,32 +1157,115 @@ class PinsMixin:
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetVisibility(False)
 
-    def _warn_guides_outdated(self):
-        """After any pin change: name the existing guides of this bone that no longer match the plan -
-        they must be extruded again (the export refuses them until then)."""
-        if not hasattr(self, "_guide_changed_parts") or not hasattr(self, "guide_status"):
-            return
+    GUIDE_STATE_MARKERS = ("\nPin spacing check", "\nGUIDES OUTDATED", "\n\u2713 Both guides")
+
+    def _pin_spacing_report(self):
+        """(ok, text) - checks the pin rows: cut -> first pin and pin -> pin (incl. the empty
+        shortening holes) must all equal 'Spacing P' / 'Spacing D', measured perpendicular to the cut.
+        ok is None when nothing can be checked (no pins / no cut frames); manual pins are only listed."""
+        node = slicer.mrmlScene.GetFirstNodeByName(self.REDUCTION_PIN_MARKS)
+        frames = getattr(self, "_pin_row_frames", None) or {}
+        normals = self.__dict__.get("_cut_normals", {})
+        if node is None or node.GetNumberOfControlPoints() == 0 or not frames:
+            return None, ""
+        manual = self._pin_distribution_manual()
+        _first, auto_spacing = self._pin_row_defaults()
+        r_in = guide_logic.sleeve_radii(self._pin_diameter())[0]
+        minimum = guide_logic.pin_cut_margin(r_in, bores_carved=len(self._cut_planes()) == 2)
+        boxes = {"proximal": getattr(self, "pin_row_spacing_proximal", None),
+                 "distal": getattr(self, "pin_row_spacing_distal", None)}
+        lines, bad = [], []
+        for segment in ("proximal", "distal"):
+            if segment not in frames or normals.get(segment) is None:
+                continue
+            origin = np.asarray(frames[segment][0], float)
+            n_cut = np.asarray(normals[segment], float)
+            levels = sorted(abs(float(np.dot(np.array(node.GetNthControlPointPositionWorld(i)) - origin, n_cut)))
+                            for i in range(node.GetNumberOfControlPoints())
+                            if (node.GetNthControlPointDescription(i) or "").split("|")[0] == segment)
+            if not levels:
+                continue
+            steps = [levels[0]] + [b - a for a, b in zip(levels, levels[1:])]
+            box = boxes[segment]
+            target = (float(box.value) if box is not None else 0.0) or auto_spacing
+            while target < minimum + 0.02:
+                target += 0.5
+            shown = " | ".join(f"{x:.2f}" for x in steps)
+            if manual:
+                lines.append(f"{segment}: cut -> pin -> pin {shown} mm (manual pins - not checked)")
+                continue
+            off = [(k, x) for k, x in enumerate(steps) if abs(x - target) > 0.1]
+            if off:
+                bad.append(segment)
+                lines.append(f"{segment}: cut -> pin -> pin {shown} mm - DEVIATES from {target:.1f} mm at "
+                             + ", ".join(("cut -> 1st pin" if k == 0 else f"step {k + 1}") + f" ({x:.2f})"
+                                         for k, x in off))
+            else:
+                lines.append(f"{segment}: cut -> 1st pin and every pin -> pin = {target:.1f} mm "
+                             f"({len(steps)} positions, max. difference "
+                             f"{max(abs(x - target) for x in steps):.2f} mm) \u2713")
+        if not lines:
+            return None, ""
+        ok = None if manual else not bad
+        head = ("Pin spacing check (perpendicular to the cut): " if ok is not False
+                else "Pin spacing check - SPACING DEVIATES (perpendicular to the cut): ")
+        return ok, head + "\n  " + "\n  ".join(lines)
+
+    def _guide_states(self):
+        """{'reduction'/'saw': 'missing' | 'outdated' | 'current'} for the guides of this side and bone."""
         side = self.osteotomy_side.currentText
         bone = self.osteotomy_bone.currentText
         tag = " tibia" if bone == "Tibia" else ""
-        stale = []
-        for mode, name, label in (("reduction", "Doggybone guide body" + tag + " (reduction)", "reduction guide"),
-                                  ("saw", "Doggybone guide body" + tag, "saw guide")):
+        states = {}
+        for mode, name in (("reduction", "Doggybone guide body" + tag + " (reduction)"),
+                           ("saw", "Doggybone guide body" + tag)):
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
+                states[mode] = "missing"
                 continue
             try:
                 changed = self._guide_changed_parts(node, side, bone, mode)
             except Exception:
                 changed = None
-            if changed:
-                stale.append(label)
-        if not stale:
+            states[mode] = "outdated" if changed else "current"
+        return states
+
+    def _strip_guide_state_note(self, text):
+        for marker in self.GUIDE_STATE_MARKERS:
+            text = text.split(marker)[0]
+        return text
+
+    def _warn_guides_outdated(self):
+        """Overall state of both guides of this bone, appended to the guide status: orange when a
+        built guide no longer matches the plan (it must be extruded again - the export refuses it),
+        green when the reduction AND the saw guide are built and both match the current plan.
+        Warnings in the rest of the status text keep it orange."""
+        if not hasattr(self, "_guide_changed_parts") or not hasattr(self, "guide_status"):
             return
-        text = self.guide_status.text.split("\nGUIDES OUTDATED")[0]
-        self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
-        self.guide_status.setText(text + "\nGUIDES OUTDATED - the pins changed: extrude the " + " and the ".join(stale)
-                                  + " again. 'Export guides' writes them only after that.")
+        states = self._guide_states()
+        labels = {"reduction": "reduction guide", "saw": "saw guide"}
+        stale = [labels[m] for m in ("reduction", "saw") if states[m] == "outdated"]
+        text = self._strip_guide_state_note(self.guide_status.text)
+        spacing_ok, spacing_text = self._pin_spacing_report() if self._guide_mode_is_reduction() or \
+            states.get("reduction") != "missing" else (None, "")
+        if spacing_text:
+            text += "\n" + spacing_text
+        if spacing_ok is False:
+            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+            self.guide_status.setText(text + (("\nGUIDES OUTDATED - the plan changed: extrude the "
+                                              + " and the ".join(stale) + " again.") if stale else ""))
+            return
+        if stale:
+            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+            self.guide_status.setText(text + "\nGUIDES OUTDATED - the plan changed: extrude the "
+                                      + " and the ".join(stale) + " again. 'Export guides' writes them only after that.")
+        elif all(state == "current" for state in states.values()):
+            self.guide_status.setStyleSheet(STATUS_OK_STYLE)
+            self.guide_status.setText(text + "\n\u2713 Both guides (reduction and saw guide) match the current plan "
+                                      "- ready for 'Export guides'.")
+        else:
+            self.guide_status.setStyleSheet(STATUS_OK_STYLE if spacing_ok else "")
+            self.guide_status.setText(text)
 
     def _shortening_holes(self, segment):
         """Number of empty extra holes (saw guide only) beyond the pin row of this fragment."""

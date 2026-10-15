@@ -19,6 +19,36 @@ class GuideBuildMixin:
     def onExtrudeGuideBody(self):
         self._stop_guide_edit()
         self._extrude_guide_body()
+        self._rebuild_other_guide_if_outdated()
+        self._warn_guides_outdated()
+
+    def _rebuild_other_guide_if_outdated(self):
+        """After 'Extrude' of one guide: the OTHER guide of this bone is extruded again as well when it
+        exists and no longer matches the plan (e.g. the pins changed) - both stay consistent."""
+        if not hasattr(self, "_guide_states"):
+            return
+        first = "reduction" if self._guide_mode_is_reduction() else "saw"
+        other = "saw" if first == "reduction" else "reduction"
+        if self._guide_states().get(other) != "outdated":
+            return
+        first_text = self._strip_guide_state_note(self.guide_status.text)
+        first_style = self.guide_status.styleSheet
+        buttons = {"reduction": self.guide_mode_reduction, "saw": self.guide_mode_saw}
+        qt.QApplication.setOverrideCursor(qt.Qt.WaitCursor)
+        try:
+            buttons[other].setChecked(True)            # -> onGuideModeChanged (scene shows the other guide)
+            slicer.app.processEvents()
+            self._extrude_guide_body()
+            other_text = self._strip_guide_state_note(self.guide_status.text)
+            other_style = self.guide_status.styleSheet
+        finally:
+            buttons[first].setChecked(True)            # back to the guide the user extruded
+            qt.QApplication.restoreOverrideCursor()
+        names = {"reduction": "Reduction guide", "saw": "Saw guide"}
+        worst = STATUS_WARN_STYLE if STATUS_WARN_STYLE in (first_style, other_style) else ""
+        self.guide_status.setStyleSheet(worst)
+        self.guide_status.setText(first_text + f"\n\n{names[other]} rebuilt as well (the plan had changed "
+                                  f"since it was built): " + other_text)
 
     # fixed guide-body parameters (the former fields Rim smoothing / Top smoothing / Min. thickness)
     GUIDE_RIM_ROUND = 1.0          # mm, rounded rim where the painted region ends
@@ -866,6 +896,7 @@ class GuideBuildMixin:
         if mode == "saw":
             self.guide_status.setText("Saw guide: paint / edit the cutting guide on the bone as it is."
                                       + (f"\n{note}" if note else ""))
+            self._warn_guides_outdated()
             return
         if self._ensure_current_reduction_surface():
             return
@@ -883,6 +914,7 @@ class GuideBuildMixin:
             "Reduction guide: 'Place pins' on the corrected bone (click a pin to move it), then "
             "'Extrude'. The saw guide takes these pins over, pre-angled."
             + (("\nMissing: " + "; ".join(problems)) if problems else ""))
+        self._warn_guides_outdated()
 
     def _guide_source_polydata(self):
         """Bone surface the guide is prepared on: the bone as it is (saw guide) or both fragments
