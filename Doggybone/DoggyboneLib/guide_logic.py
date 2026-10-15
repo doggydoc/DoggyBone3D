@@ -1439,6 +1439,25 @@ def _seat_heights(bone_obb, origin, e_u, e_v, e_w, lo, hi, step, gap):
 BLOCK_FRAME_ARRAY = "DoggyboneBlockFrame"
 
 
+def _pair_end_distance(X, frames):
+    """Distance (mm, along the kerfs) of the points X from the two END faces of a saw block pair:
+    >0 inside, <0 beyond. Each end face runs through the matching ends (ua / ub, incl. the corner
+    bridges) of BOTH slots - between the cuts the limits are blended by the distance to each cutting
+    plane - so the block is only as long as its own slots, also when the two cuts are turned against
+    each other (a rectangle around both would grow with the angle and the depth of the block)."""
+    (C0, u0, _v0, n0, _s0, ua0, ub0, *_r0), (C1, u1, _v1, n1, _s1, ua1, ub1, *_r1) = frames
+    flip = 1.0 if float(np.dot(u0, u1)) >= 0.0 else -1.0       # the 2nd slot's u in the 1st slot's sense
+    su0 = (X - C0) @ u0
+    su1 = flip * ((X - C1) @ u1)
+    lo1, hi1 = (ua1, ub1) if flip > 0 else (-ub1, -ua1)
+    d0 = np.abs((X - C0) @ n0)
+    d1 = np.abs((X - C1) @ n1)
+    t = d0 / np.maximum(d0 + d1, 1e-6)                          # 0 at the 1st cut, 1 at the 2nd
+    end_lo = (1.0 - t) * (su0 - ua0) + t * (su1 - lo1)
+    end_hi = (1.0 - t) * (ub0 - su0) + t * (hi1 - su1)
+    return end_lo, end_hi
+
+
 def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, block=False, pins=None):
     """ONE saw block for both cuts (closing wedge): the outer faces of the two blocks are extended until
     they close each other (no crossing plates, no mirrored remnants), the space between the blocks is
@@ -1505,7 +1524,10 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
     # seat in that zone - no strips of one half reaching further down the bone flank than the other
     w_lo_b, w_hi_b = float(local[:, 2].min()), float(local[:, 2].max())
     in_w = (CC >= w_lo_b) & (CC <= w_hi_b)
-    for end in (AA <= a_lo + BRIDGE_WIDTH + 1.0, AA >= a_hi - BRIDGE_WIDTH - 1.0):
+    # the ends of the block follow the ends of the two slots (see f_u below): end zones per point
+    X_mid = origin + AA[..., None] * e_u + float(0.5 * (lo[1] + hi[1])) * e_v + CC[..., None] * e_w
+    end_lo, end_hi = _pair_end_distance(X_mid, frames)
+    for end in (end_lo <= BRIDGE_WIDTH + 1.0, end_hi <= BRIDGE_WIDTH + 1.0):
         zone = end & in_w
         if zone.any():
             level = float(seat[zone].max())
@@ -1527,6 +1549,7 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
         kerf = np.full(AA.shape, np.inf)
         plates = np.full(AA.shape, np.inf)
         normals_dist = []
+        end_lo, end_hi = _pair_end_distance(X, frames)
         for C, u, v, n, side, ua, ub, u0, u1, top, hb in frames:
             rel = X - C
             s_n = rel @ n
@@ -1551,7 +1574,7 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
         # break-off bridge at each end of each kerf: BREAK_BRIDGE_LENGTH along the kerf and
         # BREAK_BRIDGE_HEIGHT below the ACTUAL top of the block (the top of the whole block, which may be
         # set by the other slot) - the halves hang together only at these four corners
-        at_end = np.minimum(AA - (a_lo + BREAK_BRIDGE_LENGTH), (a_hi - BREAK_BRIDGE_LENGTH) - AA)    # < 0 at an end
+        at_end = np.minimum(end_lo - BREAK_BRIDGE_LENGTH, end_hi - BREAK_BRIDGE_LENGTH)            # < 0 at an end
         bridge = np.maximum(at_end, -f_top - BREAK_BRIDGE_HEIGHT)                                  # <= 0 in a bridge
         if block:
             # open window = the wedge between both cutting faces (side * s_n > -half for both slots)
@@ -1562,7 +1585,7 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
         else:
             for s_n, h_term in zip(normals_dist, hinge_terms):
                 kerf = np.minimum(kerf, np.maximum(np.maximum(np.abs(s_n) - half, -bridge), h_term))
-        f_u = np.maximum(a_lo - AA, AA - a_hi)                           # common block length
+        f_u = -np.minimum(end_lo, end_hi)          # block ends = the slot ends (+ corner bridges), per cut
         solid = np.maximum(np.maximum(f_outer, f_u), np.maximum(f_top, seat - b))
         solid = np.maximum(solid, -kerf)
         for E_pin, a_pin, r_pin in bores:                                    # pin bores through the block
