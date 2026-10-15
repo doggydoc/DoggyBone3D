@@ -460,10 +460,13 @@ class PinsMixin:
             node = planes[segment] if is_cwo else planes.get(master)
             if node is None or shafts is None:
                 continue
-            origin, _normal = self._get_plane_origin_normal(node)
+            origin, normal = self._get_plane_origin_normal(node)
             origin = np.asarray(origin, float)
+            normal = guide_logic.unit(np.asarray(normal, float))
             if segment == moved:
                 origin = (M @ np.append(origin, 1.0))[:3]
+                normal = guide_logic.unit(M[:3, :3] @ normal)
+            self.__dict__.setdefault("_cut_normals", {})[segment] = normal
             # INTO the fragment from the anatomy (shafts run proximal -> distal), never from the
             # fragment's centroid: the distal "fragment" holds everything below the cut (tibia,
             # tarsus ...), and with a flexed stifle its centroid lies on the proximal side of the cut
@@ -616,7 +619,7 @@ class PinsMixin:
             node.GetDisplayNode().SetTextScale(2.5)
         kept = []                            # pins added or moved by hand survive a new row layout
         for i in range(node.GetNumberOfControlPoints()):
-            if self._pin_kind(node, i)[1] not in ("auto", "autofree"):
+            if self._pin_kind(node, i)[1] not in ("auto", "autofree", "extra"):
                 kept.append((list(node.GetNthControlPointPositionWorld(i)),
                              node.GetNthControlPointDescription(i), node.GetNthControlPointID(i)))
         selected_id = getattr(self, "_selected_pin_id", None)
@@ -630,14 +633,20 @@ class PinsMixin:
             shift = 0.0                      # extra distance so the saw guide accepts the pin (oblique cut)
             Minv = np.linalg.inv(M)
             row_start = None                 # centre of the first pin: all pins of the row on ONE line
+            holes = self._shortening_holes(segment)
+            seg_spacing = spacing
+            if holes:
+                # shortening: cut -> first pin = pin -> pin, so after moving the saw guide one step
+                # along the pins the remaining pins sit exactly where the reduction guide expects them
+                distances[segment] = max(distances[segment], spacing)
             for k in range(count):
                 pin = None
                 for _attempt in range(6):
-                    level = origin + (distances[segment] + shift + k * spacing) * s_dir
+                    level = origin + (distances[segment] + shift + k * seg_spacing) * s_dir
                     if row_start is None:
                         pin = self._row_pin(segment, level, s_dir, fragments, direction, origin=origin)
                     else:
-                        along = (distances[segment] + shift + k * spacing) - row_start[1]
+                        along = (distances[segment] + shift + k * seg_spacing) - row_start[1]
                         pin = self._line_pin(segment, row_start[0] + along * s_dir, fragments, direction,
                                              origin, s_dir)
                     if "error" in pin:
@@ -656,6 +665,17 @@ class PinsMixin:
                     handles_at[segment] = pin["entry"] + 4.0 * np.asarray(direction, float)
                     shifted[segment] = shift
                     row_start = (np.asarray(pin["centre"], float), distances[segment] + shift)
+                    if holes:
+                        # the step = the REAL distance cut -> first pin, along the bone axis on the row line
+                        n_cut = self.__dict__.get("_cut_normals", {}).get(segment)
+                        c0 = row_start[0]
+                        if n_cut is not None and abs(float(np.dot(s_dir, n_cut))) > 0.2:
+                            step = float(np.dot(c0 - origin, n_cut)) / float(np.dot(s_dir, n_cut))
+                        else:
+                            step = float(np.dot(c0 - origin, s_dir))
+                        seg_spacing = abs(step)
+                        # the line of the row restarts at the cut: pin k sits at (k + 1) steps
+                        row_start = (c0, distances[segment] + shift)
                 kind = segment if k == 0 else f"{segment}|autofree"      # later pins stay on the line
                 if self._pin_row_staggered():
                     sign = (1.0 if k % 2 == 0 else -1.0) * (1.0 if segment == "proximal" else -1.0)
@@ -663,6 +683,18 @@ class PinsMixin:
                     if offset_pin is not None:
                         pin, kind = offset_pin, f"{segment}|autofree"
                 candidates.append((kind, np.asarray(pin["entry"], float)))
+            if holes and row_start is not None and "error" not in (pin or {"error": 1}):
+                made = 0
+                for j in range(holes):
+                    centre = row_start[0] + (count + j) * seg_spacing * s_dir
+                    extra = self._line_pin(segment, centre, fragments, direction, origin, s_dir)
+                    if "error" in extra:
+                        break
+                    candidates.append((f"{segment}|extra", np.asarray(extra["entry"], float)))
+                    made += 1
+                self.__dict__.setdefault("_shortening_info", {})[segment] = (made, holes, seg_spacing)
+            else:
+                self.__dict__.setdefault("_shortening_info", {}).pop(segment, None)
         # a pin added / moved by hand takes the place of the ONE automatic pin nearest to it
         a_dir = np.asarray(direction, float)
 
@@ -672,7 +704,8 @@ class PinsMixin:
         claimed = set()
         for position, description, _old_id in kept:
             options = [(lateral(position, entry), c) for c, (kind, entry) in enumerate(candidates)
-                       if kind.split("|")[0] == description.split("|")[0] and c not in claimed]
+                       if kind.split("|")[0] == description.split("|")[0] and c not in claimed
+                       and not kind.endswith("|extra")]
             options = [o for o in options if o[0] < 0.9 * spacing]
             if options:
                 claimed.add(min(options)[1])
@@ -718,6 +751,11 @@ class PinsMixin:
         if moved_on:
             text += ("\nMoved further from the (oblique) cut so the saw-guide sleeves keep their distance: "
                      + ", ".join(moved_on) + ".")
+        for seg_name, (made, wanted, step) in sorted(self.__dict__.get("_shortening_info", {}).items()):
+            text += (f"\nShortening ({seg_name}): {made} empty hole(s) in the saw guide, step {step:.1f} mm = "
+                     f"cut -> first pin = pin -> pin. Move the saw guide one hole along the pins to cut "
+                     f"{step:.1f} mm parallel; the reduction guide still fits."
+                     + (f" Only {made} of {wanted} holes fit on the bone." if made < wanted else ""))
         if problems:
             text += "\n" + "; ".join(problems)
         if close:
@@ -1049,8 +1087,14 @@ class PinsMixin:
         pin["centre"] = centre
         return pin
 
-    def _reduction_marked_pins(self):
-        """Centred pins (corrected pose) for all marks set in reduction mode -> (pins, rejected)."""
+    def _shortening_holes(self, segment):
+        """Number of empty extra holes (saw guide only) beyond the pin row of this fragment."""
+        box = getattr(self, "shortening_holes_proximal" if segment == "proximal" else "shortening_holes_distal", None)
+        return int(box.value) if box is not None else 0
+
+    def _reduction_marked_pins(self, include_extra=False):
+        """Centred pins (corrected pose) for all marks set in reduction mode -> (pins, rejected).
+        include_extra: also the empty shortening holes (saw guide only - never on the reduction guide)."""
         node = slicer.mrmlScene.GetFirstNodeByName(self.REDUCTION_PIN_MARKS)
         if node is None or node.GetNumberOfControlPoints() == 0:
             return [], []
@@ -1065,7 +1109,10 @@ class PinsMixin:
         for i in range(node.GetNumberOfControlPoints()):
             label = node.GetNthControlPointLabel(i)
             point = np.array(node.GetNthControlPointPositionWorld(i))
-            if self._pin_kind(node, i)[1] in ("free", "autofree"):
+            kind = self._pin_kind(node, i)[1]
+            if kind == "extra" and not include_extra:
+                continue
+            if kind in ("free", "autofree", "extra"):
                 pin = self._free_reduction_pin(point, fragments, direction)
             else:
                 pin = self._center_reduction_pin(point, fragments, (direction, shafts))
@@ -1073,6 +1120,7 @@ class PinsMixin:
                 rejected.append(f"{label}: {pin['error']}")
                 continue
             pin["label"] = label
+            pin["extra"] = kind == "extra"
             pins.append(pin)
         return pins, rejected
 
@@ -1594,9 +1642,14 @@ class PinsMixin:
 
     @staticmethod
     def _relabel_pins(node):
-        counts = {}
+        counts, extras = {}, {}
         for i in range(node.GetNumberOfControlPoints()):
-            segment = (node.GetNthControlPointDescription(i) or "pin").split("|")[0] or "pin"
+            parts = (node.GetNthControlPointDescription(i) or "pin").split("|")
+            segment = parts[0] or "pin"
+            if len(parts) > 1 and parts[1] == "extra":
+                extras[segment] = extras.get(segment, 0) + 1
+                node.SetNthControlPointLabel(i, f"{segment[0].upper()}+{extras[segment]}")
+                continue
             counts[segment] = counts.get(segment, 0) + 1
             node.SetNthControlPointLabel(i, f"{segment[0].upper()}{counts[segment]}")
 

@@ -901,8 +901,25 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         link(self.reduction_gap_guide, self.reduction_gap)
         reduction_grid.addWidget(red_label("Red. gap"), 5, 0)
         reduction_grid.addWidget(self.reduction_gap_guide, 5, 1)
-        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 6, 0, 1, 2)
-        reduction_grid.addWidget(self.reduction_ring_checkbox, 6, 2, 1, 2)
+        # shortening: empty extra holes in the SAW guide continuing the pin row (same step)
+        self.shortening_holes_proximal = qt.QSpinBox()
+        self.shortening_holes_distal = qt.QSpinBox()
+        for box, where in ((self.shortening_holes_proximal, "proximal"), (self.shortening_holes_distal, "distal")):
+            box.setRange(0, 4)
+            box.setValue(0)
+            box.setToolTip(
+                f"Bone shortening: empty extra holes in the SAW guide that continue the {where} pin row with the "
+                "same step. Then the first pin sits as far from the cut as the pins from each other. After the "
+                "first cut: pull the pin next to the cut, set a new pin through the next empty hole and slide the "
+                "saw guide one step along the pins - the second cut is exactly parallel, one step further, and the "
+                "remaining pins sit where the reduction guide expects them.")
+            box.valueChanged.connect(lambda _v: self._pin_rows_changed())
+        reduction_grid.addWidget(red_label("+Holes P"), 6, 0)
+        reduction_grid.addWidget(self.shortening_holes_proximal, 6, 1)
+        reduction_grid.addWidget(red_label("+Holes D"), 6, 2)
+        reduction_grid.addWidget(self.shortening_holes_distal, 6, 3)
+        reduction_grid.addWidget(self.reduction_contact_only_checkbox, 7, 0, 1, 2)
+        reduction_grid.addWidget(self.reduction_ring_checkbox, 7, 2, 1, 2)
         self._reduction_pin_buttons = qt.QGridLayout()
         self._reduction_pin_buttons.setContentsMargins(0, 0, 0, 0)
         self._reduction_pin_buttons.setHorizontalSpacing(6)
@@ -910,7 +927,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._reduction_pin_buttons.addWidget(self.reduction_delete_pins_button, 0, 2)
         for col in range(3):
             self._reduction_pin_buttons.setColumnStretch(col, 1)
-        reduction_grid.addLayout(self._reduction_pin_buttons, 7, 0, 1, 4)
+        reduction_grid.addLayout(self._reduction_pin_buttons, 8, 0, 1, 4)
         self.reduction_delete_pins_button.setText("Delete all")
         self.pin_row_pattern.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.pin_row_pattern.setMinimumContentsLength(4)
@@ -931,7 +948,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         for widget in (self.pin_row_count, self.pin_row_spacing, self.pin_row_distance_proximal,
                        self.pin_row_distance_distal, self.pin_row_pattern, self.place_pin_rows_button,
                        self.reduction_delete_pins_button, self.pin_tilt, self.reduction_clearance,
-                       self.reduction_gap_guide,
+                       self.reduction_gap_guide, self.shortening_holes_proximal, self.shortening_holes_distal,
                        self.reduction_standoff, self.reduction_bar_diameter):
             widget.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             widget.setMinimumWidth(60)

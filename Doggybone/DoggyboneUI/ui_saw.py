@@ -18,7 +18,7 @@ class SawMixin:
     def _plan_saw_pins_from_reduction(self, mesh, gap):
         """Saw guide sleeves from the pins set after the reduction: pins of the moved fragment are
         taken back into its as-scanned pose (pre-angled automatically - parallel after reduction)."""
-        reduced, rejected = self._reduction_marked_pins()
+        reduced, rejected = self._reduction_marked_pins(include_extra=True)
         M, moved = self._correction_state()
         if M is None:
             return [], "Pins not built: no correction preview."
@@ -48,7 +48,9 @@ class SawMixin:
                 a, b = pins[a_index], pins[b_index]
                 if np.linalg.norm(a["entry"] - b["entry"]) < a["r_out"] + b["r_out"]:
                     touching.append(f"{a['label']}/{b['label']}")
+        extra_count = sum(1 for p in reduced if p.get("extra"))
         note = ("Pin sleeves from the pins set after the reduction: " + ", ".join(f"{v} {k}" for k, v in counts.items())
+                + (f" (incl. {extra_count} empty shortening hole(s))" if extra_count else "")
                 + (f", in bone {min(lengths):.1f}-{max(lengths):.1f} mm" if lengths else "")
                 + " - pre-angled, parallel after the reduction.")
         if touching:
