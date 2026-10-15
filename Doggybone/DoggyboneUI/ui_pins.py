@@ -633,8 +633,12 @@ class PinsMixin:
             shift = 0.0                      # extra distance so the saw guide accepts the pin (oblique cut)
             Minv = np.linalg.inv(M)
             row_start = None                 # centre of the first pin: all pins of the row on ONE line
-            holes = self._shortening_holes(segment)      # empty extra holes (saw guide only)
+            holes = self._shortening_holes(segment)
             seg_spacing = spacing
+            if holes:
+                # shortening: cut -> first pin = pin -> pin, so after moving the saw guide one step
+                # along the pins the remaining pins sit exactly where the reduction guide expects them
+                distances[segment] = max(distances[segment], spacing)
             for k in range(count):
                 pin = None
                 for _attempt in range(6):
@@ -661,6 +665,17 @@ class PinsMixin:
                     handles_at[segment] = pin["entry"] + 4.0 * np.asarray(direction, float)
                     shifted[segment] = shift
                     row_start = (np.asarray(pin["centre"], float), distances[segment] + shift)
+                    if holes:
+                        # the step = the REAL distance cut -> first pin, along the bone axis on the row line
+                        n_cut = self.__dict__.get("_cut_normals", {}).get(segment)
+                        c0 = row_start[0]
+                        if n_cut is not None and abs(float(np.dot(s_dir, n_cut))) > 0.2:
+                            step = float(np.dot(c0 - origin, n_cut)) / float(np.dot(s_dir, n_cut))
+                        else:
+                            step = float(np.dot(c0 - origin, s_dir))
+                        seg_spacing = abs(step)
+                        # the line of the row restarts at the cut: pin k sits at (k + 1) steps
+                        row_start = (c0, distances[segment] + shift)
                 kind = segment if k == 0 else f"{segment}|autofree"      # later pins stay on the line
                 if self._pin_row_staggered():
                     sign = (1.0 if k % 2 == 0 else -1.0) * (1.0 if segment == "proximal" else -1.0)
@@ -669,7 +684,6 @@ class PinsMixin:
                         pin, kind = offset_pin, f"{segment}|autofree"
                 candidates.append((kind, np.asarray(pin["entry"], float)))
             if holes and row_start is not None and "error" not in (pin or {"error": 1}):
-                # the pins stay exactly as planned; the holes continue their line with the same step
                 made = 0
                 for j in range(holes):
                     centre = row_start[0] + (count + j) * seg_spacing * s_dir
@@ -738,9 +752,9 @@ class PinsMixin:
             text += ("\nMoved further from the (oblique) cut so the saw-guide sleeves keep their distance: "
                      + ", ".join(moved_on) + ".")
         for seg_name, (made, wanted, step) in sorted(self.__dict__.get("_shortening_info", {}).items()):
-            text += (f"\nShortening ({seg_name}): {made} empty hole(s) in the SAW guide only, continuing the "
-                     f"pin row every {step:.1f} mm - slide the saw guide along the pins to cut further parallel. "
-                     f"Pins and reduction guide unchanged."
+            text += (f"\nShortening ({seg_name}): {made} empty hole(s) in the saw guide, step {step:.1f} mm = "
+                     f"cut -> first pin = pin -> pin. Move the saw guide one hole along the pins to cut "
+                     f"{step:.1f} mm parallel; the reduction guide still fits."
                      + (f" Only {made} of {wanted} holes fit on the bone." if made < wanted else ""))
         if problems:
             text += "\n" + "; ".join(problems)
