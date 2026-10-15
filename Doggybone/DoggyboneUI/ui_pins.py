@@ -529,6 +529,20 @@ class PinsMixin:
             pin["segment"], pin["centre"] = segment, centre
         return pin
 
+    def _line_pin(self, segment, centre, fragments, direction, origin, s_dir):
+        """Pin exactly through `centre` (on the row line) - only if that point lies in the cut bone."""
+        polydata, obb, _loc = fragments[segment]
+        bone = self._cut_bone_part(segment, polydata, origin, s_dir)
+        inside = vtk.vtkImplicitPolyDataDistance()
+        inside.SetInput(bone)
+        if inside.EvaluateFunction([float(v) for v in centre]) > 0.0:
+            return {"error": "the row line leaves the bone (end of the fragment)"}
+        pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(), float(self.guide_gap.value),
+                                   guide_logic.BLOCK_HEIGHT)
+        if "error" not in pin:
+            pin["segment"], pin["centre"] = segment, np.asarray(centre, float)
+        return pin
+
     def _pin_distribution_manual(self):
         box = getattr(self, "pin_row_pattern", None)
         return box is not None and box.currentText == "Manual"
@@ -615,11 +629,17 @@ class PinsMixin:
             origin, s_dir = frames[segment]
             shift = 0.0                      # extra distance so the saw guide accepts the pin (oblique cut)
             Minv = np.linalg.inv(M)
+            row_start = None                 # centre of the first pin: all pins of the row on ONE line
             for k in range(count):
                 pin = None
                 for _attempt in range(6):
                     level = origin + (distances[segment] + shift + k * spacing) * s_dir
-                    pin = self._row_pin(segment, level, s_dir, fragments, direction, origin=origin)
+                    if row_start is None:
+                        pin = self._row_pin(segment, level, s_dir, fragments, direction, origin=origin)
+                    else:
+                        along = (distances[segment] + shift + k * spacing) - row_start[1]
+                        pin = self._line_pin(segment, row_start[0] + along * s_dir, fragments, direction,
+                                             origin, s_dir)
                     if "error" in pin:
                         break
                     raw_entry = pin["entry"] if segment != moved else (Minv @ np.append(pin["entry"], 1.0))[:3]
@@ -635,7 +655,8 @@ class PinsMixin:
                 if k == 0:
                     handles_at[segment] = pin["entry"] + 4.0 * np.asarray(direction, float)
                     shifted[segment] = shift
-                kind = segment
+                    row_start = (np.asarray(pin["centre"], float), distances[segment] + shift)
+                kind = segment if k == 0 else f"{segment}|autofree"      # later pins stay on the line
                 if self._pin_row_staggered():
                     sign = (1.0 if k % 2 == 0 else -1.0) * (1.0 if segment == "proximal" else -1.0)
                     offset_pin = self._staggered_pin(pin, sign, s_dir, direction, fragments, segment, moved, Minv)
@@ -1007,6 +1028,14 @@ class PinsMixin:
             return {"error": "no corrected fragments"}
         segment = best[1]
         polydata, obb, _locator = fragments[segment]
+        # only the bone that is cut (never the neighbouring tibia / femur of the same fragment)
+        try:
+            M_, moved_ = self._correction_state()
+            frames = self._fragment_cut_frames(M_, moved_, fragments) if M_ is not None else {}
+            if segment in frames:
+                polydata = self._cut_bone_part(segment, polydata, frames[segment][0], frames[segment][1])
+        except Exception:
+            logging.exception("Doggybone: cut-bone part for re-centring failed (whole fragment used)")
         # section plane that CONTAINS the pin direction: re-centring from any point on the pin line
         # (e.g. its mark at the entry) gives the same pin, even with pins oblique to the shaft
         centre = self._section_centroid(polydata, p, self._pin_section_normal(shafts[segment], direction))
@@ -1465,6 +1494,9 @@ class PinsMixin:
         if "error" in pin:
             self._pin_feedback(f"No pin there: {pin['error']}.", p, ok=False)
             return
+        snapped = self._snap_to_pin_line(pin)
+        if snapped is not None:
+            pin, centred = snapped, False                  # stored as 'free': it stays on the line
         if self._pin_distribution_manual() and hasattr(self, "pin_row_count"):
             limit = int(self.pin_row_count.value)
             same = sum(1 for i in range(node.GetNumberOfControlPoints())
@@ -1494,6 +1526,36 @@ class PinsMixin:
             "each other and to the cut plane(s). Fine-tune it with the small gizmo; press 'Place pins' "
             "again when all pins are set - the reduction guide is then built." + (f"\nMoved {shift:.1f} mm away from the cut so the saw guide can take it."
                                             if shift > 0 else ""))
+
+    def _snap_to_pin_line(self, pin):
+        """At least two pins already in this fragment: the new pin goes onto their common line (same
+        height on the bone as the others). Returns the snapped pin, or None (nothing to snap to)."""
+        try:
+            existing, _rejected = self._reduction_marked_pins()
+        except Exception:
+            return None
+        centres = [np.asarray(p.get("centre", p["entry"]), float) for p in existing
+                   if p.get("segment") == pin.get("segment")]
+        if len(centres) < 2:
+            return None
+        C = np.array(centres)
+        mean = C.mean(axis=0)
+        _u, _s, vt = np.linalg.svd(C - mean)
+        line = guide_logic.unit(vt[0])
+        centre = np.asarray(pin.get("centre", pin["entry"]), float)
+        target = mean + float(np.dot(centre - mean, line)) * line
+        fragments = self._corrected_fragments()
+        polydata, obb, _loc = fragments[pin["segment"]]
+        M, moved = self._correction_state()
+        direction, _shafts, error = self._reduction_pin_frame(M, moved) if M is not None else (None, None, "x")
+        if error:
+            return None
+        snapped = guide_logic.plan_pin(obb, target, direction, self._pin_diameter(), float(self.guide_gap.value),
+                                       guide_logic.BLOCK_HEIGHT)
+        if "error" in snapped:
+            return None
+        snapped["segment"], snapped["centre"] = pin["segment"], target
+        return snapped
 
     def _toggle_pin(self, hit):
         if self._guide_mode_is_reduction():
