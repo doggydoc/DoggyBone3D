@@ -1131,8 +1131,13 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         fields_grid.setHorizontalSpacing(6)
         fields_grid.setVerticalSpacing(2)
         self._guide_field_labels = {}
+        labels_in_order = [label for label, _f in guide_fields]
+        if "+Holes P" in labels_in_order and labels_in_order.index("+Holes P") % 2 == 1:
+            guide_fields.insert(labels_in_order.index("+Holes P"), (None, None))   # '+Holes P' | '+Holes D' in one row
         for index, (label, field) in enumerate(guide_fields):
             row, col = divmod(index, 2)
+            if field is None:                          # empty cell (keeps a pair of fields in one row)
+                continue
             text = qt.QLabel(label)
             self._guide_field_labels[label] = (text, field)
             fields_grid.addWidget(text, row, 2 * col)
