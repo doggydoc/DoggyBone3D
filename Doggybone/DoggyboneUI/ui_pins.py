@@ -626,6 +626,7 @@ class PinsMixin:
         selected_id = getattr(self, "_selected_pin_id", None)
         node.RemoveAllControlPoints()
         handles_at, problems, placed, shifted, replaced, candidates = {}, [], {}, {}, {}, []
+        first_distance = {}
         for segment in ("proximal", "distal"):
             if segment not in frames:
                 problems.append(f"{segment}: no cut plane / fragment")
@@ -640,6 +641,26 @@ class PinsMixin:
                 # shortening: cut -> first pin = pin -> pin, so after moving the saw guide one step
                 # along the pins the remaining pins sit exactly where the reduction guide expects them
                 distances[segment] = max(distances[segment], spacing)
+            # first pin: EXACTLY the distance 'Prox.' / 'Dist.' from the cut, measured perpendicular to the
+            # cutting plane (the same measure as the saw guide's minimum distance) - never less than that
+            # minimum. Solved on the real pin (its centre moves with the bone cross-section).
+            n_cut = self.__dict__.get("_cut_normals", {}).get(segment)
+            r_in = guide_logic.sleeve_radii(self._pin_diameter())[0]
+            minimum = guide_logic.pin_cut_margin(r_in, bores_carved=len(self._cut_planes()) == 2)
+            target = max(float(distances[segment]), minimum + 0.02)
+            actual_first = None
+            if n_cut is not None:
+                cos_sn = max(0.2, abs(float(np.dot(s_dir, n_cut))))
+                t = target / cos_sn
+                for _solve in range(8):
+                    trial = self._row_pin(segment, origin + t * s_dir, s_dir, fragments, direction, origin=origin)
+                    if "error" in trial:
+                        break
+                    actual_first = abs(float(np.dot(np.asarray(trial["entry"], float) - origin, n_cut)))
+                    if abs(actual_first - target) < 0.01:
+                        break
+                    t += (target - actual_first) / cos_sn
+                shift = t - float(distances[segment])
             for k in range(count):
                 pin = None
                 for _attempt in range(6):
@@ -664,7 +685,11 @@ class PinsMixin:
                     break
                 if k == 0:
                     handles_at[segment] = pin["entry"] + 4.0 * np.asarray(direction, float)
-                    shifted[segment] = shift
+                    if n_cut is not None:
+                        first_distance[segment] = abs(float(np.dot(np.asarray(pin["entry"], float) - origin, n_cut)))
+                        shifted[segment] = max(0.0, first_distance[segment] - float(distances[segment]))
+                    else:
+                        shifted[segment] = shift
                     row_start = (np.asarray(pin["centre"], float), distances[segment] + shift)
                     if holes:
                         # the step = the REAL distance cut -> first pin, along the bone axis on the row line
@@ -741,17 +766,18 @@ class PinsMixin:
         text = (f"Pin rows: " + ", ".join(f"{v} {k}" for k, v in placed.items()) +
                 (f" (+{len(kept)} added by hand" + (", replacing " + ", ".join(f"{v} {k}" for k, v in replaced.items())
                                                      if replaced else "") + ")" if kept else "") +
-                f"; first pin {distances['proximal']:.1f} mm (proximal) / {distances['distal']:.1f} mm (distal) "
-                f"from the cut, spacing {spacing:.1f} mm - "
+                f"; first pin {first_distance.get('proximal', distances['proximal']):.2f} mm (proximal) / "
+                f"{first_distance.get('distal', distances['distal']):.2f} mm (distal) from the cut (perpendicular), "
+                f"spacing {spacing:.1f} mm - "
                 + ("staggered to both sides of the bone centre" if self._pin_row_staggered() else "centred")
                 + ", parallel to each other and to the cut plane(s). Drag the row handles along the bone to "
                 "adjust, then 'Extrude'.")
         if getattr(self, "_pin_tilt_note", ""):
             text += "\n" + self._pin_tilt_note
-        moved_on = [f"{k} +{v:.1f} mm" for k, v in shifted.items() if v > 0.0]
+        moved_on = [f"{k} {distances[k]:.1f} -> {first_distance.get(k, distances[k]):.2f} mm"
+                    for k, v in shifted.items() if v > 0.05]
         if moved_on:
-            text += ("\nMoved further from the (oblique) cut so the saw-guide sleeves keep their distance: "
-                     + ", ".join(moved_on) + ".")
+            text += ("\nBelow the saw guide's minimum distance - set to the minimum: " + ", ".join(moved_on) + ".")
         for seg_name, (made, wanted, step) in sorted(self.__dict__.get("_shortening_info", {}).items()):
             text += (f"\nShortening ({seg_name}): {made} empty hole(s) in the saw guide, step {step:.1f} mm = "
                      f"cut -> first pin = pin -> pin. Move the saw guide one hole along the pins to cut "
