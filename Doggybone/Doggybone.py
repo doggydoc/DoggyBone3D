@@ -241,7 +241,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.opacity_slider.valueChanged.connect(self._set_bone_opacity)
         segmentation_form_layout.addRow("Bone opacity", self.opacity_slider)
 
-        self.segmentation_status = qt.QLabel("no segmentation")
+        self.segmentation_status = StatusLabel("no segmentation")
         self.segmentation_status.setWordWrap(True)
         segmentation_form_layout.addRow("Status", self.segmentation_status)
 
@@ -403,7 +403,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # anatomical frame, see DoggyboneLib/laterality.py) - shown live, with a one-click fix when
         # they sit in the wrong list
         laterality_row = qt.QHBoxLayout()
-        self.laterality_label = qt.QLabel("")
+        self.laterality_label = StatusLabel("")
         self.laterality_label.setWordWrap(True)
         laterality_row.addWidget(self.laterality_label, 1)
         self.laterality_move_button = qt.QPushButton("Move")
@@ -566,7 +566,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
         # ONE visible status line for the whole osteotomy section (planes and correction preview);
         # both names point to it (older code writes to either)
-        self.correction_status = qt.QLabel()
+        self.correction_status = StatusLabel()
         self.correction_status.setWordWrap(True)
         self.correction_status.setTextInteractionFlags(qt.Qt.TextSelectableByMouse)
         self.osteotomy_status = self.correction_status
@@ -1199,7 +1199,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_form.addRow(extrude_widget)
 
 
-        self.guide_status = qt.QLabel("No footprint yet.")
+        self.guide_status = StatusLabel("No footprint yet.")
         self.guide_status.setWordWrap(True)
         self.guide_status.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         guide_form.addRow("Status", self.guide_status)
