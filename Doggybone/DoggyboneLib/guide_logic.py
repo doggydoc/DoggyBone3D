@@ -653,9 +653,17 @@ def plan_slot(bone_points, contour, origin, normal, other_plane, v_hint, gap, ad
     for k in range(len(ubins)):
         if hi[k] > lo[k]:
             bottom[k] = rv_s[lo[k]:hi[k]].max() + gap
+    on_bone = np.isfinite(bottom)
+    # beyond the bone (slot overrun, corner bridges) the block reaches down to the far cortex of the
+    # section - never deeper than the bone it cuts ('Guide side': only to the depth of the slot's part)
+    sec_v = rel_contour @ v
+    depth_floor = float(sec_v.min())
+    if near_fraction is not None and 0.0 < float(near_fraction) < 1.0:
+        depth_floor = float(sec_v.max()) - float(near_fraction) * float(sec_v.max() - sec_v.min())
+    bottom = np.where(on_bone, bottom, depth_floor - gap)
     bottom = np.clip(bottom, v_top - BLOCK_MAX_DEPTH, v_top - 2.0)
     return dict(origin=o, normal=nn, centre=C, u=u, v=v, side=side, u0=u0, u1=u1, ua=ua, ub=ub,
-                v_top=v_top, ubins=ubins, bottom=bottom, length=u1 - u0,
+                v_top=v_top, ubins=ubins, bottom=bottom, on_bone=on_bone, length=u1 - u0,
                 bone_width=float(us.max() - us.min()), width=SLOT_WIDTH)
 
 
@@ -2253,7 +2261,8 @@ def cut_bridges(slots, radius=1.75, reach_into=6.0, leg=7.0):
             bottom = np.asarray(s["bottom"], float)
             # beyond the bone edge the block bottom is only a depth limit - take the bone height at the
             # nearest bin that really lies over bone (the edge of the bone at this end)
-            on_bone = bottom > float(s["v_top"]) - BLOCK_MAX_DEPTH + 0.01
+            on_bone = (np.asarray(s["on_bone"], bool) if "on_bone" in s
+                       else bottom > float(s["v_top"]) - BLOCK_MAX_DEPTH + 0.01)
             if on_bone.any():
                 k = int(np.argmin(np.where(on_bone, np.abs(ubins - uu), np.inf)))
                 lows.append(float(bottom[k]) + float((C - C0) @ v0))
