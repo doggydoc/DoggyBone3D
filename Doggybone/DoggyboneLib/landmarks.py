@@ -4,15 +4,21 @@
 # (CTK, LMU Munich) - https://github.com/jburgp/BoneAngleMeter_public
 # Licensed under the MIT License, see LICENSE in the repository root.
 
-from DoggyboneLib.landmark_logic import SimpleLandmark, SphereLandmark
+from DoggyboneLib.landmark_logic import SimpleLandmark, SphereLandmark, CentroidLandmark
+
+# first guess of the bone axis for the diaphysis centres (proximal names, distal names)
+TIBIA_AXIS = (("intercondylar eminence",), ("Talus centre",))
+FEMUR_AXIS = (("femur head",), ("medial femur condyle", "lateral femur condyle"))
 
 LANDMARKS = [
-    SimpleLandmark('distal tibia midpoint',
-                   "Choose the most distal midpoint of the diaphysis in a circular tibia transversal plane.",
-                   r"Resources/descriptions/disttibiamiddpoint.png"),
-    SimpleLandmark('proximal tibia midpoint',
-                   "Choose the point in the middle of the diaphysis at the height of the foramen nutricum.",
-                   r"Resources/descriptions/proxtibiamidpoint.png"),
+    CentroidLandmark('distal tibia midpoint',
+                     "Choose the most distal midpoint of the diaphysis in a circular tibia transversal plane. "
+                     "A click at that height is enough: the point is set to the area centroid of the cross-section.",
+                     r"Resources/descriptions/disttibiamiddpoint.png", axis_from=TIBIA_AXIS),
+    CentroidLandmark('proximal tibia midpoint',
+                     "Choose the point in the middle of the diaphysis at the height of the foramen nutricum. "
+                     "A click at that height is enough: the point is set to the area centroid of the cross-section.",
+                     r"Resources/descriptions/proxtibiamidpoint.png", axis_from=TIBIA_AXIS),
     SimpleLandmark('lateral cochlea',
                    "Choose the most cranial point on the cochlea tibiae lateralis.",
                    r"Resources/descriptions/lateralcochlea.png"),
@@ -64,12 +70,16 @@ LANDMARKS = [
     SphereLandmark('lateral femur condyle',
                    "Place the center inside the lateral condyle, then adjust the sphere's radius until it best matches the condyle surface.",
                    r"Resources/descriptions/lateralfemurcondyle.png"),
-    SimpleLandmark('Femur midpoint 33%',
-                   "Choose the point at 33 % of the femoral length (one third), measured from the proximal end, in the middle of the diaphysis.",
-                   r"Resources/descriptions/proxfemurmidpoint.png"),
-    SimpleLandmark('Femur midpoint 50%',
-                   "Choose the point at 50 % of the femoral length (mid-femur), in the middle of the diaphysis.",
-                   r"Resources/descriptions/distfemurmidpoint.png"),
+    CentroidLandmark('Femur midpoint 33%',
+                     "Choose the point at 33 % of the femoral length (one third), measured from the proximal end, in the "
+                     "middle of the diaphysis. 'Place at 33 %' sets it from the femur head and condyle spheres; a click "
+                     "at any height is centred in the cross-section.",
+                     r"Resources/descriptions/proxfemurmidpoint.png", axis_from=FEMUR_AXIS, fraction=0.33),
+    CentroidLandmark('Femur midpoint 50%',
+                     "Choose the point at 50 % of the femoral length (mid-femur), in the middle of the diaphysis. "
+                     "'Place at 50 %' sets it from the femur head and condyle spheres; a click at any height is "
+                     "centred in the cross-section.",
+                     r"Resources/descriptions/distfemurmidpoint.png", axis_from=FEMUR_AXIS, fraction=0.50),
     SimpleLandmark('femur neck', 
                    "Choose the center of the proximal femoral metaphysis on the height of the highest elevation of the lesser trochanter.", 
                    r"Resources/descriptions/femurneck.png"),

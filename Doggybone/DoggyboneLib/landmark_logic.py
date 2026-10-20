@@ -459,3 +459,167 @@ class SphereLandmark(SimpleLandmark):
         self._hide_radius_handle()
         super().delete()
 
+
+
+# --- diaphysis centres: area centroid of the bone cross-section ---------------------------------------
+
+# Function returning the bone surface (vtkPolyData, world coordinates) the centroids are taken from -
+# set by the module widget (its bone segmentation). None or a function returning None: no centring.
+_bone_surface_provider = None
+
+
+def set_bone_surface_provider(provider):
+    global _bone_surface_provider
+    _bone_surface_provider = provider
+
+
+def get_bone_surface():
+    try:
+        return _bone_surface_provider() if _bone_surface_provider is not None else None
+    except Exception:
+        return None
+
+
+class CentroidLandmark(SimpleLandmark):
+    '''
+    Midpoint of a diaphysis, set to the AREA CENTROID of the bone cross-section: the click only gives
+    the height along the bone; the section is taken perpendicular to the local bone axis (refined from
+    the centroids of two neighbouring sections), the filled outer contour - medullary canal included -
+    of the bone that was picked gives the centre (see DoggyboneLib.section_centre).
+    axis_from: ((proximal landmark names), (distal landmark names)) - a first guess of the bone axis
+               from landmarks that are already placed (optional, the local shape is used otherwise).
+    fraction:  for points defined by a percentage of the bone length (from the proximal end), e.g.
+               0.33 - placed automatically from the axis landmarks ('Place at ...%').
+    '''
+    def __init__(self, name, description="", image_path="", axis_from=None, fraction=None):
+        super().__init__(name, description, image_path)
+        self.axis_from = axis_from
+        self.fraction = fraction
+        self.auto_centre = True
+        self.note = ""
+
+    # positions of other landmarks of the same side (they share this markups node)
+    def _sibling(self, name):
+        node = self._markups_node
+        if node is None:
+            return None
+        for i in range(node.GetNumberOfControlPoints()):
+            if node.GetNthControlPointLabel(i) == name and node.GetNthControlPointVisibility(i) \
+                    and node.GetNthControlPointPositionStatus(i) == slicer.vtkMRMLMarkupsNode.PositionDefined:
+                p = [0.0, 0.0, 0.0]
+                node.GetNthControlPointPosition(i, p)
+                return np.array(p, float)
+        return None
+
+    def _sibling_radius(self, name, default=None):
+        node = self._markups_node
+        value = node.GetAttribute(f"Doggybone.radius.{name}") if node is not None else None
+        try:
+            return float(value) if value else default
+        except ValueError:
+            return default
+
+    def _ends(self):
+        """(proximal point, distal point, [proximal names], [distal names]) from axis_from, or None."""
+        if not self.axis_from:
+            return None
+        ends = []
+        for names in self.axis_from:
+            points = [self._sibling(n) for n in names]
+            if any(p is None for p in points):
+                return None
+            ends.append(np.mean(points, axis=0))
+        if float(np.linalg.norm(ends[1] - ends[0])) < 5.0:
+            return None
+        return ends[0], ends[1], list(self.axis_from[0]), list(self.axis_from[1])
+
+    def axis_hint(self):
+        ends = self._ends()
+        if ends is None:
+            return None
+        d = ends[1] - ends[0]
+        return d / np.linalg.norm(d)
+
+    def centred(self, position):
+        """Area centroid of the cross-section at the height of `position`, or None."""
+        from DoggyboneLib import section_centre
+        surface = get_bone_surface()
+        if surface is None or surface.GetNumberOfPoints() == 0:
+            self.note = "No bone segmentation - the point stays where it was set (not centred)."
+            return None
+        centre, axis, area = section_centre.diaphysis_centre(surface, position, axis_hint=self.axis_hint())
+        if centre is None:
+            self.note = "No bone cross-section found at this point - not centred."
+            return None
+        moved = float(np.linalg.norm(np.asarray(centre) - np.asarray(position, float)))
+        self.note = (f"Centred in the cross-section ({area:.0f} mm\N{SUPERSCRIPT TWO}, perpendicular to the "
+                     f"local bone axis): moved {moved:.1f} mm.")
+        return np.asarray(centre, float)
+
+    def _move_to(self, p):
+        self._markups_node.SetNthControlPointPosition(self._id, float(p[0]), float(p[1]), float(p[2]))
+
+    def _defined_callback(self):
+        # like SimpleLandmark, but the new point goes to the section centroid instead of the nearest
+        # dense bone voxel (the centre of a diaphysis lies in the medullary canal - not dense bone)
+        self._id = self._markups_node.GetNumberOfControlPoints() - 1
+        self.placed = True
+        raw = self.get_position()
+        centre = self.centred(raw) if (self.auto_centre and raw is not None) else None
+        if centre is not None:
+            self._move_to(centre)
+        elif raw is not None and not self.auto_centre:
+            self.note = ""
+            snapped = snap_to_nearest_bone_voxel(raw)
+            if tuple(snapped) != tuple(raw):
+                self._move_to(snapped)
+        self.stop_interaction()
+        self._changed_callback()
+        self.start_interaction()
+
+    def recentre(self):
+        """Centre the placed point again at its current height (e.g. after dragging it)."""
+        if not self.placed or self._id is None:
+            return False
+        centre = self.centred(self.get_position())
+        if centre is None:
+            self._changed_callback()
+            return False
+        self._move_to(centre)
+        self._changed_callback()
+        return True
+
+    def length_point(self):
+        """Point at `fraction` of the bone length from the proximal end, on the line between the
+        axis landmarks. The ends of the bone are the sphere SURFACES: proximal end = head centre minus
+        its radius, distal end = condyle midpoint plus their mean radius (sphere landmarks)."""
+        ends = self._ends()
+        if ends is None or self.fraction is None:
+            return None
+        prox, dist, prox_names, dist_names = ends
+        a = (dist - prox) / np.linalg.norm(dist - prox)
+        r_prox = np.mean([self._sibling_radius(n, 0.0) for n in prox_names])
+        r_dist = np.mean([self._sibling_radius(n, 0.0) for n in dist_names])
+        top = prox - r_prox * a
+        bottom = dist + r_dist * a
+        return top + float(self.fraction) * (bottom - top), float(np.linalg.norm(bottom - top))
+
+    def place_at_fraction(self):
+        """Places (or moves) the point at its percentage of the bone length, centred in the section.
+        Returns a message for the user."""
+        found = self.length_point()
+        if found is None:
+            names = " / ".join(", ".join(group) for group in (self.axis_from or ()))
+            return f"Place {names} first - they define the bone length."
+        point, length = found
+        centre = self.centred(point)
+        target = centre if centre is not None else point
+        self.stop_interaction()
+        if self.placed and self._id is not None:
+            self._move_to(target)
+            self._changed_callback()
+        else:
+            self.define(*[float(v) for v in target])
+        self.start_interaction()
+        return (f"Placed at {100.0 * float(self.fraction):.0f} % of the bone length ({length:.1f} mm, from the "
+                f"proximal end of the head to the distal end of the condyles). " + self.note)

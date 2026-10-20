@@ -225,6 +225,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # Keep the landmark bone-snapping threshold in sync with this control's current value
         # from the start, not just from the first time the user moves it.
         landmark_logic.set_bone_threshold(self.snap_threshold.value)
+        # diaphysis centres (CentroidLandmark) are taken from the bone segmentation's surface
+        landmark_logic.set_bone_surface_provider(self._get_bone_polydata)
 
         self.smoothing = qt.QDoubleSpinBox()
         self.smoothing.setRange(0, 1)
@@ -2828,6 +2830,38 @@ class LandmarkWidget(qt.QWidget):
         layout.addWidget(self.landmark_label)
         layout.addWidget(self.description_label)
         layout.addWidget(self.position_label)
+        self.centre_note = None
+        if hasattr(self.landmark, "auto_centre"):
+            # diaphysis centre: the point goes to the area centroid of the bone cross-section
+            self.centre_checkbox = qt.QCheckBox("Centre in cross-section")
+            self.centre_checkbox.setChecked(bool(self.landmark.auto_centre))
+            self.centre_checkbox.setToolTip(
+                "On: a click only gives the height - the point is set to the area centroid of the bone "
+                "cross-section there (section perpendicular to the local bone axis, medullary canal "
+                "included). Off: the point stays where it is clicked (snapped to bone).")
+            self.centre_checkbox.toggled.connect(self._on_auto_centre_toggled)
+            self.recentre_button = qt.QPushButton("Re-centre")
+            self.recentre_button.setToolTip("Centre the point again at its current height (e.g. after dragging it).")
+            self.recentre_button.clicked.connect(self._on_recentre)
+            row = qt.QHBoxLayout()
+            row.addWidget(self.centre_checkbox, 1)
+            row.addWidget(self.recentre_button)
+            if getattr(self.landmark, "fraction", None) is not None:
+                self.fraction_button = qt.QPushButton(f"Place at {100.0 * self.landmark.fraction:.0f} %")
+                self.fraction_button.setToolTip(
+                    f"Sets the point at {100.0 * self.landmark.fraction:.0f} % of the femoral length, measured from "
+                    "the proximal end of the femoral head (head sphere) to the distal end of the condyles "
+                    "(condyle spheres), centred in the cross-section. Needs the femur head and both condyle "
+                    "spheres.")
+                self.fraction_button.clicked.connect(self._on_place_at_fraction)
+                row.addWidget(self.fraction_button)
+            row_widget = qt.QWidget()
+            row_widget.setLayout(row)
+            row.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(row_widget)
+            self.centre_note = qt.QLabel("")
+            self.centre_note.setWordWrap(True)
+            layout.addWidget(self.centre_note)
         if self.image is not None:
             layout.addWidget(self.image)
             layout.setStretch(layout.count()-1, 1)
@@ -2842,6 +2876,23 @@ class LandmarkWidget(qt.QWidget):
             self.position_label.setText(f"Position: {p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f} mm")
         else:
             self.position_label.setText("Position: not set")
+        if getattr(self, "centre_note", None) is not None:
+            self.centre_note.setText(getattr(self.landmark, "note", "") if self.landmark.placed else "")
+
+    def _on_auto_centre_toggled(self, checked):
+        self.landmark.auto_centre = bool(checked)
+
+    def _on_recentre(self):
+        if not self.landmark.placed:
+            self.centre_note.setText("Place the point first.")
+            return
+        self.landmark.recentre()
+        self._update_position_label()
+
+    def _on_place_at_fraction(self):
+        message = self.landmark.place_at_fraction()
+        self._update_position_label()
+        self.centre_note.setText(message)
 
 
 class SphereLandmarkWidget(LandmarkWidget):

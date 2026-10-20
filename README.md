@@ -74,6 +74,12 @@ and a picture. Angles (aLDFA, antetorsion, tibial varus/valgus mMPTA / mMDTA, TP
 ...) and their axes are shown live. A side check confirms that the landmarks form a left or a right
 limb.
 
+The diaphysis midpoints (proximal / distal tibia midpoint, femur midpoint 33 % / 50 %) are centred
+automatically: a click only gives the height, the point is set to the area centroid of the bone
+cross-section there, in a plane perpendicular to the local bone axis (medullary canal included).
+**Place at 33 % / 50 %** sets the femoral points directly from the femur head and condyle spheres;
+**Re-centre** centres a dragged point again. Untick **Centre in cross-section** to place a point freely.
+
 <img src="doc/02_measurements.png" alt="Measurements: femoral landmarks, fitted spheres and the aLDFA / antetorsion result" width="800"/>
 
 ### 4. Osteotomy Planning: cutting planes
