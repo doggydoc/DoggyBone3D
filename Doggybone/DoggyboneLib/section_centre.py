@@ -29,86 +29,86 @@ def _frame(n):
     return e1, np.cross(n, e1)
 
 
-def _section_loops(polydata, point, normal):
-    """Closed loops (N x 3 arrays) where the plane (point, normal) cuts the surface."""
+def _section_segments(polydata, point, normal):
+    """Line segments (M x 2 x 3) where the plane (point, normal) cuts the surface."""
     plane = vtk.vtkPlane()
     plane.SetOrigin(*[float(v) for v in point])
     plane.SetNormal(*[float(v) for v in normal])
     cutter = vtk.vtkCutter()
     cutter.SetCutFunction(plane)
     cutter.SetInputData(polydata)
-    merge = vtk.vtkCleanPolyData()              # coincident points of neighbouring cut segments -> one
-    merge.SetInputConnection(cutter.GetOutputPort())
-    merge.ToleranceIsAbsoluteOn()
-    merge.SetAbsoluteTolerance(0.01)
-    stripper = vtk.vtkStripper()
-    stripper.SetInputConnection(merge.GetOutputPort())
-    stripper.JoinContiguousSegmentsOn()
-    stripper.Update()
-    out = stripper.GetOutput()
-    if out is None or out.GetNumberOfPoints() < 3:
-        return []
+    cutter.Update()
+    out = cutter.GetOutput()
+    if out is None or out.GetNumberOfPoints() < 2 or out.GetNumberOfLines() == 0:
+        return None
     P = vtk_to_numpy(out.GetPoints().GetData()).astype(float)
-    loops = []
-    lines = out.GetLines()
-    lines.InitTraversal()
-    ids = vtk.vtkIdList()
-    while lines.GetNextCell(ids):
-        if ids.GetNumberOfIds() >= 4:
-            loops.append(np.array([P[ids.GetId(k)] for k in range(ids.GetNumberOfIds())]))
-    return loops
+    lines = vtk_to_numpy(out.GetLines().GetData())
+    # cutter output: [2, i, j, 2, i, j, ...]
+    if len(lines) % 3 == 0 and np.all(lines[0::3] == 2):
+        pairs = np.stack([lines[1::3], lines[2::3]], axis=1)
+    else:
+        pairs, k = [], 0
+        while k < len(lines):
+            m = int(lines[k])
+            ids = lines[k + 1:k + 1 + m]
+            pairs += [(ids[j], ids[j + 1]) for j in range(m - 1)]
+            k += m + 1
+        pairs = np.asarray(pairs, int)
+    return P[pairs]
 
 
-def _polygon(loop, origin, e1, e2):
-    rel = loop - origin
-    return np.stack([rel @ e1, rel @ e2], axis=1)
-
-
-def _area_centroid(xy):
-    x, y = xy[:, 0], xy[:, 1]
-    xr, yr = np.roll(x, -1), np.roll(y, -1)
-    cross = x * yr - xr * y
-    area = 0.5 * float(cross.sum())
-    if abs(area) < 1e-9:
-        return 0.0, xy.mean(axis=0)
-    cx = float(((x + xr) * cross).sum()) / (6.0 * area)
-    cy = float(((y + yr) * cross).sum()) / (6.0 * area)
-    return abs(area), np.array([cx, cy])
-
-
-def _inside(xy, q):
-    """Point q (2D) inside the polygon xy (ray casting)."""
-    x, y = xy[:, 0], xy[:, 1]
-    xr, yr = np.roll(x, -1), np.roll(y, -1)
-    crosses = ((y > q[1]) != (yr > q[1]))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        x_at = x + (q[1] - y) * (xr - x) / (yr - y)
-    return int(np.count_nonzero(crosses & (q[0] < x_at))) % 2 == 1
-
-
-def section_centre(polydata, point, normal):
+def section_centre(polydata, point, normal, reach=40.0, res=0.1, max_distance=6.0):
     """(centre 3D, area mm^2) of the bone cross-section in the plane (point, normal), or (None, 0).
-    The outer contour that contains `point` is used; if the point lies outside the bone (picked on
-    the surface), the contour nearest to it and then the largest contour around that one."""
+    The section is rasterised (res mm pixels): everything enclosed by the cut outline is filled -
+    the medullary canal too - and the filled region that contains `point` (or, for a point picked
+    on the surface, the region nearest to it, at most 6 mm away) gives the area centroid.
+    Robust against small gaps in the outline."""
+    from scipy import ndimage as ndi
     n = _unit(normal)
     origin = np.asarray(point, float)
-    loops = _section_loops(polydata, origin, n)
-    if not loops:
+    seg = _section_segments(polydata, origin, n)
+    if seg is None:
         return None, 0.0
     e1, e2 = _frame(n)
-    polys = [_polygon(loop, origin, e1, e2) for loop in loops]
-    stats = [_area_centroid(xy) for xy in polys]
-    q = np.zeros(2)
-    containing = [k for k, xy in enumerate(polys) if stats[k][0] > 0.5 and _inside(xy, q)]
-    if not containing:
-        nearest = min(range(len(polys)), key=lambda k: float(np.min(np.linalg.norm(polys[k], axis=1))))
-        if float(np.min(np.linalg.norm(polys[nearest], axis=1))) > 6.0:
-            return None, 0.0                     # no bone near the picked point in this plane
-        q = stats[nearest][1]
-        containing = [k for k, xy in enumerate(polys) if stats[k][0] > 0.5 and _inside(xy, q)] or [nearest]
-    best = max(containing, key=lambda k: stats[k][0])       # the OUTER contour (filled)
-    area, c2 = stats[best]
-    return origin + c2[0] * e1 + c2[1] * e2, area
+    xy = np.stack([(seg - origin) @ e1, (seg - origin) @ e2], axis=-1)        # (M, 2, 2)
+    keep = np.all(np.abs(xy) <= reach, axis=(1, 2))
+    xy = xy[keep]
+    if len(xy) == 0:
+        return None, 0.0
+    lo = xy.reshape(-1, 2).min(axis=0) - 1.0
+    hi = xy.reshape(-1, 2).max(axis=0) + 1.0
+    lo = np.minimum(lo, -1.0)
+    hi = np.maximum(hi, 1.0)
+    shape = tuple(int(np.ceil((hi[k] - lo[k]) / res)) + 1 for k in range(2))
+    wall = np.zeros(shape, dtype=bool)
+    lengths = np.linalg.norm(xy[:, 1] - xy[:, 0], axis=1)
+    steps = np.maximum(2, np.ceil(lengths / (0.5 * res)).astype(int) + 1)
+    for count in np.unique(steps):
+        sel = steps == count
+        t = np.linspace(0.0, 1.0, int(count))[None, :, None]
+        pts = xy[sel, 0][:, None, :] + t * (xy[sel, 1] - xy[sel, 0])[:, None, :]
+        idx = np.rint((pts.reshape(-1, 2) - lo) / res).astype(int)
+        wall[idx[:, 0], idx[:, 1]] = True
+    wall = ndi.binary_dilation(wall)                       # close sub-pixel gaps of the outline
+    free, _n = ndi.label(~wall)
+    border = set(np.unique(np.concatenate([free[0, :], free[-1, :], free[:, 0], free[:, -1]]))) - {0}
+    outside = np.isin(free, list(border))
+    filled = ~outside                                      # outline + everything it encloses
+    regions, count = ndi.label(filled)
+    if count == 0:
+        return None, 0.0
+    q = np.rint((np.zeros(2) - lo) / res).astype(int)
+    label = int(regions[q[0], q[1]]) if (0 <= q[0] < shape[0] and 0 <= q[1] < shape[1]) else 0
+    if label == 0:
+        dist, (ia, ib) = ndi.distance_transform_edt(regions == 0, return_indices=True)
+        if dist[q[0], q[1]] * res > max_distance:
+            return None, 0.0                               # no bone near the picked point in this plane
+        label = int(regions[ia[q[0], q[1]], ib[q[0], q[1]]])
+    ii, jj = np.nonzero(regions == label)
+    area = len(ii) * res * res
+    cx = lo[0] + float(ii.mean()) * res
+    cy = lo[1] + float(jj.mean()) * res
+    return origin + cx * e1 + cy * e2, area
 
 
 def local_axis(polydata, point, radius=15.0):
@@ -122,7 +122,7 @@ def local_axis(polydata, point, radius=15.0):
     return _unit(vt[0])
 
 
-def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4):
+def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4, max_distance=6.0):
     """(centre, axis, area) of the diaphysis at the height of `point`: area centroid of the section
     perpendicular to the local bone axis, the axis refined from the centroids at +-step mm.
     Returns (None, None, 0) if there is no bone there."""
@@ -131,7 +131,7 @@ def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4):
     if a is None:
         return None, None, 0.0
     for _k in range(iterations):
-        c0, _area = section_centre(polydata, p, a)
+        c0, _area = section_centre(polydata, p, a, max_distance=max_distance)
         if c0 is None:
             return None, None, 0.0
         cp, _ = section_centre(polydata, c0 + step * a, a)
@@ -145,7 +145,7 @@ def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4):
         a = a_new
         if change < 0.2:
             break
-    centre, area = section_centre(polydata, p, a)       # plane through the picked HEIGHT
+    centre, area = section_centre(polydata, p, a, max_distance=max_distance)   # plane through the picked HEIGHT
     if centre is None:
         return None, None, 0.0
     return centre, a, area

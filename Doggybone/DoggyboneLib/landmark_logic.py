@@ -298,7 +298,9 @@ class SphereLandmark(SimpleLandmark):
     matching a sphere against the bone surface is more practical than an automatic best-fit,
     for example locating a femoral condyle.
     '''
-    def __init__(self, name, description="", image_path="", default_radius=8.0):
+    DEFAULT_RADIUS = 8.0
+
+    def __init__(self, name, description="", image_path="", default_radius=DEFAULT_RADIUS):
         super().__init__(name, description, image_path)
         self.radius = default_radius
 
@@ -563,14 +565,17 @@ class CentroidLandmark(SimpleLandmark):
         d = ends[1] - ends[0]
         return d / np.linalg.norm(d)
 
-    def centred(self, position):
-        """Area centroid of the cross-section at the height of `position`, or None."""
+    def centred(self, position, max_distance=6.0):
+        """Area centroid of the cross-section at the height of `position`, or None. max_distance: how
+        far the bone may lie from `position` in that plane (a percentage point lies on the line head -
+        condyles, which runs beside a curved femur)."""
         from DoggyboneLib import section_centre
         surface = get_bone_surface()
         if surface is None or surface.GetNumberOfPoints() == 0:
             self.note = "No bone segmentation - the point stays where it was set (not centred)."
             return None
-        centre, axis, area = section_centre.diaphysis_centre(surface, position, axis_hint=self.axis_hint())
+        centre, axis, area = section_centre.diaphysis_centre(surface, position, axis_hint=self.axis_hint(),
+                                                             max_distance=max_distance)
         if centre is None:
             self.note = "No bone cross-section found at this point - not centred."
             return None
@@ -578,6 +583,29 @@ class CentroidLandmark(SimpleLandmark):
         self.note = (f"Centred in the cross-section ({area:.0f} mm\N{SUPERSCRIPT TWO}, perpendicular to the "
                      f"local bone axis): moved {moved:.1f} mm.")
         return np.asarray(centre, float)
+
+    def centred_at_level(self):
+        """(point, length): the centroid of the section at `fraction` of the bone length, its height
+        measured along the line head - condyles. The section stays perpendicular to the diaphysis;
+        its plane is shifted until the CENTROID lies exactly at that height. None if no length."""
+        found = self.length_point()
+        if found is None:
+            return None
+        point, length = found
+        prox, dist = self._ends()[:2]
+        m = (dist - prox) / np.linalg.norm(dist - prox)
+        target = float(point @ m)
+        q = point.copy()
+        centre = None
+        for _k in range(6):
+            centre = self.centred(q, max_distance=25.0)
+            if centre is None:
+                return point, length                 # not centred - at least the right height
+            delta = target - float(centre @ m)
+            if abs(delta) < 0.05:
+                break
+            q = q + delta * m
+        return centre, length
 
     def _move_to(self, p):
         self._markups_node.SetNthControlPointPosition(self._id, float(p[0]), float(p[1]), float(p[2]))
@@ -588,15 +616,21 @@ class CentroidLandmark(SimpleLandmark):
         self._id = self._markups_node.GetNumberOfControlPoints() - 1
         self.placed = True
         raw = self.get_position()
+        at_fraction = False
+        centre = None
         if self.auto_centre and raw is not None and self.fraction is not None:
-            found = self.length_point()
+            found = self.centred_at_level()
             if found is not None:
-                raw = found[0]                    # percentage point: the click only says which bone
-        centre = self.centred(raw) if (self.auto_centre and raw is not None) else None
+                raw = centre = found[0]           # percentage point: the click only says which bone
+                at_fraction = True
+        if centre is None and self.auto_centre and raw is not None and not at_fraction:
+            centre = self.centred(raw)
         if self.auto_centre and self.fraction is not None and self._ends() is None:
             self.note += self._pending_note()
         if centre is not None:
             self._move_to(centre)
+        elif at_fraction:
+            self._move_to(raw)                    # at least the right height, even if not centred
         elif raw is not None and not self.auto_centre:
             self.note = ""
             snapped = snap_to_nearest_bone_voxel(raw)
@@ -627,8 +661,9 @@ class CentroidLandmark(SimpleLandmark):
             return None
         prox, dist, prox_names, dist_names = ends
         a = (dist - prox) / np.linalg.norm(dist - prox)
-        r_prox = np.mean([self._sibling_radius(n, 0.0) for n in prox_names])
-        r_dist = np.mean([self._sibling_radius(n, 0.0) for n in dist_names])
+        # sphere radius as set in the panel; not stored until it is changed -> the sphere default
+        r_prox = np.mean([self._sibling_radius(n, SphereLandmark.DEFAULT_RADIUS) for n in prox_names])
+        r_dist = np.mean([self._sibling_radius(n, SphereLandmark.DEFAULT_RADIUS) for n in dist_names])
         top = prox - r_prox * a
         bottom = dist + r_dist * a
         return top + float(self.fraction) * (bottom - top), float(np.linalg.norm(bottom - top))
@@ -646,12 +681,10 @@ class CentroidLandmark(SimpleLandmark):
             return
         if _follow_suspended:
             return
-        found = self.length_point()
+        found = self.centred_at_level()
         if found is None:
             return
-        point, length = found
-        centre = self.centred(point)
-        target = centre if centre is not None else point
+        target, length = found
         if float(np.linalg.norm(np.asarray(target) - self.get_position())) < 0.05:
             return
         self._move_to(target)
@@ -663,13 +696,11 @@ class CentroidLandmark(SimpleLandmark):
     def place_at_fraction(self):
         """Places (or moves) the point at its percentage of the bone length, centred in the section.
         Returns a message for the user."""
-        found = self.length_point()
+        found = self.centred_at_level()
         if found is None:
             names = " / ".join(", ".join(group) for group in (self.axis_from or ()))
             return f"Place {names} first - they define the bone length."
-        point, length = found
-        centre = self.centred(point)
-        target = centre if centre is not None else point
+        target, length = found
         self.stop_interaction()
         if self.placed and self._id is not None:
             self._move_to(target)
