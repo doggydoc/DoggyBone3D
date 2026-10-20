@@ -1584,6 +1584,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         return "Femur" if "femur" in (name or "").lower() else "Tibia"
 
     def onLateralityMove(self, bones=None):
+        # transferred positions are kept as they are (percentage points do not follow head / condyles)
+        with landmark_logic.follow_suspended():
+            return self._laterality_move_now(bones)
+
+    def _laterality_move_now(self, bones=None):
         """Transfer landmarks of the shown list to the other list - all, or only the femur / tibia ones.
         Landmarks of the same bone already in the other list are swapped back, nothing is lost."""
         current = self.side_selector.currentText
@@ -2046,9 +2051,12 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                     was_blocked = spinbox.blockSignals(True)
                     spinbox.setValue(landmark_widget.landmark.radius)
                     spinbox.blockSignals(was_blocked)
-        for landmark in linked:
-            for callback in landmark.change_callbacks:
-                callback()
+        # re-linking a saved scene must not move the percentage points (femur midpoint 33 % / 50 %):
+        # they follow the head / condyles only when those are changed by hand
+        with landmark_logic.follow_suspended():
+            for landmark in linked:
+                for callback in landmark.change_callbacks:
+                    callback()
         return len(linked)
 
 
@@ -2206,6 +2214,15 @@ class MeasurementsPanel(qt.QWidget):
         self.landmarks = deepcopy(LANDMARKS)
         for landmark in self.landmarks:
             landmark.set_markups_node_id(self.markup_node_id)
+        # percentage points (femur midpoint 33 % / 50 %) follow the landmarks that define the length
+        by_name = {landmark.name: landmark for landmark in self.landmarks}
+        for landmark in self.landmarks:
+            if getattr(landmark, "fraction", None) is None:
+                continue
+            for group in (landmark.axis_from or ()):
+                for name in group:
+                    if name in by_name:
+                        by_name[name].add_change_callback(lambda lm=landmark: lm.follow_ends())
 
         # Create all measurements
         for measurement in MEASUREMENTS:
@@ -2273,6 +2290,11 @@ class MeasurementsPanel(qt.QWidget):
 
 
     def _import_landmarks(self):
+        # imported positions are kept as they are (percentage points do not follow head / condyles)
+        with landmark_logic.follow_suspended():
+            self._import_landmarks_now()
+
+    def _import_landmarks_now(self):
         file_name = qt.QFileDialog.getOpenFileName(self, 'Import landmarks', '',"CSV File (*.csv)")
         if file_name == "":
             return

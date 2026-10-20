@@ -473,6 +473,22 @@ def set_bone_surface_provider(provider):
     _bone_surface_provider = provider
 
 
+_follow_suspended = 0
+
+
+class follow_suspended:
+    """with follow_suspended(): ... - percentage points do NOT follow the head / condyles meanwhile
+    (loading a scene, importing or transferring landmarks keeps the stored positions)."""
+    def __enter__(self):
+        global _follow_suspended
+        _follow_suspended += 1
+
+    def __exit__(self, *exc):
+        global _follow_suspended
+        _follow_suspended -= 1
+        return False
+
+
 def get_bone_surface():
     try:
         return _bone_surface_provider() if _bone_surface_provider is not None else None
@@ -565,7 +581,13 @@ class CentroidLandmark(SimpleLandmark):
         self._id = self._markups_node.GetNumberOfControlPoints() - 1
         self.placed = True
         raw = self.get_position()
+        if self.auto_centre and raw is not None and self.fraction is not None:
+            found = self.length_point()
+            if found is not None:
+                raw = found[0]                    # percentage point: the click only says which bone
         centre = self.centred(raw) if (self.auto_centre and raw is not None) else None
+        if self.auto_centre and self.fraction is not None and self._ends() is None:
+            self.note += self._pending_note()
         if centre is not None:
             self._move_to(centre)
         elif raw is not None and not self.auto_centre:
@@ -603,6 +625,33 @@ class CentroidLandmark(SimpleLandmark):
         top = prox - r_prox * a
         bottom = dist + r_dist * a
         return top + float(self.fraction) * (bottom - top), float(np.linalg.norm(bottom - top))
+
+    def _pending_note(self):
+        names = " and ".join(", ".join(group) for group in (self.axis_from or ()))
+        return (f" Moves to {100.0 * float(self.fraction):.0f} % of the bone length by itself as soon as "
+                f"{names} are placed.")
+
+    def follow_ends(self):
+        """Called when one of the axis landmarks (head / condyles, their spheres) changes: a centred
+        percentage point moves to its height again - quietly, without taking over the interaction or
+        jumping the slice views."""
+        if not (self.placed and self._id is not None and self.auto_centre and self.fraction is not None):
+            return
+        if _follow_suspended:
+            return
+        found = self.length_point()
+        if found is None:
+            return
+        point, length = found
+        centre = self.centred(point)
+        target = centre if centre is not None else point
+        if float(np.linalg.norm(np.asarray(target) - self.get_position())) < 0.05:
+            return
+        self._move_to(target)
+        self.note = (f"At {100.0 * float(self.fraction):.0f} % of the bone length ({length:.1f} mm), "
+                     f"follows the femur head / condyles. " + self.note)
+        for cb in self.change_callbacks:
+            cb()
 
     def place_at_fraction(self):
         """Places (or moves) the point at its percentage of the bone length, centred in the section.
