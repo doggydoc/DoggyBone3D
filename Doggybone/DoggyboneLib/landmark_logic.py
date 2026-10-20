@@ -173,6 +173,13 @@ class SimpleLandmark:
             self._private_observers.append(self._markups_node.AddObserver(slicer.vtkMRMLMarkupsNode.PointModifiedEvent, 
                                                                          lambda caller, event: self._changed_callback(caller)))
         else:
+            # place into THIS landmark's list (left / right): the active list may still be the other
+            # side's after a reload or 'Delete all' - the point would land there with a default name
+            # ('DoggyboneFiducialsRight-1') and belong to no landmark
+            selection = slicer.app.applicationLogic().GetSelectionNode()
+            if selection is not None and self._markups_node is not None:
+                selection.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
+                selection.SetActivePlaceNodeID(self._markups_node.GetID())
             slicer.modules.markups.logic().StartPlaceMode(0)
             self._private_observers.append(self._markups_node.AddObserver(slicer.vtkMRMLMarkupsNode.PointAddedEvent, 
                                                                          lambda caller, event: self._added_callback()))
