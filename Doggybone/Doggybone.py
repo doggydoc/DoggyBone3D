@@ -245,7 +245,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
         self.segmentation_status = StatusLabel("no segmentation")
         self.segmentation_status.setWordWrap(True)
-        segmentation_form_layout.addRow("Status", self.segmentation_status)
+        # (the status row is added at the END of the section, below 'Export')
 
         # take over a segmentation made in the Segment Editor (only its VISIBLE segments)
         self.take_over_button = qt.QPushButton("Use Segment Editor segmentation")
@@ -324,6 +324,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "a bone model for test-fitting the guides. Coordinates as in the CT (not moved).")
         self.export_bone_button.clicked.connect(lambda: self.onExportBoneStl(self.segmentation_status))
         segmentation_form_layout.addRow("Export", self.export_bone_button)
+        segmentation_form_layout.addRow("Status", self.segmentation_status)      # last row of the section
 
         # A VISIBLE, compact Segment Editor: interactive effects such as the Scissors/lasso only
         # receive the view's mouse events when their editor widget is part of the GUI. Only the
@@ -405,7 +406,9 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # anatomical frame, see DoggyboneLib/laterality.py) - shown live, with a one-click fix when
         # they sit in the wrong list
         laterality_row = qt.QHBoxLayout()
-        self.laterality_label = StatusLabel("")
+        laterality_row.setContentsMargins(0, 0, 0, 0)
+        laterality_row.addWidget(qt.QLabel("Status"))
+        self.laterality_label = StatusLabel("Place the landmarks of the selected side.")
         self.laterality_label.setWordWrap(True)
         laterality_row.addWidget(self.laterality_label, 1)
         self.laterality_move_button = qt.QPushButton("Move")
@@ -414,7 +417,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         laterality_row.addWidget(self.laterality_move_button)
         laterality_row_widget = qt.QWidget()
         laterality_row_widget.setLayout(laterality_row)
-        measurements_layout.addWidget(laterality_row_widget)
+        # (added at the END of the section, below the landmark panels - see below)
 
         # slice views aligned to the BONE instead of the scanner (the limb is never lying exactly
         # along the scanner axes): red = perpendicular to the shaft axis, green = frontal plane
@@ -438,6 +441,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         align_row_widget.setLayout(align_row)
         measurements_layout.addWidget(align_row_widget)
         measurements_layout.addWidget(self.side_stack, 1)
+        measurements_layout.addWidget(laterality_row_widget)                 # status: last row of the section
 
         # Osteotomy planning (stage 1): a cutting plane, parametrically seeded from the existing
         # bone shaft axis (reusing the same landmarks already placed for the angle measurements),
@@ -568,7 +572,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
         # ONE visible status line for the whole osteotomy section (planes and correction preview);
         # both names point to it (older code writes to either)
-        self.correction_status = StatusLabel()
+        self.correction_status = StatusLabel("Osteotomy: start with 'Insert/update MASTER plane'.")
         self.correction_status.setWordWrap(True)
         self.correction_status.setTextInteractionFlags(qt.Qt.TextSelectableByMouse)
         self.osteotomy_status = self.correction_status
@@ -1541,6 +1545,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         current = self.side_selector.currentText
         other = "Right" if current == "Left" else "Left"
         result, result_other = self.laterality_check(current), self.laterality_check(other)
+        # status of the measurements section: landmarks placed on this side, then the side check
+        panel = getattr(self, "left_panel" if current == "Left" else "right_panel", None)
+        landmarks_all = list(getattr(panel, "landmarks", []) or [])
+        placed = sum(1 for landmark in landmarks_all if landmark.placed)
+        prefix = f"{current}: {placed} / {len(landmarks_all)} landmarks set.\n" if landmarks_all else ""
         button = self.laterality_move_button
         button.setVisible(False)
         if self._landmark_points(current):
@@ -1556,15 +1565,15 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         status = result["status"]
         if status == "incomplete":
             label.setStyleSheet("")
-            label.setText("Side check: waiting for the femur or tibia landmarks.")
+            label.setText(prefix + "Side check: waiting for the femur or tibia landmarks.")
             return
         label.setStyleSheet(STATUS_WARN_STYLE)
         if status == "uncertain":
-            label.setText("Side check: uncertain - " + "; ".join(result["messages"]))
+            label.setText(prefix + "Side check: uncertain - " + "; ".join(result["messages"]))
         elif status in ("check", "conflict"):
-            label.setText("Side check: " + "; ".join(result["messages"]))
+            label.setText(prefix + "Side check: " + "; ".join(result["messages"]))
         elif result["side"] != current:
-            label.setText(f"Side check: these landmarks form a {result['side'].upper()} limb, "
+            label.setText(prefix + f"Side check: these landmarks form a {result['side'].upper()} limb, "
                           f"but they are in the {current} list.")
             has_other = bool(self._landmark_points(other))
             button.setText(f"Swap Left / Right" if has_other else f"Move to {result['side']}")
@@ -1573,11 +1582,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                               + ". Osteotomy planes and guides are NOT moved.")
             button.setVisible(True)
         elif result_other["status"] == "ok" and result_other["side"] == current:
-            label.setText(f"Side check: BOTH lists form a {current.upper()} limb - the same leg measured twice, "
+            label.setText(prefix + f"Side check: BOTH lists form a {current.upper()} limb - the same leg measured twice, "
                           "or medial / lateral swapped in one list.")
         else:
             label.setStyleSheet(STATUS_OK_STYLE)
-            label.setText(f"\u2713 Side check: the landmarks form a {current.lower()} limb.")
+            label.setText(prefix + f"\u2713 Side check: the landmarks form a {current.lower()} limb.")
 
     @staticmethod
     def _landmark_bone(name):
