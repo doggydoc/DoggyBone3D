@@ -591,7 +591,9 @@ class CentroidLandmark(SimpleLandmark):
     def centred_at_level(self):
         """(point, length): the centroid of the section at `fraction` of the bone length, its height
         measured along the line head - condyles. The section stays perpendicular to the diaphysis;
-        its plane is shifted until the CENTROID lies exactly at that height. None if no length."""
+        its plane is shifted until the CENTROID lies exactly at that height. None if no length.
+        The bone axis is found once; then only the level is adjusted (one section per step)."""
+        from DoggyboneLib import section_centre
         found = self.length_point()
         if found is None:
             return None
@@ -599,16 +601,27 @@ class CentroidLandmark(SimpleLandmark):
         prox, dist = self._ends()[:2]
         m = (dist - prox) / np.linalg.norm(dist - prox)
         target = float(point @ m)
-        q = point.copy()
-        centre = None
+        centre = self.centred(point, max_distance=25.0)     # axis + first centroid (also the note)
+        if centre is None:
+            return point, length                             # not centred - at least the right height
+        axis = self.section_frame[1]
+        surface = section_centre.crop(get_bone_surface(), point, 50.0)
+        q = np.asarray(point, float).copy()
         for _k in range(6):
-            centre = self.centred(q, max_distance=25.0)
-            if centre is None:
-                return point, length                 # not centred - at least the right height
             delta = target - float(centre @ m)
             if abs(delta) < 0.05:
                 break
             q = q + delta * m
+            moved, _area = section_centre.section_centre(surface, q, axis, max_distance=25.0)
+            if moved is None:
+                break
+            centre = moved
+        outline = []
+        final, area = section_centre.section_centre(surface, centre, axis, max_distance=25.0, outline=outline)
+        if final is not None:
+            centre = final
+            self._show_outline(outline[0] if outline else None)
+            self.section_frame = (np.asarray(centre, float), np.asarray(axis, float))
         return centre, length
 
     # the cross-section the centre was taken from: a yellow contour in 3D and in the slice views
@@ -749,28 +762,45 @@ class CentroidLandmark(SimpleLandmark):
 
     def _pending_note(self):
         names = " and ".join(", ".join(group) for group in (self.axis_from or ()))
-        return (f" Moves to {100.0 * float(self.fraction):.0f} % of the bone length by itself as soon as "
-                f"{names} are placed.")
+        return (f" Press 'Update 33 % / 50 %' once {names} are placed - the point then goes to "
+                f"{100.0 * float(self.fraction):.0f} % of the bone length.")
 
     def follow_ends(self):
-        """Called when one of the axis landmarks (head / condyles, their spheres) changes: a centred
-        percentage point moves to its height again - quietly, without taking over the interaction or
-        jumping the slice views."""
+        """Called when one of the axis landmarks (head / condyles, their spheres) changes. Cheap: only
+        checks whether the point still lies at its percentage of the length - no cross-sections (those
+        made dragging a condyle sluggish). If not, a note asks for 'Update 33 % / 50 %'."""
         if not (self.placed and self._id is not None and self.auto_centre and self.fraction is not None):
             return
         if _follow_suspended:
             return
-        found = self.centred_at_level()
+        found = self.length_point()
         if found is None:
             return
-        target, length = found
-        if float(np.linalg.norm(np.asarray(target) - self.get_position())) < 0.05:
+        point, _length = found
+        prox, dist = self._ends()[:2]
+        m = (dist - prox) / np.linalg.norm(dist - prox)
+        off = float((self.get_position() - point) @ m)
+        outdated = abs(off) > 0.3
+        if outdated == getattr(self, "_outdated", False):
             return
-        self._move_to(target)
-        self.note = (f"At {100.0 * float(self.fraction):.0f} % of the bone length ({length:.1f} mm), "
-                     f"follows the femur head / condyles. " + self.note)
-        for cb in self.change_callbacks:
+        self._outdated = outdated
+        if outdated:
+            self.note = (f"Femur head / condyles changed: the point lies {off:+.1f} mm from "
+                         f"{100.0 * float(self.fraction):.0f} % - press 'Update 33 % / 50 %'.")
+        for cb in getattr(self, "note_callbacks", []):
             cb()
+
+    def place_group(self):
+        """'Update 33 % / 50 %': places all percentage points of this bone (fraction_group, set by the
+        panel) at their height, centred. Returns one message."""
+        messages = []
+        for landmark in getattr(self, "fraction_group", None) or [self]:
+            text = landmark.place_at_fraction()
+            landmark._outdated = False
+            messages.append(f"{landmark.name}: {text}")
+            for cb in getattr(landmark, "note_callbacks", []):
+                cb()
+        return "\n".join(messages)
 
     def place_at_fraction(self):
         """Places (or moves) the point at its percentage of the bone length, centred in the section.

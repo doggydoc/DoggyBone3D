@@ -72,12 +72,12 @@ LANDMARKS = [
                    r"Resources/descriptions/lateralfemurcondyle.png"),
     CentroidLandmark('Femur midpoint 33%',
                      "Choose the point at 33 % of the femoral length (one third), measured from the proximal end, in the "
-                     "middle of the diaphysis. 'Place at 33 %' sets it from the femur head and condyle spheres; a click "
+                     "middle of the diaphysis. 'Update 33 % / 50 %' sets it from the femur head and condyle spheres; a click "
                      "at any height is centred in the cross-section.",
                      r"Resources/descriptions/proxfemurmidpoint.png", axis_from=FEMUR_AXIS, fraction=0.33),
     CentroidLandmark('Femur midpoint 50%',
                      "Choose the point at 50 % of the femoral length (mid-femur), in the middle of the diaphysis. "
-                     "'Place at 50 %' sets it from the femur head and condyle spheres; a click at any height is "
+                     "'Update 33 % / 50 %' sets it from the femur head and condyle spheres; a click at any height is "
                      "centred in the cross-section.",
                      r"Resources/descriptions/distfemurmidpoint.png", axis_from=FEMUR_AXIS, fraction=0.50),
     SimpleLandmark('femur neck', 

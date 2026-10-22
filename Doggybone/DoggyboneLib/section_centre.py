@@ -141,6 +141,22 @@ def _region_outline(mask, lo, res, origin, e1, e2):
     return out
 
 
+def crop(polydata, centre, radius=50.0):
+    """Only the surface within `radius` mm of centre - the sections are cut much faster on it."""
+    sphere = vtk.vtkSphere()
+    sphere.SetCenter(*[float(v) for v in centre])
+    sphere.SetRadius(float(radius))
+    extract = vtk.vtkExtractPolyDataGeometry()
+    extract.SetInputData(polydata)
+    extract.SetImplicitFunction(sphere)
+    extract.ExtractInsideOn()
+    extract.ExtractBoundaryCellsOn()
+    extract.Update()
+    out = vtk.vtkPolyData()
+    out.DeepCopy(extract.GetOutput())
+    return out if out.GetNumberOfPoints() > 0 else polydata
+
+
 def local_axis(polydata, point, radius=15.0):
     """Rough local bone axis: main direction of the surface points within `radius` of point."""
     P = vtk_to_numpy(polydata.GetPoints().GetData()).astype(float)
@@ -157,6 +173,7 @@ def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4, ma
     perpendicular to the local bone axis, the axis refined from the centroids at +-step mm.
     Returns (None, None, 0) if there is no bone there."""
     p = np.asarray(point, float)
+    polydata = crop(polydata, p, 50.0)                    # cut only the bone around the point (fast)
     a = _unit(axis_hint) if axis_hint is not None else local_axis(polydata, p)
     if a is None:
         return None, None, 0.0

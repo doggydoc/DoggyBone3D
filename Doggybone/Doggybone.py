@@ -2214,8 +2214,12 @@ class MeasurementsPanel(qt.QWidget):
         self.landmarks = deepcopy(LANDMARKS)
         for landmark in self.landmarks:
             landmark.set_markups_node_id(self.markup_node_id)
-        # percentage points (femur midpoint 33 % / 50 %) follow the landmarks that define the length
+        # percentage points (femur midpoint 33 % / 50 %): when head / condyles change, a note asks for
+        # 'Update 33 % / 50 %' (placed together on that button - no live re-centring while dragging)
         by_name = {landmark.name: landmark for landmark in self.landmarks}
+        fraction_points = [l for l in self.landmarks if getattr(l, "fraction", None) is not None]
+        for landmark in fraction_points:
+            landmark.fraction_group = [l for l in fraction_points if l.axis_from == landmark.axis_from]
         for landmark in self.landmarks:
             if getattr(landmark, "fraction", None) is None:
                 continue
@@ -2877,12 +2881,12 @@ class LandmarkWidget(qt.QWidget):
             row.addWidget(self.recentre_button)
             row.addWidget(self.section_button)
             if getattr(self.landmark, "fraction", None) is not None:
-                self.fraction_button = qt.QPushButton(f"Place at {100.0 * self.landmark.fraction:.0f} %")
+                self.fraction_button = qt.QPushButton("Update 33 % / 50 %")
                 self.fraction_button.setToolTip(
-                    f"Sets the point at {100.0 * self.landmark.fraction:.0f} % of the femoral length, measured from "
-                    "the proximal end of the femoral head (head sphere) to the distal end of the condyles "
-                    "(condyle spheres), centred in the cross-section. Needs the femur head and both condyle "
-                    "spheres.")
+                    "Sets both femur midpoints at 33 % and 50 % of the femoral length, measured from the "
+                    "proximal end of the femoral head (head sphere) to the distal end of the condyles "
+                    "(condyle spheres), each centred in its cross-section. Needs the femur head and both "
+                    "condyle spheres. Press it again after changing the head or the condyles.")
                 self.fraction_button.clicked.connect(self._on_place_at_fraction)
                 row.addWidget(self.fraction_button)
             row_widget = qt.QWidget()
@@ -2892,6 +2896,9 @@ class LandmarkWidget(qt.QWidget):
             self.centre_note = qt.QLabel("")
             self.centre_note.setWordWrap(True)
             layout.addWidget(self.centre_note)
+            if not hasattr(self.landmark, "note_callbacks"):
+                self.landmark.note_callbacks = []
+            self.landmark.note_callbacks.append(self._update_position_label)
         if self.image is not None:
             layout.addWidget(self.image)
             layout.setStretch(layout.count()-1, 1)
@@ -2925,7 +2932,7 @@ class LandmarkWidget(qt.QWidget):
             self.centre_note.setText("No cross-section yet - place the point (centred) or press 'Re-centre'.")
 
     def _on_place_at_fraction(self):
-        message = self.landmark.place_at_fraction()
+        message = self.landmark.place_group()
         self._update_position_label()
         self.centre_note.setText(message)
 

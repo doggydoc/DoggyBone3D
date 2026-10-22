@@ -77,7 +77,8 @@ limb.
 The diaphysis midpoints (proximal / distal tibia midpoint, femur midpoint 33 % / 50 %) are centred
 automatically: a click only gives the height, the point is set to the area centroid of the bone
 cross-section there, in a plane perpendicular to the local bone axis (medullary canal included).
-**Place at 33 % / 50 %** sets the femoral points directly from the femur head and condyle spheres;
+**Update 33 % / 50 %** sets both femoral points from the femur head and condyle spheres (press it again
+after changing them - the panel says when the points no longer match);
 **Re-centre** centres a dragged point again. Untick **Centre in cross-section** to place a point freely.
 
 <img src="doc/02_measurements.png" alt="Measurements: femoral landmarks, fitted spheres and the aLDFA / antetorsion result" width="800"/>
