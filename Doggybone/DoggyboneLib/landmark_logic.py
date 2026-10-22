@@ -574,8 +574,12 @@ class CentroidLandmark(SimpleLandmark):
         if surface is None or surface.GetNumberOfPoints() == 0:
             self.note = "No bone segmentation - the point stays where it was set (not centred)."
             return None
+        outline = []
         centre, axis, area = section_centre.diaphysis_centre(surface, position, axis_hint=self.axis_hint(),
-                                                             max_distance=max_distance)
+                                                             max_distance=max_distance, outline=outline)
+        self._show_outline(outline[0] if outline else None)
+        if centre is not None:
+            self.section_frame = (np.asarray(centre, float), np.asarray(axis, float))
         if centre is None:
             self.note = "No bone cross-section found at this point - not centred."
             return None
@@ -606,6 +610,81 @@ class CentroidLandmark(SimpleLandmark):
                 break
             q = q + delta * m
         return centre, length
+
+    # the cross-section the centre was taken from: a yellow contour in 3D and in the slice views
+    OUTLINE_PREFIX = "Doggybone cross-section "
+
+    def _outline_name(self):
+        side = self._markups_node.GetName().replace("DoggyboneFiducials", "") if self._markups_node else ""
+        return f"{self.OUTLINE_PREFIX}{side} {self.name}".replace("  ", " ")
+
+    def _show_outline(self, polydata):
+        name = self._outline_name()
+        node = slicer.mrmlScene.GetFirstNodeByName(name)
+        if polydata is None or polydata.GetNumberOfPoints() == 0:
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(False)
+            return
+        if node is None:
+            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", name)
+            node.CreateDefaultDisplayNodes()
+            display = node.GetDisplayNode()
+            display.SetColor(1.0, 0.85, 0.1)
+            display.SetLineWidth(3)
+            display.SetVisibility2D(True)
+            display.SetSliceIntersectionThickness(3)
+            node.SetSelectable(False)
+        # a thin tube instead of the bare line: a slice view in the plane of the section cuts the tube
+        # along the whole contour (a line lying IN the slice plane would not be drawn there)
+        clean = vtk.vtkCleanPolyData()                  # shared points of neighbouring segments
+        clean.SetInputData(polydata)
+        joined = vtk.vtkStripper()                      # the contour's segments -> one polyline
+        joined.SetInputConnection(clean.GetOutputPort())
+        joined.JoinContiguousSegmentsOn()
+        tube = vtk.vtkTubeFilter()
+        tube.SetInputConnection(joined.GetOutputPort())
+        tube.SetRadius(0.12)
+        tube.SetNumberOfSides(8)
+        tube.CappingOn()
+        tube.Update()
+        node.SetAndObservePolyData(tube.GetOutput())
+        node.GetDisplayNode().SetVisibility(bool(self.placed))
+
+    def show_section_in_slice(self, slice_name="Red"):
+        """Turns a slice view into the plane of the last cross-section (centred on the point), so the
+        contour lies on the CT. Returns False if there is no section yet."""
+        frame = getattr(self, "section_frame", None)
+        if frame is None or not self.placed:
+            return False
+        centre, axis = frame
+        p = self.get_position()
+        if p is not None:
+            centre = centre + float(np.dot(np.asarray(p) - centre, axis)) * axis   # the plane through the point
+        slice_node = slicer.app.layoutManager().sliceWidget(slice_name).mrmlSliceNode()
+        helper = np.array([0.0, 0.0, 1.0]) if abs(axis[2]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        x = np.cross(helper, axis)
+        x = x / np.linalg.norm(x)
+        slice_node.SetSliceToRASByNTP(*[float(v) for v in axis], *[float(v) for v in x],
+                                      *[float(v) for v in centre], 0)
+        slice_node.JumpSliceByCentering(*[float(v) for v in centre])   # the offset: through the point
+        return True
+
+    def _outline_visible(self, visible):
+        node = slicer.mrmlScene.GetFirstNodeByName(self._outline_name())
+        if node is not None and node.GetDisplayNode() is not None:
+            node.GetDisplayNode().SetVisibility(bool(visible) and bool(self.placed))
+
+    def show(self):
+        super().show()
+        self._outline_visible(True)
+
+    def hide(self):
+        super().hide()
+        self._outline_visible(False)
+
+    def delete(self):
+        self._outline_visible(False)
+        super().delete()
 
     def _move_to(self, p):
         self._markups_node.SetNthControlPointPosition(self._id, float(p[0]), float(p[1]), float(p[2]))

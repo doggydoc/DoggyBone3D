@@ -2504,6 +2504,8 @@ class MeasurementsPanel(qt.QWidget):
         self.hide_all_axes()
 
         for landmark in self.landmarks:
+            if hasattr(landmark, "_outline_visible"):
+                landmark._outline_visible(False)        # cross-section contours of the diaphysis points
             landmark._id = None
             landmark.placed = False
 
@@ -2865,9 +2867,15 @@ class LandmarkWidget(qt.QWidget):
             self.recentre_button = qt.QPushButton("Re-centre")
             self.recentre_button.setToolTip("Centre the point again at its current height (e.g. after dragging it).")
             self.recentre_button.clicked.connect(self._on_recentre)
+            self.section_button = qt.QPushButton("Show section")
+            self.section_button.setToolTip(
+                "Turns the red slice view into the plane of the cross-section the centre was taken from: the "
+                "yellow contour then lies on the CT (in the usual axial view it is cut only obliquely).")
+            self.section_button.clicked.connect(self._on_show_section)
             row = qt.QHBoxLayout()
             row.addWidget(self.centre_checkbox, 1)
             row.addWidget(self.recentre_button)
+            row.addWidget(self.section_button)
             if getattr(self.landmark, "fraction", None) is not None:
                 self.fraction_button = qt.QPushButton(f"Place at {100.0 * self.landmark.fraction:.0f} %")
                 self.fraction_button.setToolTip(
@@ -2903,6 +2911,7 @@ class LandmarkWidget(qt.QWidget):
 
     def _on_auto_centre_toggled(self, checked):
         self.landmark.auto_centre = bool(checked)
+        self.landmark._outline_visible(checked)          # the section contour only while centring
 
     def _on_recentre(self):
         if not self.landmark.placed:
@@ -2910,6 +2919,10 @@ class LandmarkWidget(qt.QWidget):
             return
         self.landmark.recentre()
         self._update_position_label()
+
+    def _on_show_section(self):
+        if not self.landmark.show_section_in_slice("Red"):
+            self.centre_note.setText("No cross-section yet - place the point (centred) or press 'Re-centre'.")
 
     def _on_place_at_fraction(self):
         message = self.landmark.place_at_fraction()

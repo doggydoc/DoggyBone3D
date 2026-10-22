@@ -57,7 +57,7 @@ def _section_segments(polydata, point, normal):
     return P[pairs]
 
 
-def section_centre(polydata, point, normal, reach=40.0, res=0.1, max_distance=6.0):
+def section_centre(polydata, point, normal, reach=40.0, res=0.1, max_distance=6.0, outline=None):
     """(centre 3D, area mm^2) of the bone cross-section in the plane (point, normal), or (None, 0).
     The section is rasterised (res mm pixels): everything enclosed by the cut outline is filled -
     the medullary canal too - and the filled region that contains `point` (or, for a point picked
@@ -104,11 +104,41 @@ def section_centre(polydata, point, normal, reach=40.0, res=0.1, max_distance=6.
         if dist[q[0], q[1]] * res > max_distance:
             return None, 0.0                               # no bone near the picked point in this plane
         label = int(regions[ia[q[0], q[1]], ib[q[0], q[1]]])
+    if outline is not None:                                # the outer contour of that region, for display
+        outline.append(_region_outline(regions == label, lo, res, origin, e1, e2))
     ii, jj = np.nonzero(regions == label)
     area = len(ii) * res * res
     cx = lo[0] + float(ii.mean()) * res
     cy = lo[1] + float(jj.mean()) * res
     return origin + cx * e1 + cy * e2, area
+
+
+def _region_outline(mask, lo, res, origin, e1, e2):
+    """Outer contour (vtkPolyData lines, 3D) of a filled 2D pixel region."""
+    nx, ny = mask.shape
+    image = vtk.vtkImageData()
+    image.SetDimensions(nx, ny, 1)
+    image.SetOrigin(float(lo[0]), float(lo[1]), 0.0)
+    image.SetSpacing(res, res, 1.0)
+    from vtk.util.numpy_support import numpy_to_vtk
+    image.GetPointData().SetScalars(numpy_to_vtk(np.ascontiguousarray(mask.astype(np.float32).ravel(order="F")),
+                                                 deep=True, array_type=vtk.VTK_FLOAT))
+    squares = vtk.vtkMarchingSquares()
+    squares.SetInputData(image)
+    squares.SetValue(0, 0.5)
+    squares.Update()
+    lines = squares.GetOutput()
+    if lines.GetNumberOfPoints() == 0:
+        return None
+    xy = vtk_to_numpy(lines.GetPoints().GetData()).astype(float)
+    world = np.asarray(origin, float) + xy[:, 0:1] * e1 + xy[:, 1:2] * e2
+    points = vtk.vtkPoints()
+    from vtk.util.numpy_support import numpy_to_vtk as _n2v
+    points.SetData(_n2v(np.ascontiguousarray(world), deep=True))
+    out = vtk.vtkPolyData()
+    out.SetPoints(points)
+    out.SetLines(lines.GetLines())
+    return out
 
 
 def local_axis(polydata, point, radius=15.0):
@@ -122,7 +152,7 @@ def local_axis(polydata, point, radius=15.0):
     return _unit(vt[0])
 
 
-def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4, max_distance=6.0):
+def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4, max_distance=6.0, outline=None):
     """(centre, axis, area) of the diaphysis at the height of `point`: area centroid of the section
     perpendicular to the local bone axis, the axis refined from the centroids at +-step mm.
     Returns (None, None, 0) if there is no bone there."""
@@ -145,7 +175,8 @@ def diaphysis_centre(polydata, point, axis_hint=None, step=5.0, iterations=4, ma
         a = a_new
         if change < 0.2:
             break
-    centre, area = section_centre(polydata, p, a, max_distance=max_distance)   # plane through the picked HEIGHT
+    centre, area = section_centre(polydata, p, a, max_distance=max_distance,   # plane through the picked HEIGHT
+                                  outline=outline)
     if centre is None:
         return None, None, 0.0
     return centre, a, area
