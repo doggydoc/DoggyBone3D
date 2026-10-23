@@ -479,10 +479,17 @@ class PlanesMixin:
             self._configure_plane_size(other, side, bone, **kwargs)
         ok, message = self._sync_other_plane(side, bone)
         self._update_plane_handle_interactivity()
+        if not ok:
+            # the SECOND plane could not be derived - say why (the wedge advice below would hide it:
+            # both status names point to the same line)
+            self.osteotomy_status.setStyleSheet(STATUS_WARN_STYLE)
+            self.osteotomy_status.setText("SECOND plane not derived: " + message)
+            self._refresh_views()
+            return
         self.osteotomy_status.setText(message)
         advice = self._cwo_wedge_advice(side, bone) if hasattr(self, "_cwo_wedge_advice") else ""
         if advice and hasattr(self, "correction_status"):
-            self.correction_status.setText(advice)
+            self.correction_status.setText(message + "\n" + advice)
         self._refresh_views()
 
 
