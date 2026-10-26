@@ -134,12 +134,16 @@ class SegmentationMixin:
 
     # --- remove a whole bone (patella, fabella ...) by clicking it in 3D ------------------------------
     def onRemoveBoneToggled(self, checked):
-        view = slicer.app.layoutManager().threeDWidget(0).threeDView()
-        interactor = view.interactor()
         tag = getattr(self, "_remove_bone_tag", None)
         if tag is not None:
-            interactor.RemoveObserver(tag)
+            old = getattr(self, "_remove_bone_interactor", None)
+            try:
+                (old or main_3d_widget().threeDView().interactor()).RemoveObserver(tag)
+            except Exception:
+                pass
             self._remove_bone_tag = None
+        interactor = main_3d_widget().threeDView().interactor()          # the VISIBLE 3D view
+        self._remove_bone_interactor = interactor
         if not checked:
             self.segmentation_status.setText("Bone removal off.")
             return
@@ -156,7 +160,7 @@ class SegmentationMixin:
         bone = self._get_bone_polydata()
         if bone is None:
             return
-        renderer = slicer.app.layoutManager().threeDWidget(0).threeDView().renderWindow().GetRenderers().GetFirstRenderer()
+        renderer = caller.GetRenderWindow().GetRenderers().GetFirstRenderer()     # the view that was clicked
         ends = []
         for z in (0.0, 1.0):
             renderer.SetDisplayPoint(float(x), float(y), z)

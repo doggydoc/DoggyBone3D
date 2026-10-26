@@ -59,6 +59,20 @@ _STATUS_OK = re.compile(
     re.IGNORECASE)
 
 
+
+def main_3d_widget():
+    """The 3D view the user works in: 'View1' if it is visible, otherwise the first VISIBLE 3D view.
+    (threeDWidget(0) can be a hidden view - e.g. the second view created for the compare layout -
+    and mouse tools attached to it would never see a click.)"""
+    layout_manager = slicer.app.layoutManager()
+    visible = [layout_manager.threeDWidget(i) for i in range(layout_manager.threeDViewCount)
+               if layout_manager.threeDWidget(i) is not None and layout_manager.threeDWidget(i).isVisible()]
+    for widget in visible:
+        if widget.mrmlViewNode() is not None and widget.mrmlViewNode().GetName() == "View1":
+            return widget
+    return visible[0] if visible else layout_manager.threeDWidget(0)
+
+
 def status_style_for(text):
     """STATUS_WARN_STYLE for a problem, STATUS_OK_STYLE for a success, "" for plain information."""
     text = text or ""

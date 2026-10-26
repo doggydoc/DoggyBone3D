@@ -365,7 +365,7 @@ class GuideEditMixin:
 
     def _install_guide_observers(self):
         self._remove_guide_observers()
-        view = slicer.app.layoutManager().threeDWidget(0).threeDView()
+        view = main_3d_widget().threeDView()          # the VISIBLE 3D view
         interactor = view.interactor()
         self._guide_view = view
         self._guide_tags = {}

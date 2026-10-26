@@ -1494,7 +1494,7 @@ class PinsMixin:
     def _install_pin_picker(self):
         self._remove_pin_picker()
         try:
-            view = slicer.app.layoutManager().threeDWidget(0).threeDView()
+            view = main_3d_widget().threeDView()      # the VISIBLE 3D view
         except Exception:
             return
         interactor = view.interactor()

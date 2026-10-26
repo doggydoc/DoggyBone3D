@@ -1243,7 +1243,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             # reliably do for a VTK render view.
             import ScreenCapture
             capture_logic = ScreenCapture.ScreenCaptureLogic()
-            view = slicer.app.layoutManager().threeDWidget(0).threeDView()
+            view = main_3d_widget().threeDView()
             capture_logic.captureImageFromView(view, file_name)
             self.correction_status.setText(f"Screenshot saved: {file_name}")
         except Exception as e:
@@ -1443,7 +1443,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             button.setChecked(False)                  # removes the observer (onRemoveBoneToggled)
         elif getattr(self, "_remove_bone_tag", None) is not None:
             try:
-                slicer.app.layoutManager().threeDWidget(0).threeDView().interactor().RemoveObserver(
+                (getattr(self, "_remove_bone_interactor", None)
+                 or slicer.app.layoutManager().threeDWidget(0).threeDView().interactor()).RemoveObserver(
                     self._remove_bone_tag)
             except Exception:
                 pass
@@ -2129,7 +2130,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
         # Center the 3d View on the scene
         layout_manager = slicer.app.layoutManager()
-        three_d_Widget = layout_manager.threeDWidget(0)
+        three_d_Widget = main_3d_widget()
         three_d_view = three_d_Widget.threeDView()
         three_d_view.resetFocalPoint()
 
