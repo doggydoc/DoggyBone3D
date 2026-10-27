@@ -539,7 +539,8 @@ class PinsMixin:
         bone = self._cut_bone_part(segment, polydata, origin, s_dir)
         inside = vtk.vtkImplicitPolyDataDistance()
         inside.SetInput(bone)
-        if inside.EvaluateFunction([float(v) for v in centre]) > 0.0:
+        if inside.EvaluateFunction([float(v) for v in centre]) > 0.0 \
+                and not self._between_cortices(bone, centre, direction):
             # the row line runs out of the bone here (e.g. distal femur: the condyles recede) - the pin
             # only has to pass THROUGH the bone: slide its centre along its own axis (same pin line, same
             # distance from the cut) into the middle of the nearest bone chord
@@ -552,6 +553,23 @@ class PinsMixin:
         if "error" not in pin:
             pin["segment"], pin["centre"] = segment, np.asarray(centre, float)
         return pin
+
+    @staticmethod
+    def _between_cortices(bone, centre, direction):
+        """True if the pin axis through `centre` meets the bone on BOTH sides of it - the centre lies in
+        the medullary canal of a hollow segmentation (cortex only), which counts as 'outside' the
+        surface but is the right place for a pin."""
+        d = np.asarray(direction, float)
+        d = d / max(np.linalg.norm(d), 1e-9)
+        c = np.asarray(centre, float)
+        tree = vtk.vtkOBBTree()
+        tree.SetDataSet(bone)
+        tree.BuildLocator()
+        points = vtk.vtkPoints()
+        tree.IntersectWithLine(list(c - 40.0 * d), list(c + 40.0 * d), points, None)
+        ts = [float((np.array(points.GetPoint(i)) - c) @ d) for i in range(points.GetNumberOfPoints())]
+        near = [t for t in ts if abs(t) <= 25.0]
+        return any(t < 0.0 for t in near) and any(t > 0.0 for t in near)
 
     def _pin_axis_chord_centre(self, bone, inside, centre, direction, reach=10.0):
         """Middle of the bone chord nearest to `centre` on the pin axis (centre + t * direction), at
