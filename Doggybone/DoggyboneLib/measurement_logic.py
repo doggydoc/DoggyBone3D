@@ -65,6 +65,15 @@ class BaseMeasurement:
     def get_axes(self):
         return self.axes
 
+    # Optional: {axis label: (landmark name, landmark name)} for axes that are simply the line between
+    # two landmarks - these are drawn as soon as both are placed, before the measurement is complete.
+    AXIS_ENDPOINTS = {}
+
+    def partial_axes(self, placed_points):
+        """{label: (start, end)} of the AXIS_ENDPOINTS whose two landmarks are placed."""
+        return {label: (placed_points[a], placed_points[b]) for label, (a, b) in self.AXIS_ENDPOINTS.items()
+                if a in placed_points and b in placed_points}
+
     def set_side(self, side):
         self.side = side
 

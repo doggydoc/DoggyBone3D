@@ -50,6 +50,8 @@ def _csv_delimiter_for_file(handle):
 # (measurement_logic, landmark_logic) before the modules that do `from ... import *` on them
 # (measurements, landmarks), so the re-import below picks up the refreshed content.
 import importlib
+from DoggyboneLib import helpers
+importlib.reload(helpers)
 from DoggyboneLib import measurement_logic
 importlib.reload(measurement_logic)
 from DoggyboneLib import landmark_logic
@@ -60,12 +62,18 @@ importlib.reload(osteotomy_logic)
 importlib.reload(guide_logic)
 from DoggyboneLib import laterality
 importlib.reload(laterality)
+from DoggyboneLib import section_logic
+importlib.reload(section_logic)
 from DoggyboneLib import corrected_ct
 importlib.reload(corrected_ct)
 from DoggyboneLib import measurements
 importlib.reload(measurements)
 from DoggyboneLib import landmarks
 importlib.reload(landmarks)
+from DoggyboneLib import bone_config
+importlib.reload(bone_config)
+from DoggyboneLib import bones
+importlib.reload(bones)
 
 from DoggyboneLib.measurements import MEASUREMENTS
 from DoggyboneLib.landmarks import LANDMARKS
@@ -81,6 +89,9 @@ importlib.reload(importlib.import_module('DoggyboneUI.ui_segmentation'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_edit'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_build'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_pins'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_limb_bar'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_centering'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_condyle_circles'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_saw'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_tibia'))
 from DoggyboneUI.ui_planes import PlanesMixin
@@ -91,10 +102,21 @@ from DoggyboneUI.ui_guide_build import GuideBuildMixin
 from DoggyboneUI.ui_pins import PinsMixin
 from DoggyboneUI.ui_saw import SawMixin
 from DoggyboneUI.ui_tibia import TibiaTargetsMixin
+from DoggyboneUI.ui_limb_bar import LimbBarMixin
+from DoggyboneUI.ui_centering import CenteringMixin
+from DoggyboneUI.ui_condyle_circles import CondyleCirclesMixin
 
 #
 # Doggybone
 #
+
+
+def _wrap_to_panel(*labels):
+    """Word-wrapped labels follow the panel width. Without this a long text (e.g. a landmark hint)
+    reports a wide size hint, and Slicer widens the whole module panel to fit it - the slice views
+    are then pushed off screen. Also applies to labels on hidden pages of a stacked widget."""
+    for label in labels:
+        label.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
 
 class Doggybone(ScriptedLoadableModule):
   """Uses ScriptedLoadableModule base class, available at:
@@ -130,7 +152,7 @@ MIT License.
       self.parent.icon = qt.QIcon(iconPath)
 
 
-class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
+class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
                       ScriptedLoadableModuleWidget):
     """
     Base widget that manages the measurement groups
@@ -138,21 +160,37 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
 
     SEGMENTATION_NODE_NAME = "Doggybone Bone Segmentation"
 
-    # Which existing angle measurement feeds the "suggest" button for each correction and bone -
-    # see MeasurementsPanel/measurement_logic.py for where these names/descriptions come from.
-    WEDGE_MEASUREMENT_NAME = {"Femur": "aLDFA (Varus/Valgus Femur)", "Tibia": "Varus Valgus Tibia"}
-    ROTATION_MEASUREMENT_NAME = {"Femur": "Antetorsion", "Tibia": "Tibia Torsion"}
-    # Default target ("Zielwert") each measurement should read after correction, per bone.
-    # Femur: aLDFA target. Tibia: frontal angle between the two joint lines (mMPTA + mMDTA - 180,
-    # torsion-free), target = canine reference mMPTA + mMDTA - 180 (see measurement_logic.py). The rotation targets are placeholders (0°) - this
-    # module has no reliable breed/bone-specific reference for normal antetorsion/tibial torsion,
-    # so these MUST be reviewed and set by the vet rather than trusted as clinical defaults.
-    WEDGE_TARGET_DEFAULT = {"Femur": 94.0, "Tibia": round(measurement_logic.TIBIA_MPTA_REF_DEG + measurement_logic.TIBIA_MDTA_REF_DEG - 180.0, 1)}   # aLDFA target (canine reference ~94°)
-    ROTATION_TARGET_DEFAULT = {"Femur": 25.0, "Tibia": 0.0}   # femoral antetorsion target
-    # Landmark pair used as the medial->lateral reference direction at the osteotomy level -
-    # reuses landmarks already placed for the angle measurements rather than adding new ones.
-    ML_LANDMARKS = {"Femur": ("medial femur condyle", "lateral femur condyle"),
-                     "Tibia": ("condylus medialis tibiae", "condylus lateralis tibiae")}
+    # The bones of this limb that can be osteotomised, with everything the generic planning /
+    # correction / guide code needs to know about each (DoggyboneLib/bones.py, bone_config.py).
+    BONES = bones.BONES
+
+    def _bone_config(self, name=None):
+        """BoneConfig of the named bone (default: the bone selected for the osteotomy)."""
+        if name is None:
+            box = getattr(self, "osteotomy_bone", None)
+            name = box.currentText if box is not None else ""
+        try:
+            return self.BONES.get(name)
+        except KeyError:            # e.g. selector not filled yet
+            return self.BONES.default
+
+    # Per-bone lookups kept as dictionaries for the existing callers; filled from BONES.
+    # Which measurement feeds the "suggest" button / prediction for each correction and bone.
+    WEDGE_MEASUREMENT_NAME = property(lambda self: {b.name: b.wedge_measurement for b in self.BONES})
+    ROTATION_MEASUREMENT_NAME = property(lambda self: {b.name: b.rotation_measurement for b in self.BONES})
+    # Default target ("Zielwert") each measurement should read after correction, per bone. The
+    # rotation targets are placeholders - they MUST be reviewed and set by the vet.
+    WEDGE_TARGET_DEFAULT = property(lambda self: {b.name: b.wedge_target_default for b in self.BONES})
+    ROTATION_TARGET_DEFAULT = property(lambda self: {b.name: b.rotation_target_default for b in self.BONES})
+    # Landmark pair used as the medial->lateral reference direction at the osteotomy level.
+    ML_LANDMARKS = property(lambda self: {b.name: b.ml_landmarks for b in self.BONES})
+
+    # ---- the limb this widget plans (a module for another limb can subclass this widget and change these) ----
+    LANDMARK_SET = LANDMARKS
+    MEASUREMENT_SET = MEASUREMENTS
+    FIDUCIAL_NODE_NAMES = {"Left": "DoggyboneFiducialsLeft", "Right": "DoggyboneFiducialsRight"}
+    LIMB_LABEL = "hind limb"
+    LATERALITY_SUPPORTED = True          # side check from the femur / tibia landmarks (laterality.py)
 
     def setup(self):
         ScriptedLoadableModuleWidget.setup(self)
@@ -162,12 +200,20 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if layout_manager is not None:
             layout_manager.layoutChanged.connect(self._on_layout_changed)
 
+        # side and level (femur / tibia / overview) for the whole module
+        self._build_limb_bar()
+
         #####################
         # GUI and connections
         #####################
         # Automatic Segmentation
         segmentation_collapsible_button = ctk.ctkCollapsibleButton()
         segmentation_collapsible_button.text = "3D Segmentation"
+        # Its size hint must not set the module panel's width: the embedded segment editor asks for
+        # ~520 px, Slicer then makes the panel ~580 px wide, and with the three slice views the main
+        # window no longer fits a laptop screen (1512 pt). macOS / Qt 5 then stop redrawing the window
+        # properly: module switches seem to need two clicks, menus and panels show old content.
+        segmentation_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         segmentation_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #2b6cb0; color: white; font-weight: bold; }")
         self.layout.addWidget(segmentation_collapsible_button)
@@ -360,6 +406,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # be shown/hidden as one unit.
         measurements_collapsible_button = ctk.ctkCollapsibleButton()
         measurements_collapsible_button.text = "Measurements"
+        # long landmark / measurement texts must wrap at the panel width, not widen the panel
+        measurements_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         measurements_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #6b46c1; color: white; font-weight: bold; }")
         self.layout.addWidget(measurements_collapsible_button)
@@ -372,9 +420,11 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # Reuse existing landmark lists (e.g. after "Reload") instead of adding a new pair each
         # time, and re-link landmarks that are already placed in them.
         self.left_panel = MeasurementsPanel('left',
-            self._get_or_create_fiducial_node("DoggyboneFiducialsLeft"), self)
+            self._get_or_create_fiducial_node(self.FIDUCIAL_NODE_NAMES["Left"]), self,
+            landmark_set=self.LANDMARK_SET, measurement_set=self.MEASUREMENT_SET)
         self.right_panel = MeasurementsPanel('right',
-            self._get_or_create_fiducial_node("DoggyboneFiducialsRight"), self)
+            self._get_or_create_fiducial_node(self.FIDUCIAL_NODE_NAMES["Right"]), self,
+            landmark_set=self.LANDMARK_SET, measurement_set=self.MEASUREMENT_SET)
         self._relink_existing_landmarks(self.left_panel)
         self._relink_existing_landmarks(self.right_panel)
         # A closed scene (File > Close Scene) deletes the landmark lists - the panels would then
@@ -393,7 +443,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self.side_stack.addWidget(self.right_panel)
 
         side_row = qt.QHBoxLayout()
-        side_row.addWidget(qt.QLabel("Side"))
+        self._measurement_side_label = qt.QLabel("Side")
+        side_row.addWidget(self._measurement_side_label)
         side_row.addWidget(self.side_selector)
         side_row.addSpacing(16)
         side_row.addWidget(qt.QLabel("Bone opacity"))
@@ -419,7 +470,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         laterality_row.addWidget(self.laterality_move_button)
         laterality_row_widget = qt.QWidget()
         laterality_row_widget.setLayout(laterality_row)
-        # (added at the END of the section, below the landmark panels - see below)
+        # (the status row is added at the END of the section, below the landmark panels - see below)
+        # shaft-axis points centred in the bone cross-section (limbs that define such pairs)
+        self._build_centering(measurements_layout)
+        self._build_condyle_circles(measurements_layout)
 
         # slice views aligned to the BONE instead of the scanner (the limb is never lying exactly
         # along the scanner axes): red = perpendicular to the shaft axis, green = frontal plane
@@ -427,7 +481,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         align_row = qt.QHBoxLayout()
         align_row.addWidget(qt.QLabel("Slice views"))
         self.view_align_selector = qt.QComboBox()
-        self.view_align_selector.addItems(["Scanner", "Aligned to femur", "Aligned to tibia"])
+        self.view_align_selector.addItems(["Scanner"] + [f"Aligned to {name.lower()}" for name in self.BONES.names])
         self.view_align_selector.setToolTip(
             "Scanner: the usual axial / coronal / sagittal views of the CT.\n"
             "Aligned: red = perpendicular to the shaft axis, green = frontal plane (shaft axis + "
@@ -481,7 +535,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         osteotomy_form_layout.addRow("Side", self.osteotomy_side)
 
         self.osteotomy_bone = qt.QComboBox()
-        self.osteotomy_bone.addItems(["Femur", "Tibia"])
+        self.osteotomy_bone.addItems(self.BONES.names)
         self.osteotomy_bone.currentIndexChanged.connect(self._on_osteotomy_bone_changed)
         osteotomy_form_layout.addRow("Bone", self.osteotomy_bone)
 
@@ -722,6 +776,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         guide_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #718096; color: white; font-weight: bold; }")
         guide_collapsible_button.collapsed = True
+        self._guide_collapsible = guide_collapsible_button
         guide_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         self.layout.addWidget(guide_collapsible_button)
         self._guide_collapsible = guide_collapsible_button
@@ -1231,6 +1286,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         self._guide_observers = []
         self._guide_drag = False
         self._guide_active_tool = None
+        self._finish_limb_bar()
 
         # After a full UI rebuild (this whole setup() re-runs on every module Reload), Qt/macOS
         # occasionally doesn't repaint the panel immediately - it looks frozen (though it isn't;
@@ -1342,7 +1398,14 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         if getattr(self, "_scene_reset_pending", False):
             return
         self._scene_reset_pending = True
-        qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule("Doggybone"))
+        # Rebuild only while this module is shown: a reload in the background (e.g. a DICOM import
+        # while another module is open) detaches the panel from the module panel on macOS - it then
+        # appears as a separate window and the module menu no longer switches to it. Otherwise the
+        # rebuild waits until the module is entered.
+        if slicer.util.selectedModule() == self.moduleName:
+            qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule(self.moduleName))
+        else:
+            self._reload_on_enter = True
 
     PANEL_SPACING = 3        # px between buttons / fields - the same as in the segmentation panel
 
@@ -1361,6 +1424,22 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                     layout.setVerticalSpacing(self.PANEL_SPACING)
                 elif isinstance(layout, qt.QBoxLayout):
                     layout.setSpacing(self.PANEL_SPACING)
+
+    def _redraw_module_panel(self):
+        """macOS: after switching modules the module panel sometimes keeps showing the previous module
+        until the window is clicked again or loses focus - repaint it once the switch is done."""
+        def redraw():
+            try:
+                window = slicer.util.mainWindow()
+                if self.parent is not None:
+                    self.parent.update()
+                if window is not None:
+                    window.update()
+                    window.repaint()
+            except Exception:
+                logging.exception("Doggybone: module panel redraw failed (continuing)")
+        for delay in (0, 100, 300):
+            qt.QTimer.singleShot(delay, redraw)
 
     def _on_layout_changed(self, *_args):
         if hasattr(self, "_compare_layout_changed"):
@@ -1382,6 +1461,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             slicer.app.layoutManager().layoutChanged.disconnect(self._on_layout_changed)
         except Exception:
             pass
+        self._remove_centering_observers()
+        self._remove_condyle_circle_observers()
         for node, tag in getattr(self, "_landmark_observers", []):
             try:
                 node.RemoveObserver(tag)
@@ -1423,7 +1504,14 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # relies on it.
         if hasattr(ScriptedLoadableModuleWidget, "enter"):
             ScriptedLoadableModuleWidget.enter(self)
+        self._redraw_module_panel()
+        if getattr(self, "_reload_on_enter", False):           # scene was closed / loaded meanwhile
+            self._reload_on_enter = False
+            qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule(self.moduleName))
+            return
         self._current_panel().activate()
+        self._schedule_condyle_circles()
+        self._schedule_waist()
         self._ensure_landmark_observers()        # a new case / new landmark node is observed too
         self._schedule_values_refresh()          # current values / calculated corrections up to date
         self._install_pin_picker()               # reduction guide: click a pin to select / move it
@@ -1501,6 +1589,23 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             except Exception:
                 pass
 
+    def _rotation_target_default(self, bone):
+        """The bone's default torsion target; None in the bone config = no reference value known:
+        start with the CURRENT measured value (no torsion correction until the vet enters a target,
+        e.g. from the contralateral limb)."""
+        default = self.ROTATION_TARGET_DEFAULT[bone]
+        if default is not None:
+            return default
+        try:
+            measurement = self._get_measurement_by_name(self._current_panel(), self.ROTATION_MEASUREMENT_NAME[bone])
+            if measurement is not None:
+                ready, value, description = measurement()
+                if ready:
+                    return float(self._signed_rotation_value(bone, value, description))
+        except Exception:
+            logging.exception("Doggybone: torsion target default failed (continuing)")
+        return 0.0
+
     def _current_panel(self):
         return self.side_stack.currentWidget()
 
@@ -1510,6 +1615,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             old_panel.deactivate()
         self.side_stack.setCurrentIndex(index)
         self._current_panel().activate()
+        self._schedule_condyle_circles()
+        self._schedule_waist()
         self._ensure_landmark_observers()
         # measuring a leg whose side has nothing planned yet: the osteotomy side follows, so the
         # landmarks placed here feed the calculated corrections (the other side keeps its plan when
@@ -1571,6 +1678,10 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                               f"list (swapped with landmarks of the same bone already there). Positions and sphere "
                               f"radii are kept. Osteotomy planes and guides are NOT moved.")
             button.setVisible(True)
+        if not self.LATERALITY_SUPPORTED:          # no automatic side check for this limb (transfer stays)
+            label.setText("")
+            label.setVisible(False)
+            return
         label.setToolTip(laterality.summary(result) or
                          "The side is computed from the femur landmarks (shaft midpoints + condyles) or the "
                          "tibia landmarks (axis points, condyles, cranial / caudal plateau point).")
@@ -1600,9 +1711,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             label.setStyleSheet(STATUS_OK_STYLE)
             label.setText(prefix + f"\u2713 Side check: the landmarks form a {current.lower()} limb.")
 
-    @staticmethod
-    def _landmark_bone(name):
-        return "Femur" if "femur" in (name or "").lower() else "Tibia"
+    def _landmark_bone(self, name):
+        return self.BONES.for_landmark(name).name
 
     def onLateralityMove(self, bones=None):
         # transferred positions are kept as they are (percentage points do not follow head / condyles)
@@ -1690,19 +1800,48 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             stored[previous] = (float(self.target_wedge_value.value), float(self.target_rotation_value.value))
         self._targets_per_bone = stored
         self._target_bone = bone
-        wedge, rotation = stored.get(bone, (self.WEDGE_TARGET_DEFAULT[bone], self.ROTATION_TARGET_DEFAULT[bone]))
+        wedge, rotation = stored.get(bone, (self.WEDGE_TARGET_DEFAULT[bone], self._rotation_target_default(bone)))
         for box, value in ((self.target_wedge_value, wedge), (self.target_rotation_value, rotation)):
             was_blocked = box.blockSignals(True)
             box.setValue(value)
             box.blockSignals(was_blocked)
         self._on_target_values_changed()
-        self._set_tibia_mode_visible(bone == "Tibia")
+        config = self._bone_config(bone)
+        form = getattr(self, "_osteotomy_form_layout", None)
+        wedge_label = form.labelForField(self.target_wedge_value) if form is not None else None
+        if wedge_label is not None:
+            wedge_label.setText(config.wedge_target_label)
+        self.target_wedge_value.setToolTip(config.wedge_target_tooltip)
+        self._set_tibia_mode_visible(config.target_table)
         box = getattr(self, "femur_sagittal_value", None)
         if box is not None:
-            box.setVisible(bone == "Femur")
+            box.setVisible(config.sagittal_input)
             label = self._osteotomy_form_layout.labelForField(box)
+            target_mode = bool(config.sagittal_target_measurement)
             if label is not None:
-                label.setVisible(bone == "Femur")
+                label.setVisible(config.sagittal_input)
+                label.setText("Sagittal target" if target_mode else "Sagittal (manual)")
+            if target_mode:
+                box.setRange(-45.0, 90.0)
+                box.setToolTip(
+                    "TARGET procurvatum between the partial axes after the correction (+ = procurvatum, "
+                    "0 = partial axes parallel, - = recurvatum). Starts at the current value (no sagittal "
+                    "correction); frontal, sagittal and torsion are solved together on the moved landmarks.")
+                current = self._current_sagittal_value(self.osteotomy_side.currentText.lower(), bone) \
+                    if hasattr(self, "_current_sagittal_value") else None
+                was_blocked = box.blockSignals(True)
+                box.setValue(round(current, 1) if current is not None else 0.0)
+                box.blockSignals(was_blocked)
+            else:
+                box.setRange(-45.0, 45.0)
+                box.setToolTip(
+                    "Manual sagittal correction of the femur (no measurement needed), about the medio-lateral axis "
+                    "at the cut. + corrects a PROCURVATUM (the far end of the moving fragment goes cranially), "
+                    "- corrects a RECURVATUM. Combined with the varus/valgus and torsion correction; the frontal and "
+                    "torsion values are re-solved so their targets are still met.")
+                was_blocked = box.blockSignals(True)
+                box.setValue(0.0)
+                box.blockSignals(was_blocked)
         self._update_plane_handle_interactivity()
         if hasattr(self, "_on_guide_bone_switched") and hasattr(self, "guide_status"):
             self._on_guide_bone_switched()
@@ -1744,7 +1883,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         panel = self.left_panel if side == "left" else self.right_panel
-        if bone == "Tibia" and hasattr(self, "_refresh_tibia_current"):
+        if self._bone_config(bone).target_table and hasattr(self, "_refresh_tibia_current"):
             self._refresh_tibia_current()
 
         current_parts = []
@@ -1780,8 +1919,8 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                     if not landmark.placed and landmark.name not in missing:
                         missing.append(landmark.name)
             shown = missing[:8]
-            missing_text = "".join(f"\n  \u2022 {name}" for name in shown) \
-                + (f"\n  \u2026 and {len(missing) - len(shown)} more" if len(missing) > len(shown) else "")
+            missing_text = "".join(f"\n  • {name}" for name in shown) \
+                + (f"\n  … and {len(missing) - len(shown)} more" if len(missing) > len(shown) else "")
             self.current_values_label.setText(
                 " | ".join(current_parts) + (f"\nMissing ({len(missing)}):{missing_text}" if missing else "")
                 if current_parts else
@@ -1813,10 +1952,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         # Convert the magnitude-only measurement into a signed anatomical value. Target values
         # are entered in the positive named direction (Antetorsion for femur; internal torsion for
         # tibia). This keeps the UI clinical while preserving a deterministic transform sign.
-        if bone == "Femur":
-            current_signed = value if description == "Antetorsion" else -value
-        else:
-            current_signed = value if description.startswith("Internal") else -value
+        current_signed = self._bone_config(bone).signed_rotation(value, description)
         target_signed = self.target_rotation_value.value
         return True, target_signed - current_signed, (
             f"{name}: current {current_signed:+.1f}°, target {target_signed:+.1f}°")
@@ -1967,7 +2103,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 {"Red": node.SetOrientationToAxial, "Green": node.SetOrientationToCoronal,
                  "Yellow": node.SetOrientationToSagittal}[name]()
             return
-        bone = "Femur" if "femur" in choice else "Tibia"
+        bone = self.BONES.for_text(choice).name
         side = self.side_selector.currentText.lower()
         origin, shaft, error = self._get_anatomical_axis(side, bone)
         if error:
@@ -2064,7 +2200,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
                 node.SetNthControlPointLabel(i, landmark.name)
             landmark._id = i
             landmark.placed = True
-            node.SetNthControlPointLocked(i, True)
+            node.SetNthControlPointLocked(i, not getattr(landmark, "always_movable", False))
             radius_text = node.GetAttribute(f"Doggybone.radius.{landmark.name}")
             if radius_text and hasattr(landmark, "radius"):
                 try:
@@ -2175,7 +2311,8 @@ class MeasurementsPanel(qt.QWidget):
     directly in the module's own sidebar via a side selector + stacked widget, so the whole
     module lives in a single page next to the 3D/slice views with no separate window at all.
     '''
-    def __init__(self, side, markup_node_id, base_widget):
+    def __init__(self, side, markup_node_id, base_widget, landmark_set=None, measurement_set=None):
+        # landmark_set / measurement_set: the limb's landmarks and measurement classes (default: hind limb)
         super().__init__()
 
         self.markup_node_id = markup_node_id
@@ -2245,7 +2382,7 @@ class MeasurementsPanel(qt.QWidget):
         self.delete_all_button.setAutoDefault(False)
 
         # Create deep-copy of all landmarks for this side
-        self.landmarks = deepcopy(LANDMARKS)
+        self.landmarks = deepcopy(LANDMARKS if landmark_set is None else landmark_set)
         for landmark in self.landmarks:
             landmark.set_markups_node_id(self.markup_node_id)
         # percentage points (femur midpoint 33 % / 50 %): when head / condyles change, a note asks for
@@ -2263,7 +2400,7 @@ class MeasurementsPanel(qt.QWidget):
                         by_name[name].add_change_callback(lambda lm=landmark: lm.follow_ends())
 
         # Create all measurements
-        for measurement in MEASUREMENTS:
+        for measurement in (MEASUREMENTS if measurement_set is None else measurement_set):
             m = measurement()
             m.set_side(self.side)
             m.register_landmarks(self.landmarks)
@@ -2385,6 +2522,28 @@ class MeasurementsPanel(qt.QWidget):
                                      "description": result_string})
         
 
+    def set_visible_measurements(self, names, active=True):
+        """Show only the measurements named in `names` in the list (None or empty: all). If the
+        current one is hidden, the first visible one becomes current - enabled only on the active
+        panel (the other side's panel must not start placing landmarks)."""
+        visible = []
+        for i in range(self.measurement_stack.count):
+            name = self.measurement_stack.widget(i).measurement.name
+            hidden = bool(names) and name not in names
+            self.measurement_list.setRowHidden(i, hidden)
+            if not hidden:
+                visible.append(i)
+        current = self.measurement_list.currentRow
+        if not visible or current in visible or current == -1:      # -1: activate() picks the first visible
+            return
+        if active:
+            self.measurement_list.setCurrentRow(visible[0])          # -> _change_row (enable / disable)
+        else:
+            was_blocked = self.measurement_list.blockSignals(True)
+            self.measurement_list.setCurrentRow(visible[0])
+            self.measurement_list.blockSignals(was_blocked)
+            self.measurement_stack.setCurrentIndex(visible[0])
+
     def _change_row(self, i):
         self.measurement_stack.currentWidget().disable()
         self.measurement_stack.setCurrentIndex(i)
@@ -2422,7 +2581,8 @@ class MeasurementsPanel(qt.QWidget):
         node.GetDisplayNode().SetVisibility(True)
 
     def show_sphere(self, label, center, radius):
-        if not self.spheres_visible:
+        marker = str(label).startswith("CORA")          # CORA marker: a point, not a fitted sphere
+        if not self.spheres_visible and not marker:
             self.hide_sphere(label)
             return
 
@@ -2447,6 +2607,11 @@ class MeasurementsPanel(qt.QWidget):
         sphere_source.SetPhiResolution(32)
         sphere_source.Update()
         node.SetAndObservePolyData(sphere_source.GetOutputDataObject(0))
+        if marker:                                       # opaque, red, always on top of the bone surface
+            display_node = node.GetDisplayNode()
+            display_node.SetColor(1.0, 0.15, 0.15)
+            display_node.SetOpacity(1.0)
+            display_node.SetSliceIntersectionThickness(3)
         self._show_unless_original_hidden(node)
 
     def hide_sphere(self, label):
@@ -2490,11 +2655,42 @@ class MeasurementsPanel(qt.QWidget):
         line_source.SetPoint2(float(end[0]), float(end[1]), float(end[2]))
         tube_filter = vtk.vtkTubeFilter()
         tube_filter.SetInputConnection(line_source.GetOutputPort())
-        tube_filter.SetRadius(1.0)
+        tube_filter.SetRadius(float(getattr(self.base_widget, "AXIS_TUBE_RADIUS", 1.0)))
         tube_filter.SetNumberOfSides(12)
         tube_filter.Update()
         node.SetAndObservePolyData(tube_filter.GetOutputDataObject(0))
         node.GetDisplayNode().SetColor(*color)
+        self._show_unless_original_hidden(node)
+
+    def show_plane(self, label, corners, color, opacity=0.25):
+        """Translucent rectangle (e.g. a frontal plane), kept with the axis nodes (shown / hidden with them)."""
+        if not self.axes_visible:
+            self.hide_axis(label)
+            return
+        node = self.axis_nodes.get(label)
+        if node is None:
+            node = slicer.mrmlScene.GetFirstNodeByName(self._axis_node_name(label))
+        if node is None:
+            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", self._axis_node_name(label))
+            node.CreateDefaultDisplayNodes()
+            node.GetDisplayNode().SetVisibility2D(False)
+            node.GetDisplayNode().BackfaceCullingOff()
+        self.axis_nodes[label] = node
+        points = vtk.vtkPoints()
+        polygon = vtk.vtkPolygon()
+        polygon.GetPointIds().SetNumberOfIds(len(corners))
+        for i, c in enumerate(corners):
+            points.InsertNextPoint(float(c[0]), float(c[1]), float(c[2]))
+            polygon.GetPointIds().SetId(i, i)
+        cells = vtk.vtkCellArray()
+        cells.InsertNextCell(polygon)
+        polydata = vtk.vtkPolyData()
+        polydata.SetPoints(points)
+        polydata.SetPolys(cells)
+        node.SetAndObservePolyData(polydata)
+        display = node.GetDisplayNode()
+        display.SetColor(*color)
+        display.SetOpacity(opacity)
         self._show_unless_original_hidden(node)
 
     def hide_axis(self, label):
@@ -2591,7 +2787,9 @@ class MeasurementsPanel(qt.QWidget):
             # enable() on the newly-selected measurement - don't call it again below, or
             # start_interaction() runs twice without an intervening stop_interaction(),
             # registering duplicate observers.
-            self.measurement_list.setCurrentRow(0)
+            first = next((i for i in range(self.measurement_list.count)
+                          if not self.measurement_list.isRowHidden(i)), 0)     # bone filter of the bar
+            self.measurement_list.setCurrentRow(first)
         else:
             current_widget = self.measurement_stack.currentWidget()
             if current_widget is not None:
@@ -2651,6 +2849,7 @@ class MeasurementWidget(qt.QWidget):
         self.measurement_label.setWordWrap(True)
         self.axes_label = qt.QLabel("")
         self.axes_label.setWordWrap(True)
+        _wrap_to_panel(self.name_label, self.description_label, self.measurement_label, self.axes_label)
         
         layout = qt.QFormLayout()
         layout.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
@@ -2742,15 +2941,31 @@ class MeasurementWidget(qt.QWidget):
                         self.dialog.show_axis(label, start, end, color)
                         r, g, b = [int(round(c * 255)) for c in color]
                         legend_parts.append(f'<span style="color:rgb({r},{g},{b})">&#9632;</span> {label}')
+                    planes = self.measurement.get_planes() if hasattr(self.measurement, "get_planes") else {}
+                    for label, (corners, color) in planes.items():
+                        self.dialog.show_plane(label, corners, color)
                     self.axes_label.setText("<br>".join(legend_parts))
                 else:
+                    for label in getattr(self.measurement, "PLANE_LABELS", []):
+                        self.dialog.hide_axis(label)
                     self.measurement_label.setText(result_string)
                     self.measurement_label.setStyleSheet(STATUS_WARN_STYLE)
                     self.axes_label.setText("")
                     for label in self.measurement.SPHERE_LABELS:
                         self.dialog.hide_sphere(label)
-                    for label in self.measurement.AXIS_LABELS:
-                        self.dialog.hide_axis(label)
+                    # axes whose two landmarks are already placed are shown while measuring
+                    placed = {l.name: l.get_position() for l in self.measurement.landmarks if l.placed}
+                    partial = self.measurement.partial_axes(placed) if hasattr(self.measurement, "partial_axes") else {}
+                    legend_parts = []
+                    for i, label in enumerate(self.measurement.AXIS_LABELS):
+                        if label in partial:
+                            color = self.dialog.AXIS_PALETTE[i % len(self.dialog.AXIS_PALETTE)]
+                            self.dialog.show_axis(label, partial[label][0], partial[label][1], color)
+                            r, g, b = [int(round(c * 255)) for c in color]
+                            legend_parts.append(f'<span style="color:rgb({r},{g},{b})">&#9632;</span> {label}')
+                        else:
+                            self.dialog.hide_axis(label)
+                    self.axes_label.setText("<br>".join(legend_parts))
             except Exception as e:
                 self.measurement_label.setText(f"Error executing measurement: {e}")
                 self.measurement_label.setStyleSheet(STATUS_ERROR_STYLE)
@@ -2878,6 +3093,7 @@ class LandmarkWidget(qt.QWidget):
         self.landmark_label.setWordWrap(True)
         self.description_label = qt.QLabel(self.landmark.description)
         self.description_label.setWordWrap(True)
+        _wrap_to_panel(self.landmark_label, self.description_label)
         self.position_label = qt.QLabel("Position: not set")
         if self.landmark.image_path != "":
             path = osp.join(MODULE_PATH, self.landmark.image_path)

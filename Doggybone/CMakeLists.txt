@@ -5,6 +5,8 @@ set(MODULE_NAME Doggybone)
 set(MODULE_PYTHON_SCRIPTS
   ${MODULE_NAME}.py
   DoggyboneLib/__init__.py
+  DoggyboneLib/bone_config.py
+  DoggyboneLib/bones.py
   DoggyboneLib/corrected_ct.py
   DoggyboneLib/guide_logic.py
   DoggyboneLib/helpers.py
@@ -14,7 +16,7 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneLib/measurement_logic.py
   DoggyboneLib/measurements.py
   DoggyboneLib/osteotomy_logic.py
-  DoggyboneLib/section_centre.py
+  DoggyboneLib/section_logic.py
   DoggyboneUI/__init__.py
   DoggyboneUI/common.py
   DoggyboneUI/ui_planes.py
@@ -25,6 +27,9 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneUI/ui_pins.py
   DoggyboneUI/ui_saw.py
   DoggyboneUI/ui_tibia.py
+  DoggyboneUI/ui_limb_bar.py
+  DoggyboneUI/ui_centering.py
+  DoggyboneUI/ui_condyle_circles.py
   )
 
 set(MODULE_PYTHON_RESOURCES

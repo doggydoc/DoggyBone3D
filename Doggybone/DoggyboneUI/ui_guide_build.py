@@ -231,7 +231,9 @@ class GuideBuildMixin:
         finally:
             qt.QApplication.restoreOverrideCursor()
 
-    GUIDE_BODY_PATTERN = re.compile(r"^Doggybone guide body( tibia)?( \(reduction\))?$")
+    @property
+    def GUIDE_BODY_PATTERN(self):
+        return re.compile(r"^Doggybone guide body" + self.BONES.tag_pattern() + r"( \(reduction\))?$")
 
     def _all_guide_bodies(self):
         """Every finished guide body in the scene: [(node, side, bone, mode)], femur before tibia,
@@ -245,11 +247,11 @@ class GuideBuildMixin:
             polydata = node.GetPolyData()
             if polydata is None or polydata.GetNumberOfPoints() == 0:
                 continue
-            bone = node.GetAttribute("Doggybone.GuideBone") or ("Tibia" if match.group(1) else "Femur")
+            bone = node.GetAttribute("Doggybone.GuideBone") or self.BONES.for_tag(match.group(1)).name
             mode = node.GetAttribute("Doggybone.GuideMode") or ("reduction" if match.group(2) else "saw")
             side = node.GetAttribute("Doggybone.GuideSide")       # None: built before sides were stored
             found.append((node, side, bone, mode))
-        found.sort(key=lambda item: (item[2] != "Femur", item[3] != "saw"))
+        found.sort(key=lambda item: (self.BONES.order(item[2]), item[3] != "saw"))
         return found
 
     # What a guide is built from; the export warns when one of these changed after the guide was built.
@@ -275,7 +277,7 @@ class GuideBuildMixin:
         does not mark this one as outdated."""
         import hashlib
         side = side.lower()
-        tag = " tibia" if bone == "Tibia" else ""
+        tag = self._bone_tag(bone)
         suffix = " (reduction)" if mode == "reduction" else ""
         get = slicer.mrmlScene.GetFirstNodeByName
 
@@ -411,7 +413,7 @@ class GuideBuildMixin:
         jobs = []
         for node, side, bone, mode in guides:
             side_text = side or self.osteotomy_side.currentText
-            file_name = self._export_file_name("fem" if bone == "Femur" else "tib",
+            file_name = self._export_file_name(self._bone_config(bone).file_code,
                                                "dx" if side_text == "Right" else "sx",
                                                "red" if mode == "reduction" else "cut")
             jobs.append((node, side, side_text, bone, mode, os.path.join(folder, file_name)))
@@ -503,7 +505,7 @@ class GuideBuildMixin:
         if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
             self.guide_status.setText("No guide body yet - press Extrude first.")
             return
-        bone = "fem" if self.osteotomy_bone.currentText == "Femur" else "tib"
+        bone = self._bone_config().file_code
         side = "dx" if self.osteotomy_side.currentText == "Right" else "sx"
         kind = "red" if self._guide_mode_is_reduction() else "cut"
         default_name = self._export_file_name(bone, side, kind)    # name-number-fem/tib-dx/sx-red/cut.stl
@@ -540,7 +542,7 @@ class GuideBuildMixin:
         (if any) come back. Guide objects are stored per bone, so planning the tibia never touches the
         finished femur guides."""
         new = self.osteotomy_bone.currentText
-        previous = getattr(self, "_guide_bone", "Femur")
+        previous = getattr(self, "_guide_bone", self.BONES.default.name)
         if new == previous:
             return
         for name in ("_stop_guide_edit", "_restore_guide_hidden", "_remove_pin_gizmo", "_remove_pin_preview",
@@ -584,10 +586,10 @@ class GuideBuildMixin:
         if hasattr(self, "guide_status"):
             self.guide_status.setStyleSheet("")
             body = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_BODY_NAME)
+            others = " / ".join(other.name.lower() for other in self.BONES.others(new))
             self.guide_status.setText(
                 f"{new}: " + ("its guide is shown." if body is not None else
-                              "no guide yet - the femur guides are kept (hidden)." if new == "Tibia" else
-                              "no guide yet - the tibia guides are kept (hidden)."))
+                              f"no guide yet - the {others} guides are kept (hidden)."))
 
     def _guide_nodes_of_mode(self, mode):
         saved = getattr(self, "_guide_mode", "saw")
@@ -679,7 +681,7 @@ class GuideBuildMixin:
 
     def _label_text(self):
         number = self.patient_number.text.strip() if getattr(self, "patient_number", None) else ""
-        bone = {"Femur": "FEM", "Tibia": "TIB"}.get(self.osteotomy_bone.currentText, self.osteotomy_bone.currentText[:3].upper())
+        bone = self._bone_config().label_code
         side = self.osteotomy_side.currentText[:1].upper()
         return " ".join(part for part in (number, bone, side) if part) + " >"
 

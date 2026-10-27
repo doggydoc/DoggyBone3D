@@ -38,14 +38,31 @@ class PlanesMixin:
     # Purely an internal starting point for the proximal plane when it's first inserted - not a
     # user-facing setting. Both planes are meant to be positioned entirely by hand from there.
     DEFAULT_PLANE_LEVEL_FRACTION = 0.4
-    # Femur: the usual (distal) osteotomy lies distal to the 'Femur midpoint 50%' landmark, so the
-    # MASTER plane starts there - halfway from that landmark to the condyle centres (on the shaft
-    # line) - instead of between the two shaft-axis landmarks.
-    FEMUR_PLANE_LEVEL_TO_CONDYLES = 0.5
+    # A bone with start_plane_toward_ml_landmarks (femur: the usual distal osteotomy lies distal
+    # to the 'Femur midpoint 50%' landmark) starts the MASTER plane beyond the distal shaft landmark,
+    # that fraction of the way to the ML landmark pair (on the shaft line).
 
     # The two landmarks that define the anatomical shaft axis of each bone (proximal, distal).
-    SHAFT_AXIS_LANDMARKS = {"Femur": ("Femur midpoint 33%", "Femur midpoint 50%"),
-                            "Tibia": ("proximal tibia midpoint", "distal tibia midpoint")}
+    SHAFT_AXIS_LANDMARKS = property(lambda self: {bone.name: bone.shaft_axis_landmarks for bone in self.BONES})
+
+    # Points the planning code may ask for by name that are COMPUTED from landmarks (e.g. the
+    # e.g. condyle centres: circles through contour points) - {name: callable(placed points)}.
+    DERIVED_LANDMARKS = {}
+
+    def _named_position(self, side, name):
+        """Position of a landmark - or of a derived point - of one side, or None if not available."""
+        panel = self.left_panel if side == "left" else self.right_panel
+        placed = {l.name: np.array(l.get_position()) for l in panel.landmarks if l.placed}
+        if name in placed:
+            return placed[name]
+        derive = self.DERIVED_LANDMARKS.get(name)
+        if derive is not None:
+            try:
+                position = derive(placed)
+                return None if position is None else np.asarray(position, dtype=float)
+            except Exception:
+                logging.exception("Doggybone: derived point failed (continuing)")
+        return None
 
     def _get_plane_frame(self, plane_node, side=None, bone=None):
         """Return the plane's ACTUAL world-space (origin, x, y, normal) frame.
@@ -121,7 +138,8 @@ class PlanesMixin:
         panel = self.left_panel if side == "left" else self.right_panel
         landmarks_by_name = {l.name: l for l in panel.landmarks}
 
-        proximal_name, distal_name = self.SHAFT_AXIS_LANDMARKS["Femur" if bone == "Femur" else "Tibia"]
+        config = self._bone_config(bone)
+        proximal_name, distal_name = config.shaft_axis_landmarks
 
         proximal_landmark = landmarks_by_name.get(proximal_name)
         distal_landmark = landmarks_by_name.get(distal_name)
@@ -136,16 +154,15 @@ class PlanesMixin:
         if shaft_length < 1e-6:
             return None, None, "Reference points are coincident - cannot define an axis"
         shaft_unit = shaft_vector / shaft_length
-        if bone == "Femur":
-            # start distal to the 50 % landmark (on the same shaft line, so the torsion axis is unchanged)
-            medial_name, lateral_name = self.ML_LANDMARKS["Femur"]
-            medial = landmarks_by_name.get(medial_name)
-            lateral = landmarks_by_name.get(lateral_name)
-            if medial is not None and lateral is not None and medial.placed and lateral.placed:
-                condyle_mid = 0.5 * (np.array(medial.get_position()) + np.array(lateral.get_position()))
+        if config.start_plane_toward_ml_landmarks is not None:
+            # start beyond the distal shaft landmark (on the same shaft line, so the torsion axis is unchanged)
+            medial_name, lateral_name = config.ml_landmarks
+            medial, lateral = self._named_position(side, medial_name), self._named_position(side, lateral_name)
+            if medial is not None and lateral is not None:
+                condyle_mid = 0.5 * (medial + lateral)
                 depth = float(np.dot(condyle_mid - distal_pos, shaft_unit))
                 if depth > 1.0:
-                    origin = distal_pos + self.FEMUR_PLANE_LEVEL_TO_CONDYLES * depth * shaft_unit
+                    origin = distal_pos + config.start_plane_toward_ml_landmarks * depth * shaft_unit
         return origin, shaft_unit, None
 
     def _get_anatomical_frame(self, side, bone):
@@ -159,17 +176,10 @@ class PlanesMixin:
         if error:
             return None, None, None, error
 
-        panel = self.left_panel if side == "left" else self.right_panel
-        landmarks_by_name = {l.name: l for l in panel.landmarks}
         medial_name, lateral_name = self.ML_LANDMARKS[bone]
-        medial_landmark = landmarks_by_name.get(medial_name)
-        lateral_landmark = landmarks_by_name.get(lateral_name)
-        if (medial_landmark is None or lateral_landmark is None
-                or not medial_landmark.placed or not lateral_landmark.placed):
+        medial_pos, lateral_pos = self._named_position(side, medial_name), self._named_position(side, lateral_name)
+        if medial_pos is None or lateral_pos is None:
             return None, None, None, f"Place '{medial_name}' and '{lateral_name}' ({side}) first."
-
-        medial_pos = np.array(medial_landmark.get_position())
-        lateral_pos = np.array(lateral_landmark.get_position())
         ml_vector = lateral_pos - medial_pos
 
         try:
@@ -198,16 +208,10 @@ class PlanesMixin:
         rotation around that normal with no relation to the anatomy, which is why the plane used
         to need a manual twist correction in addition to any frontal/sagittal tilt.
         '''
-        panel = self.left_panel if side == "left" else self.right_panel
-        landmarks_by_name = {l.name: l for l in panel.landmarks}
         medial_name, lateral_name = self.ML_LANDMARKS[bone]
-        medial_landmark = landmarks_by_name.get(medial_name)
-        lateral_landmark = landmarks_by_name.get(lateral_name)
-        if (medial_landmark is None or lateral_landmark is None
-                or not medial_landmark.placed or not lateral_landmark.placed):
+        medial_pos, lateral_pos = self._named_position(side, medial_name), self._named_position(side, lateral_name)
+        if medial_pos is None or lateral_pos is None:
             return None
-        medial_pos = np.array(medial_landmark.get_position())
-        lateral_pos = np.array(lateral_landmark.get_position())
         return lateral_pos - medial_pos
 
     def _configure_plane_size(self, plane_node, side, bone, color=(1.0, 0.9, 0.0), label=None):
@@ -558,7 +562,7 @@ class PlanesMixin:
             return False, frame_error
 
         ok_rot, torsion_delta, rotation_message = self._calculated_rotation_delta(side, bone)
-        if not ok_rot and bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode():
+        if not ok_rot and self._bone_config(bone).target_table and hasattr(self, "_tibia_mode") and self._tibia_mode():
             ok_rot, torsion_delta = True, 0.0          # tibia: torsion from the target table
         if not ok_rot:
             return False, rotation_message

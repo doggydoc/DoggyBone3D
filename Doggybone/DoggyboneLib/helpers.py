@@ -62,3 +62,50 @@ def fit_sphere(points):
     if radius_squared <= 0:
         raise ValueError("fit_sphere: degenerate point configuration (non-positive radius^2).")
     return center, float(np.sqrt(radius_squared))
+
+def fit_sphere_rms(points):
+    '''
+    fit_sphere plus the fit quality: (center, radius, rms) - rms is the root mean square distance of
+    the points from the fitted sphere SURFACE (mm). Small (< ~0.5 mm) = the points lie well on one
+    sphere; large = a point is off the joint surface or the surface is not spherical there.
+    '''
+    points = np.asarray(points, dtype=float)
+    center, radius = fit_sphere(points)
+    distances = np.linalg.norm(points - center, axis=1) - radius
+    return center, radius, float(np.sqrt(np.mean(distances ** 2)))
+
+
+def project_to_plane(vector, plane_normal):
+    '''Component of `vector` in the plane with the given normal (normal need not be unit length).'''
+    normal = np.asarray(plane_normal, dtype=float)
+    normal = normal / np.linalg.norm(normal)
+    vector = np.asarray(vector, dtype=float)
+    return vector - np.dot(vector, normal) * normal
+
+
+def fit_circle_3d(points):
+    '''
+    Circle through >= 3 points in 3D (they need not lie exactly in one plane): best plane through
+    the points (least squares), points projected into it, algebraic least-squares circle fit there.
+    Returns (centre, radius, rms, plane_normal); rms = RMS distance of the points from the circle
+    (in the plane) - the fit quality (e.g. the centre of the best-fitting circle of a condyle in the sagittal plane).
+    '''
+    points = np.asarray(points, dtype=float)
+    if len(points) < 3:
+        raise ValueError("fit_circle_3d needs at least 3 points.")
+    centroid = points.mean(axis=0)
+    _u, _s, vt = np.linalg.svd(points - centroid)
+    e1, e2, normal = vt[0], vt[1], vt[2]
+    xy = np.stack([(points - centroid) @ e1, (points - centroid) @ e2], axis=1)
+    A = np.hstack([2.0 * xy, np.ones((len(xy), 1))])
+    b = np.sum(xy ** 2, axis=1)
+    solution, _, rank, _ = np.linalg.lstsq(A, b, rcond=None)
+    if rank < 3:
+        raise ValueError("fit_circle_3d: points are collinear.")
+    cx, cy = solution[0], solution[1]
+    radius_squared = solution[2] + cx * cx + cy * cy
+    if radius_squared <= 0:
+        raise ValueError("fit_circle_3d: degenerate point configuration.")
+    radius = float(np.sqrt(radius_squared))
+    rms = float(np.sqrt(np.mean((np.linalg.norm(xy - [cx, cy], axis=1) - radius) ** 2)))
+    return centroid + cx * e1 + cy * e2, radius, rms, normal

@@ -21,10 +21,10 @@ class GuideEditMixin:
     # Two guides share the whole painting/extrusion workflow: the SAW guide (on the bone as it is)
     # and the REDUCTION guide (on the fragments in the corrected position). Every guide node name
     # below depends on the active mode, so the tools work on the selected guide's own nodes.
-    def _bone_tag(self):
-        """Guide objects are kept per bone: the femur keeps the plain names, the tibia gets ' tibia'."""
-        box = getattr(self, "osteotomy_bone", None)
-        return " tibia" if box is not None and box.currentText == "Tibia" else ""
+    def _bone_tag(self, bone=None):
+        """Guide objects are kept per bone: each bone's node tag is appended to the node names
+        (one bone per limb keeps the plain names, e.g. femur plain, tibia ' tibia')."""
+        return self._bone_config(bone).node_tag
 
     def _mode_name(self, base):
         base = base + self._bone_tag()

@@ -1027,7 +1027,7 @@ class PinsMixin:
         if error:
             return None, None, error
         R = M[:3, :3] if M is not None else np.eye(3)
-        condylar = "distal" if bone == "Femur" else "proximal"
+        condylar = self._bone_config(bone).reference_end
         guide_side = guide_logic.unit(R @ d if moved == condylar else np.asarray(d, float))
         shafts = {segment: guide_logic.unit(R @ shaft if segment == moved else np.asarray(shaft, float))
                   for segment in ("proximal", "distal")}
@@ -1210,7 +1210,7 @@ class PinsMixin:
 
     def _guide_body_node(self, mode):
         bone = self.osteotomy_bone.currentText
-        tag = " tibia" if bone == "Tibia" else ""
+        tag = self._bone_tag(bone)
         node = slicer.mrmlScene.GetFirstNodeByName("Doggybone guide body" + tag + (" (reduction)" if mode == "reduction" else ""))
         if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
             return None
@@ -1360,7 +1360,7 @@ class PinsMixin:
         """{'reduction'/'saw': 'missing' | 'outdated' | 'current'} for the guides of this side and bone."""
         side = self.osteotomy_side.currentText
         bone = self.osteotomy_bone.currentText
-        tag = " tibia" if bone == "Tibia" else ""
+        tag = self._bone_tag(bone)
         states = {}
         for mode, name in (("reduction", "Doggybone guide body" + tag + " (reduction)"),
                            ("saw", "Doggybone guide body" + tag)):

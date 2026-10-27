@@ -188,7 +188,8 @@ class SimpleLandmark:
 
     def stop_interaction(self):
         if self.placed:
-            self._markups_node.SetNthControlPointLocked(self._id, True)
+            # an always-movable landmark (e.g. the condyle centre that is kept on its axis) stays unlocked
+            self._markups_node.SetNthControlPointLocked(self._id, not getattr(self, "always_movable", False))
             self._markups_node.SetNthControlPointSelected(self._id, False)
         
         # Turn off placement mode and remove observers

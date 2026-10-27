@@ -36,8 +36,7 @@ class CorrectionMixin:
         # fallback (no anatomical frame): a proximal landmark
         panel = self.left_panel if side == "left" else self.right_panel
         node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
-        proximal_names = (["femur head", "femur neck", "Femur midpoint 33%"] if bone == "Femur"
-                          else ["intercondylar eminence", "proximal tibia midpoint", "condylus medialis tibiae"])
+        proximal_names = list(self._bone_config(bone).proximal_fallback_landmarks)
         for name in proximal_names:
             for landmark in panel.landmarks:
                 if landmark.name == name and landmark.placed and landmark._id is not None and node is not None:
@@ -184,7 +183,7 @@ class CorrectionMixin:
             self.correction_status.setText(f"Measurement '{wedge_measurement_name}' not found.")
             return
         wedge_ready, wedge_value, wedge_value_description = wedge_measurement()
-        if not wedge_ready and bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode():
+        if not wedge_ready and self._bone_config(bone).target_table and hasattr(self, "_tibia_mode") and self._tibia_mode():
             # tibia: the corrections come from the target table (solver) - the varus/valgus landmarks
             # are only needed when a frontal row is checked; without them: no frontal correction
             wedge_ready, wedge_value = True, float(self.target_wedge_value.value)
@@ -194,7 +193,7 @@ class CorrectionMixin:
                 f"Place the landmarks for '{wedge_measurement_name}' ({side}) first.")
             return
         wedge_magnitude = abs(wedge_value - self.target_wedge_value.value)
-        tibia_rows = bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode()
+        tibia_rows = self._bone_config(bone).target_table and hasattr(self, "_tibia_mode") and self._tibia_mode()
         # OWO: only ONE cut - the second plane is a virtual target, parallel or not does not matter (the
         # opening comes from the measured / target values; the hinge contact is set afterwards).
         # CWO: the wedge between the two cuts IS the correction - parallel planes cannot remove one.
@@ -220,7 +219,7 @@ class CorrectionMixin:
         wedge_delta = self.target_wedge_value.value - wedge_value
         wedge_deg = wedge_delta * (1.0 if moving_is_distal else -1.0)
         ok_rot, rotation_delta, rotation_message = self._calculated_rotation_delta(side, bone)
-        tibia_targets = bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode()
+        tibia_targets = self._bone_config(bone).target_table and hasattr(self, "_tibia_mode") and self._tibia_mode()
         if not ok_rot and tibia_targets:
             # tibia: the torsion comes from the target table (solver) - its landmarks are only
             # needed when a torsion row is checked
@@ -480,11 +479,8 @@ class CorrectionMixin:
     # ------------------------------------------------------------------
     # Planned correction, swing-twist plane derivation, bisecting principle
     # ------------------------------------------------------------------
-    @staticmethod
-    def _signed_rotation_value(bone, value, description):
-        if bone == "Femur":
-            return value if description == "Antetorsion" else -value
-        return value if description.startswith("Internal") else -value
+    def _signed_rotation_value(self, bone, value, description):
+        return self._bone_config(bone).signed_rotation(value, description)
 
     # A cut BETWEEN the two shaft-axis landmarks: warn when the post-op value measured through both
     # midpoints differs from the planned value (axis of the fragment that carries the shaft) by more than this.
@@ -496,6 +492,8 @@ class CorrectionMixin:
         part of the segment between the two landmarks: a cut close to the distal landmark (distal
         femoral osteotomy) leaves the axis on the proximal fragment, a cut close to the proximal
         landmark (proximal tibial osteotomy) puts it on the distal fragment."""
+        if getattr(self._bone_config(bone), "partial_axes", False):
+            return set(), None                 # partial axes: each one stays on its own fragment
         names = [name for name in self.SHAFT_AXIS_LANDMARKS.get(bone, ()) if name in positions]
         if len(names) != 2:
             return set(), None
@@ -555,7 +553,12 @@ class CorrectionMixin:
                 ready, value, description = rotation_measurement()
                 if ready:
                     result["torsion"] = float(self._signed_rotation_value(bone, value, description))
-            if bone == "Tibia" and hasattr(self, "_tibia_metrics"):
+            config = self._bone_config(bone)
+            if config.sagittal_target_measurement:
+                sagittal_measurement = self._get_measurement_by_name(panel, config.sagittal_target_measurement)
+                if sagittal_measurement is not None and sagittal_measurement()[0]:
+                    result["sagittal"] = float(sagittal_measurement.values[config.sagittal_target_key])
+            if config.target_table and hasattr(self, "_tibia_metrics"):
                 result["tibia"] = self._tibia_metrics(panel)
         finally:
             for i, point in enumerate(originals):
@@ -573,7 +576,7 @@ class CorrectionMixin:
         if not isinstance(chord, dict):
             return ""
         pairs = []
-        if bone == "Tibia" and isinstance(predicted.get("tibia"), dict) and isinstance(chord.get("tibia"), dict):
+        if self._bone_config(bone).target_table and isinstance(predicted.get("tibia"), dict) and isinstance(chord.get("tibia"), dict):
             names = {"tpa": "TPA", "ampta": "aMPTA", "amdta": "aMDTA", "torsion": "torsion", "tma": "tibio-metatarsal rotation"}
             pairs = [(names.get(k, k), predicted["tibia"][k], chord["tibia"][k])
                      for k in predicted["tibia"] if k in chord["tibia"]]
@@ -587,7 +590,7 @@ class CorrectionMixin:
                and abs(float(through) - float(planned)) > self.SPLIT_AXIS_WARNING_DEG]
         if not big:
             return ""
-        proximal_name, distal_name = self.SHAFT_AXIS_LANDMARKS["Femur" if bone == "Femur" else "Tibia"]
+        proximal_name, distal_name = self._bone_config(bone).shaft_axis_landmarks
         return (f"WARNING: the cut lies between '{proximal_name}' and '{distal_name}'. The plan uses the "
                 f"axis of the fragment that carries most of the shaft; measured through both midpoints after healing the values "
                 f"would differ by more than {self.SPLIT_AXIS_WARNING_DEG:.0f}{deg}: " + ", ".join(big)
@@ -659,6 +662,59 @@ class CorrectionMixin:
             return float(x0[0]), float(x0[1]), predicted0
         return float(x[0]), float(x[1]), predicted
 
+    def _solve_correction_angles3(self, make_h, wedge, torsion, sagittal, side, bone, fixed_o, fixed_n,
+                                  moving_is_distal, iterations=15):
+        """As _solve_correction_angles, with the sagittal correction as a third unknown (sagittal
+        TARGET mode): (wedge, torsion, sagittal) so that the frontal value, the torsion and the
+        sagittal value on the moved landmarks hit their targets. Returns (wedge, torsion, sagittal)."""
+        target = np.array([float(self.target_wedge_value.value), float(self.target_rotation_value.value),
+                           float(self.femur_sagittal_value.value)])
+
+        def residual(x):
+            p = self._predict_measurements(side, bone, make_h(*x), fixed_o, fixed_n, moving_is_distal)
+            if p is None or p.get("wedge") is None or p.get("sagittal") is None:
+                return None
+            return np.array([p["wedge"] - target[0],
+                             (p["torsion"] - target[1]) if p.get("torsion") is not None else 0.0,
+                             p["sagittal"] - target[2]], dtype=float)
+
+        self._correction_warning = ""
+        x0 = np.array([float(wedge), float(torsion), float(sagittal)])
+        x = x0.copy()
+        r = residual(x)
+        if r is None:
+            return tuple(x0)
+        h = 0.5
+        for _ in range(iterations):
+            if np.max(np.abs(r)) < 0.05:
+                break
+            J = np.zeros((3, 3))
+            for j in range(3):
+                dx = np.zeros(3)
+                dx[j] = h
+                rj = residual(x + dx)
+                if rj is None:
+                    return tuple(x)
+                J[:, j] = (rj - r) / h
+            try:
+                step = np.linalg.lstsq(J, -r, rcond=None)[0]
+            except np.linalg.LinAlgError:
+                break
+            step = np.clip(step, -10.0, 10.0)
+            for damping in (1.0, 0.5, 0.25):
+                r_new = residual(x + damping * step)
+                if r_new is not None and np.max(np.abs(r_new)) < np.max(np.abs(r)):
+                    x, r = x + damping * step, r_new
+                    break
+            else:
+                break
+        if np.max(np.abs(r)) > 0.5:
+            self._correction_warning = (
+                f"WARNING: the targets are not met exactly (remaining frontal {r[0]:+.1f}\N{DEGREE SIGN}, "
+                f"torsion {r[1]:+.1f}\N{DEGREE SIGN}, sagittal {r[2]:+.1f}\N{DEGREE SIGN}) - check the cut "
+                "position (between the partial axes, near the CORA).")
+        return float(x[0]), float(x[1]), float(x[2])
+
     def _landmarks_by_fragment(self, side, fixed_o, fixed_n, moving_is_distal):
         panel = self.left_panel if side == "left" else self.right_panel
         shaft, _, _, error = self._get_anatomical_frame(side, self.osteotomy_bone.currentText)
@@ -680,7 +736,7 @@ class CorrectionMixin:
         deg = "\N{DEGREE SIGN}"
         parts = []
         tibia = predicted.get("tibia") if isinstance(predicted, dict) else None
-        if bone == "Tibia" and tibia and getattr(self, "tibia_target_rows", None):
+        if self._bone_config(bone).target_table and tibia and getattr(self, "tibia_target_rows", None):
             names = {"tpa": "TPA", "ampta": "aMPTA", "amdta": "aMDTA", "torsion": "torsion", "tma": "tibio-metatarsal rotation"}
             for key, row in self.tibia_target_rows.items():
                 if key in tibia:
@@ -693,7 +749,24 @@ class CorrectionMixin:
         if predicted.get("torsion") is not None:
             parts.append(f"{self.ROTATION_MEASUREMENT_NAME[bone]} {predicted['torsion']:+.1f}{deg} "
                          f"(target {self.target_rotation_value.value:+.1f}{deg})")
+        if predicted.get("sagittal") is not None and self._sagittal_target_mode(bone):
+            parts.append(f"procurvatum {predicted['sagittal']:.1f}{deg} "
+                         f"(target {self.femur_sagittal_value.value:.1f}{deg})")
         return ", ".join(parts) if parts else "n/a"
+
+    def _sagittal_target_mode(self, bone):
+        return bool(self._bone_config(bone).sagittal_target_measurement)
+
+    def _current_sagittal_value(self, side, bone):
+        """Current value of the bone's sagittal target measurement (e.g. procurvatum), or None."""
+        config = self._bone_config(bone)
+        if not config.sagittal_target_measurement:
+            return None
+        panel = self.left_panel if side == "left" else self.right_panel
+        measurement = self._get_measurement_by_name(panel, config.sagittal_target_measurement)
+        if measurement is None or not measurement()[0]:
+            return None
+        return float(measurement.values[config.sagittal_target_key])
 
     def _desired_correction_rotation(self, side, bone, moving_is_distal, plane_origin, plane_normal):
         '''Planned rotation (3x3) of the MOVING fragment: frontal correction about the anatomical
@@ -702,7 +775,7 @@ class CorrectionMixin:
         with the candidate rotation and checking which one brings the measurement to its target
         (no dependence on left/right mirroring or dataset orientation).
         Returns (R or None, info dict or error text).'''
-        if bone == "Tibia" and hasattr(self, "_tibia_mode") and self._tibia_mode():
+        if self._bone_config(bone).target_table and hasattr(self, "_tibia_mode") and self._tibia_mode():
             # tibia: TPA, aMPTA, aMDTA, torsion(s) - frontal, sagittal and torsion solved together
             return self._solve_tibia_correction(side, bone, moving_is_distal, plane_origin, plane_normal)
         shaft, ml, ap, frame_error = self._get_anatomical_frame(side, bone)
@@ -727,10 +800,39 @@ class CorrectionMixin:
         def rot3(axis, angle):
             return self._rotation_about_line(axis, angle, np.zeros(3))[:3, :3]
 
+        def as_h(R):
+            H = np.eye(4, dtype=float)
+            H[:3, :3] = R
+            H[:3, 3] = pivot - R @ pivot
+            return H
+
         # femur: manual sagittal correction about the ML axis (+ = procurvatum corrected: the far end of
         # the moving fragment goes cranially). Signed about the frame's ml axis like the tibia's.
         ml_unit = osteotomy_logic.normalize(np.asarray(ml, dtype=float))
-        sagittal_signed = self._femur_sagittal_signed(side, bone, shaft, ml_unit, moving_is_distal)
+        target_mode = self._sagittal_target_mode(bone)
+        if target_mode:
+            # sagittal TARGET (e.g. procurvatum between the partial axes): magnitude from current vs.
+            # target, direction verified on the moved landmarks (like the frontal correction)
+            current_sagittal = self._current_sagittal_value(side, bone)
+            if current_sagittal is None:
+                return None, f"Place the landmarks for '{self._bone_config(bone).sagittal_target_measurement}' ({side}) first."
+            sagittal_target = float(self.femur_sagittal_value.value)
+            magnitude = abs(current_sagittal - sagittal_target)
+            sagittal_signed = 0.0
+            if magnitude > 0.01:
+                best = None
+                for sign in (1.0, -1.0):
+                    predicted = self._predict_measurements(side, bone, as_h(rot3(ml_unit, sign * magnitude)),
+                                                           plane_origin, plane_normal, moving_is_distal)
+                    if predicted is None or predicted.get("sagittal") is None:
+                        continue
+                    error = abs(predicted["sagittal"] - sagittal_target)
+                    if best is None or error < best[0]:
+                        best = (error, sign * magnitude)
+                if best is not None:
+                    sagittal_signed = best[1]
+        else:
+            sagittal_signed = self._femur_sagittal_signed(side, bone, shaft, ml_unit, moving_is_distal)
         R_sagittal = rot3(ml_unit, sagittal_signed) if abs(sagittal_signed) > 1e-6 else np.eye(3)
 
         def front(angle):
@@ -739,12 +841,6 @@ class CorrectionMixin:
         def compose(R_torsion, R_frontal_part):
             # derotation about the MOVING fragment's own long axis (see anatomical_correction_matrix)
             return R_torsion @ R_frontal_part if moving_is_distal else R_frontal_part @ R_torsion
-
-        def as_h(R):
-            H = np.eye(4, dtype=float)
-            H[:3, :3] = R
-            H[:3, 3] = pivot - R @ pivot
-            return H
 
         R_frontal = R_sagittal.copy()
         if frontal > 0.01:
@@ -779,10 +875,19 @@ class CorrectionMixin:
         torsion_signed = torsion
         if torsion > 0.01:
             torsion_signed = torsion if np.allclose(R, compose(rot3(shaft, torsion), R_frontal)) else -torsion
-        frontal_signed, torsion_signed, _ = self._solve_correction_angles(
-            lambda f, t: as_h(compose(rot3(shaft, t), front(f))), frontal_signed, torsion_signed,
-            side, bone, plane_origin, plane_normal, moving_is_distal)
-        R = compose(rot3(shaft, torsion_signed), front(frontal_signed))
+        if target_mode:
+            # frontal, sagittal and torsion solved TOGETHER on the moved landmarks (they interact)
+            def make(f, t, s):
+                return compose(rot3(shaft, t), rot3(ml_unit, s) @ rot3(ap, f))
+            frontal_signed, torsion_signed, sagittal_signed = self._solve_correction_angles3(
+                lambda f, t, s: as_h(make(f, t, s)), frontal_signed, torsion_signed, sagittal_signed,
+                side, bone, plane_origin, plane_normal, moving_is_distal)
+            R = make(frontal_signed, torsion_signed, sagittal_signed)
+        else:
+            frontal_signed, torsion_signed, _ = self._solve_correction_angles(
+                lambda f, t: as_h(compose(rot3(shaft, t), front(f))), frontal_signed, torsion_signed,
+                side, bone, plane_origin, plane_normal, moving_is_distal)
+            R = compose(rot3(shaft, torsion_signed), front(frontal_signed))
         frontal, torsion = abs(frontal_signed), abs(torsion_signed)
         predicted = self._predict_measurements(side, bone, as_h(R), plane_origin, plane_normal, moving_is_distal)
         warning = "\n".join(text for text in (
@@ -797,7 +902,7 @@ class CorrectionMixin:
         """Manual femur sagittal correction as a signed angle about ml_unit: positive input = the far
         end of the MOVING fragment turns cranially (corrects a procurvatum)."""
         box = getattr(self, "femur_sagittal_value", None)
-        if bone != "Femur" or box is None or abs(float(box.value)) < 1e-6:
+        if not self._bone_config(bone).sagittal_input or box is None or abs(float(box.value)) < 1e-6:
             return 0.0
         shaft = osteotomy_logic.normalize(np.asarray(shaft, dtype=float))          # proximal -> distal
         # cranial as in the aligned slice views (screen-up of the red view): (ML, patient-mirrored) x proximal
@@ -970,14 +1075,13 @@ class CorrectionMixin:
                     logging.exception("Doggybone: reset step failed (continuing)")
         removed = 0
         prefixes = ("Doggybone guide", "Doggybone pin ", "Doggybone saw box", "Doggybone saw guide pin preview")
-        tibia = bone == "Tibia"
         for node in list(slicer.util.getNodesByClass("vtkMRMLNode")):
             name = node.GetName() or ""
             if not name.startswith(prefixes) or node.IsA("vtkMRMLDisplayNode") or node.IsA("vtkMRMLStorageNode"):
                 continue
-            # only THIS bone's guide objects (tibia objects carry ' tibia' in the name); the shared
+            # only THIS bone's guide objects (recognised by the bone's node tag); the shared
             # bone surfaces for painting are rebuilt anyway
-            if (" tibia" in name) != tibia and not name.startswith("Doggybone guide bone surface"):
+            if self.BONES.for_node_name(name).name != bone and not name.startswith("Doggybone guide bone surface"):
                 continue
             slicer.mrmlScene.RemoveNode(node)
             removed += 1
@@ -1417,7 +1521,19 @@ class CorrectionMixin:
                 node = slicer.mrmlScene.GetFirstNodeByName(f"Doggybone {side} {label}{suffix}")
                 if node is not None and node not in nodes:
                     nodes.append(node)
+        # positioning aids drawn at the ORIGINAL landmarks: condyle circles + radius handles,
+        # cross-section rings of the centred shaft points
+        prefixes = (f"Doggybone condyle circle {side} ", f"Doggybone condyle radius {side} ",
+                    f"Doggybone cross-section {side} ")
+        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode"):
+            for node in slicer.util.getNodesByClass(class_name):
+                if (node.GetName() or "").startswith(prefixes) and node not in nodes:
+                    nodes.append(node)
         return [n for n in nodes if n is not None and n.GetScene() is not None and n.GetDisplayNode() is not None]
+
+    def _original_overlay_hidden(self, side):
+        """True while the corrected landmarks replace the original ones of that side."""
+        return bool(self.__dict__.get("_hidden_original_overlay", {}).get(side))
 
     def _panel_measurements(self, panel):
         stack = getattr(panel, "measurement_stack", None)

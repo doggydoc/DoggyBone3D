@@ -144,8 +144,8 @@ class SawMixin:
         # exactly perpendicular to the condylar axis (guide-side direction with its component along
         # the condylar axis removed). The OPPOSITE segment's pins are pre-angled by the correction so
         # that all pins are parallel after the reduction (fragment `moved` is rotated by R).
-        condylar = "distal" if bone == "Femur" else "proximal"
-        opposite = "proximal" if condylar == "distal" else "distal"
+        condylar = self._bone_config(bone).reference_end
+        opposite = self._bone_config(bone).opposite_end
         condylar_direction = direction
         ml_vector = self._get_ml_vector(side, bone)
         if ml_vector is not None and np.linalg.norm(ml_vector) > 1e-6:
