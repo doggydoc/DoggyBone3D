@@ -60,6 +60,8 @@ importlib.reload(osteotomy_logic)
 importlib.reload(guide_logic)
 from DoggyboneLib import laterality
 importlib.reload(laterality)
+from DoggyboneLib import corrected_ct
+importlib.reload(corrected_ct)
 from DoggyboneLib import measurements
 importlib.reload(measurements)
 from DoggyboneLib import landmarks
@@ -654,6 +656,15 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
         preview_grid.addWidget(self.clear_preview_button, 0, 1)
         preview_grid.addWidget(self.reset_planning_button, 1, 0)
         preview_grid.addWidget(self.save_screenshot_button, 1, 1)
+        self.export_corrected_ct_button = qt.QPushButton("Export corrected CT (DICOM)...")
+        self.export_corrected_ct_button.setToolTip(
+            "SIMULATED CT of the planned correction as a NEW DICOM series of the same patient / study: the "
+            "moving fragment (bone inside its surface) is cut out of a copy of the CT and pasted where the "
+            "preview puts it (incl. fine shift), its old place filled with soft tissue. Soft tissue and the "
+            "fibula do not move. Series description 'PLANUNG SIMULIERT ... NICHT DIAGNOSTISCH'. "
+            "Written to a folder - not sent to a PACS. Needs the preview.")
+        self.export_corrected_ct_button.clicked.connect(self.onExportCorrectedCt)
+        preview_grid.addWidget(self.export_corrected_ct_button, 2, 0, 1, 2)
         self.reset_all_button = qt.QPushButton("Reset planning and guides")
         self.reset_all_button.setToolTip(
             "Start the osteotomy over: removes the preview, both cutting planes AND everything of the saw "
@@ -661,7 +672,7 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             "Landmarks, measurements, segmentation and target values are kept. Asks before deleting.")
         self.reset_all_button.setStyleSheet("QPushButton { color: #9b1c1c; }")
         self.reset_all_button.clicked.connect(self.onResetPlanningAndGuides)
-        preview_grid.addWidget(self.reset_all_button, 2, 0, 1, 2)
+        preview_grid.addWidget(self.reset_all_button, 3, 0, 1, 2)
         preview_widget = qt.QWidget()
         preview_widget.setLayout(preview_grid)
         osteotomy_form_layout.addRow(preview_widget)
@@ -1761,14 +1772,27 @@ class DoggyboneWidget(TibiaTargetsMixin, PlanesMixin, CorrectionMixin, Segmentat
             other_panel = self.right_panel if side == "left" else self.left_panel
             other_wedge = self._get_measurement_by_name(other_panel, self.WEDGE_MEASUREMENT_NAME[bone])
             other_ready = bool(other_wedge is not None and other_wedge()[0])
+            # landmarks the wedge / rotation measurements still need, listed so a missing one is found fast
+            missing = []
+            for name in (self.WEDGE_MEASUREMENT_NAME[bone], self.ROTATION_MEASUREMENT_NAME[bone]):
+                measurement = self._get_measurement_by_name(panel, name)
+                for landmark in (measurement.get_landmarks() if measurement is not None else []):
+                    if not landmark.placed and landmark.name not in missing:
+                        missing.append(landmark.name)
+            shown = missing[:8]
+            missing_text = "".join(f"\n  \u2022 {name}" for name in shown) \
+                + (f"\n  \u2026 and {len(missing) - len(shown)} more" if len(missing) > len(shown) else "")
             self.current_values_label.setText(
-                " | ".join(current_parts) if current_parts else
+                " | ".join(current_parts) + (f"\nMissing ({len(missing)}):{missing_text}" if missing else "")
+                if current_parts else
                 (f"No landmarks on the {side.upper()} side - they are placed on the {other_side.upper()} "
                  f"side. Set 'Side' to {other_side.capitalize()} (or measure the {side} leg)."
-                 if other_ready else "Current anatomy: place the required landmarks"))
+                 if other_ready else "Current anatomy: place the required landmarks"
+                 + (f" - missing ({len(missing)}):{missing_text}" if missing else "")))
+            self.current_values_label.setToolTip("Missing landmarks:\n" + "\n".join(missing) if missing else "")
             # same colour code as the measurement tool: green = measured, orange = landmarks missing
             self.current_values_label.setStyleSheet(
-                OSTEOTOMY_VALUE_STYLE if current_parts else STATUS_WARN_STYLE)
+                OSTEOTOMY_VALUE_STYLE if current_parts and not missing else STATUS_WARN_STYLE)
 
         # Deliberately do NOT update cutting planes here. Target values only update
         # the displayed calculated corrections. Plane geometry changes exclusively

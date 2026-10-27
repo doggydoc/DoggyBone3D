@@ -1880,6 +1880,159 @@ class CorrectionMixin:
         self._hide_original_overlay(side)
         self._apply_segment_opacity()
 
+    # ------------------------------------------------------------------
+    # Simulated corrected CT as a DICOM series (planning picture)
+    # ------------------------------------------------------------------
+    CORRECTED_CT_SERIES_DESCRIPTION = "PLANUNG SIMULIERT Korrektur {bone} {side} - NICHT DIAGNOSTISCH"
+    CORRECTED_CT_SERIES_OFFSET = 900          # series number = original + 900 (shown next to the original)
+
+    def _corrected_ct_source_volume(self):
+        """The CT the bone was segmented from (reference geometry of the segmentation)."""
+        segmentation = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+        if segmentation is not None:
+            volume = segmentation.GetNodeReference(segmentation.GetReferenceImageGeometryReferenceRole())
+            if volume is not None and volume.IsA("vtkMRMLScalarVolumeNode"):
+                return volume
+        return landmark_logic.get_bone_volume()
+
+    def onExportCorrectedCt(self):
+        """Copy of the CT with the moving fragment cut out and pasted back in its corrected position
+        (DoggyboneLib.corrected_ct), exported as a NEW DICOM series of the original patient / study,
+        marked as a simulated planning series. The volume node is removed again after the export."""
+        from DoggyboneLib import corrected_ct
+        import datetime
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        proximal_name, distal_name, transform_name, _combined, wedge_name = self._preview_node_names(side, bone)
+        transform = slicer.mrmlScene.GetFirstNodeByName(transform_name)
+        moving = None
+        for name in (distal_name, proximal_name):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and transform is not None and node.GetTransformNodeID() == transform.GetID():
+                moving = node
+        if moving is None or moving.GetPolyData() is None or moving.GetPolyData().GetNumberOfPoints() == 0:
+            self.correction_status.setText(
+                f"No correction preview for the {side} {bone.lower()} - press 'Show/update preview' first.")
+            return
+        ct = self._corrected_ct_source_volume()
+        if ct is None or ct.GetImageData() is None:
+            self.correction_status.setText("Could not identify the CT volume of the segmentation.")
+            return
+        if ct.GetParentTransformNode() is not None:
+            self.correction_status.setText(f"The CT '{ct.GetName()}' is transformed - harden or remove the transform first.")
+            return
+        sh = slicer.vtkMRMLSubjectHierarchyNode.GetSubjectHierarchyNode(slicer.mrmlScene)
+        study = sh.GetItemParent(sh.GetItemByDataNode(ct))
+        patient = sh.GetItemParent(study) if study else 0
+        if not study or not patient or sh.GetItemLevel(study) != "Study":
+            self.correction_status.setText(
+                f"The CT '{ct.GetName()}' does not belong to a DICOM study - load it from DICOM to export "
+                "a series of the same patient.")
+            return
+        side_text = {"right": "rechts", "left": "links"}.get(side, side)
+        description = self.CORRECTED_CT_SERIES_DESCRIPTION.format(bone=bone, side=side_text)[:64]
+        if not slicer.util.confirmOkCancelDisplay(
+                f"Export a SIMULATED CT of the planned correction ({bone} {side_text}) as a new DICOM series "
+                f"of the patient / study of '{ct.GetName()}'?\n\nSeries description: {description}\n\n"
+                "Only the bone inside the moving fragment is moved - soft tissue and the fibula stay. "
+                "Planning picture only: not for diagnosis. The series is written to a folder, not sent to a PACS.",
+                windowTitle="Export corrected CT (DICOM)"):
+            return
+        start_dir = getattr(self, "_last_dicom_dir", None) or qt.QDir.homePath()
+        folder = qt.QFileDialog.getExistingDirectory(slicer.util.mainWindow(), "Export corrected CT to folder", start_dir)
+        if not folder:
+            return
+
+        matrix = vtk.vtkMatrix4x4()
+        transform.GetMatrixTransformToWorld(matrix)                     # correction incl. fine shift
+        correction = np.array([[matrix.GetElement(r, c) for c in range(4)] for r in range(4)])
+        ijk = vtk.vtkMatrix4x4()
+        ct.GetIJKToRASMatrix(ijk)
+        ijk_to_ras = np.array([[ijk.GetElement(r, c) for c in range(4)] for r in range(4)])
+        wedge = slicer.mrmlScene.GetFirstNodeByName(wedge_name)
+        blank = [wedge.GetPolyData()] if wedge is not None and wedge.GetPolyData() is not None \
+            and not wedge.GetTransformNodeID() else []
+
+        simulated = None
+        qt.QApplication.setOverrideCursor(qt.Qt.WaitCursor)
+        try:
+            self.correction_status.setText("Computing the simulated CT ...")
+            slicer.app.processEvents()
+            # a grid large enough for the corrected fragment (it may leave the scanned field of view)
+            pad_low, out_dims, out_ijk_to_ras = corrected_ct.padded_geometry(
+                ct.GetImageData().GetDimensions(), ijk_to_ras, correction, moving.GetPolyData())
+            ct_array = slicer.util.arrayFromVolume(ct)
+            out = corrected_ct.padded_copy(ct_array, pad_low, out_dims, ct_array.min())
+            info = corrected_ct.simulate_corrected_ct(ct.GetImageData(), out, ijk_to_ras, correction,
+                                                      moving.GetPolyData(), blank, out_ijk_to_ras=out_ijk_to_ras)
+            simulated = slicer.mrmlScene.AddNewNodeByClass(
+                "vtkMRMLScalarVolumeNode", f"{ct.GetName()} - SIMULATED correction {bone} {side} (PLANNING)")
+            geometry = vtk.vtkMatrix4x4()
+            for r in range(4):
+                for c in range(4):
+                    geometry.SetElement(r, c, float(out_ijk_to_ras[r][c]))
+            simulated.SetIJKToRASMatrix(geometry)
+            slicer.util.updateVolumeFromArray(simulated, out)
+            del out
+            sh.SetItemParent(sh.GetItemByDataNode(simulated), study)
+
+            import DICOMScalarVolumePlugin
+            exporter = DICOMScalarVolumePlugin.DICOMScalarVolumePluginClass()
+            exportables = exporter.examineForExport(sh.GetItemByDataNode(simulated))
+            if not exportables:
+                raise RuntimeError("the DICOM exporter does not accept the volume")
+            exportable = exportables[0]
+            exportable.directory = folder
+            for item in (patient, study):                               # patient and study of the original
+                for attribute in sh.GetItemAttributeNames(item):
+                    if attribute.startswith("DICOM."):
+                        exportable.setTag(attribute[len("DICOM."):], sh.GetItemAttribute(item, attribute))
+            study_uid = sh.GetItemUID(study, "DICOM")
+            if study_uid:
+                exportable.setTag("StudyInstanceUID", study_uid)
+            original_file, series_number = None, ""
+            uids = (ct.GetAttribute("DICOM.instanceUIDs") or "").split()
+            if uids and getattr(slicer, "dicomDatabase", None) is not None:
+                original_file = slicer.dicomDatabase.fileForInstance(uids[0])
+            if original_file:
+                exportable.setTag("FrameOfReferenceUID", slicer.dicomDatabase.fileValue(original_file, "0020,0052"))
+                exportable.setTag("Modality", slicer.dicomDatabase.fileValue(original_file, "0008,0060") or "CT")
+                series_number = slicer.dicomDatabase.fileValue(original_file, "0020,0011")
+            try:
+                number = int(series_number) + self.CORRECTED_CT_SERIES_OFFSET
+            except ValueError:
+                number = self.CORRECTED_CT_SERIES_OFFSET + 1
+            now = datetime.datetime.now()
+            exportable.setTag("SeriesNumber", str(number))
+            exportable.setTag("SeriesDescription", description)
+            exportable.setTag("SeriesInstanceUID", "")                    # always a new series
+            exportable.setTag("Manufacturer", "DoggyBone3D simulation")
+            exportable.setTag("Model", "DoggyBone3D planning - not diagnostic")
+            for tag, value in (("SeriesDate", now.strftime("%Y%m%d")), ("SeriesTime", now.strftime("%H%M%S")),
+                               ("ContentDate", now.strftime("%Y%m%d")), ("ContentTime", now.strftime("%H%M%S"))):
+                exportable.setTag(tag, value)
+            self.correction_status.setText("Writing the DICOM series ...")
+            slicer.app.processEvents()
+            error = exporter.export(exportables)
+            if error:
+                raise RuntimeError(error)
+        except Exception as exc:
+            self.correction_status.setText(f"Export of the corrected CT failed: {exc}")
+            return
+        finally:
+            qt.QApplication.restoreOverrideCursor()
+            if simulated is not None:
+                slicer.mrmlScene.RemoveNode(simulated)              # ~ the size of the CT; the series is on disk
+        self._last_dicom_dir = folder
+        dims = ct.GetImageData().GetDimensions()
+        enlarged = (f" The image was enlarged from {dims[0]} x {dims[1]} x {dims[2]} to "
+                    f"{out_dims[0]} x {out_dims[1]} x {out_dims[2]} voxels so the corrected fragment is not cut off."
+                    if tuple(out_dims) != tuple(dims) else "")
+        self.correction_status.setText(
+            f"Corrected CT exported (series {number}, '{description}') to {folder} "
+            f"(sub-folder ScalarVolume_...). Fragment {info['pasted_voxels']} voxels moved, its original place "
+            f"filled with {info['fill']:.0f}.{enlarged} Import the folder in the DICOM module to view it.")
+
     def _ensure_segmentation_visible(self):
         """Bone segmentation visible in 2D and 3D, the segment itself switched on, and a usable 3D
         opacity: the 'Opacity' slider value, but at least 10 % (at 0 % it is set back to 100 %)."""
