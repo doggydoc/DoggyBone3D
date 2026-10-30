@@ -184,6 +184,70 @@ class SegmentationMixin:
         ray = ray / np.linalg.norm(ray)
         qt.QTimer.singleShot(0, lambda h=np.asarray(hit, float), r=ray: self._remove_bone_once(h, r))
 
+    def _femur_head_spheres_and_points(self):
+        """([(centre, radius)] of the placed femoral head spheres of both sides,
+        [positions of the other placed femur landmarks])."""
+        spheres, femur_points = [], []
+        for panel in (getattr(self, "left_panel", None), getattr(self, "right_panel", None)):
+            for landmark in (getattr(panel, "landmarks", None) or []):
+                if not landmark.placed or landmark.get_position() is None:
+                    continue
+                name = landmark.name.lower()
+                if name == "femur head" and getattr(landmark, "radius", None):
+                    spheres.append((np.asarray(landmark.get_position(), float), float(landmark.radius)))
+                elif "femur" in name and "head" not in name:
+                    femur_points.append(np.asarray(landmark.get_position(), float))
+        return spheres, femur_points
+
+    def _head_sphere_cut(self, mask, seed, M, Minv, ext, dims):
+        """Remove-bone rule for the hip: with femoral head sphere(s) set, the bone INSIDE the spheres
+        (the heads) is taken out of the connectivity, so the pelvis comes loose from the femurs exactly
+        at the sphere surface. Returns (voxels to remove, note), a message (str) when it must not remove
+        anything, or None when the rule does not apply (no sphere / the clicked bone does not touch one)."""
+        import itertools
+        import scipy.ndimage as ndi
+        spheres, femur_points = self._femur_head_spheres_and_points()
+        if not spheres:
+            return None
+
+        def to_index(p):
+            q = (Minv @ np.append(np.asarray(p, float), 1.0))[:3]
+            return (int(round(q[2])) - ext[4], int(round(q[1])) - ext[2], int(round(q[0])) - ext[0])
+        head = np.zeros(mask.shape, dtype=bool)
+        for centre, radius in spheres:
+            corners = np.array([to_index(centre + np.array(d) * (radius + 2.0))
+                                for d in itertools.product((-1.0, 1.0), repeat=3)])
+            lo = np.clip(corners.min(axis=0), 0, np.array(dims) - 1)
+            hi = np.clip(corners.max(axis=0) + 1, 1, np.array(dims))
+            kk, jj, ii = np.mgrid[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+            ijk = np.stack([ii + ext[0], jj + ext[2], kk + ext[4], np.ones(ii.shape)], axis=-1).reshape(-1, 4).astype(float)
+            world = (ijk @ M.T)[:, :3]
+            inside = (np.linalg.norm(world - centre, axis=1) <= radius).reshape(kk.shape)
+            head[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]] |= inside
+        if head[seed]:
+            return ("The click lies inside the femoral head sphere - click the pelvis outside the sphere "
+                    "(the head inside the sphere always stays with the femur).")
+        labels, _count = ndi.label(mask & ~head)
+        label = int(labels[seed])
+        if label == 0:
+            return None
+        piece = labels == label
+        touching = ndi.binary_dilation(head, iterations=2) & mask & ~head
+        if not (touching & piece).any():
+            return None                                   # the clicked bone has nothing to do with the hip
+        # the femur must not come with it: no femur landmark on the piece ...
+        for point in femur_points:
+            idx = to_index(point)
+            window = tuple(slice(max(0, idx[d] - 2), min(dims[d], idx[d] + 3)) for d in range(3))
+            if all(0 <= idx[d] < dims[d] for d in range(3)) and piece[window].any():
+                return ("The femur is still joined to the clicked bone outside the femoral head sphere(s) - "
+                        "nothing removed. Enlarge the head sphere until it encloses the whole head, set the "
+                        "head sphere of the other side too, then click the pelvis again.")
+        if len(spheres) == 1:
+            return piece, ("hip joint cut along the femoral head sphere - only one sphere set: if the other "
+                           "femur came along, undo and set its head sphere too")
+        return piece, "hip joint cut along the femoral head spheres"
+
     def _remove_bone_once(self, hit, ray):
         # one bone per click: the tool switches itself off again
         self.remove_bone_button.setChecked(False)
@@ -229,7 +293,16 @@ class SegmentationMixin:
             labels_all, _ = ndi.label(mask)
             whole = labels_all == labels_all[seed]
             sizes_all = np.bincount(labels_all.ravel())[1:]
-            if whole.sum() < 0.5 * float(sizes_all.max()):
+            # 0) femoral head sphere(s) set: the hip joint is cut along the sphere surface - the clicked
+            #    pelvis comes loose, the head (inside the sphere) and the femur stay
+            head_cut = self._head_sphere_cut(mask, seed, M, Minv, ext, dims)
+            if isinstance(head_cut, str):
+                self.segmentation_status.setText(head_cut)
+                return
+            if head_cut is not None:
+                remove, note = head_cut
+                lo = (0, 0, 0)
+            elif whole.sum() < 0.5 * float(sizes_all.max()):
                 remove = whole
                 lo = (0, 0, 0)
                 note = "separate piece"
