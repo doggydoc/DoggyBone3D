@@ -512,18 +512,18 @@ def femur_cora_lines(info):
         lines.append("CORA frontal: none - the femoral axis already stands at the target to the condylar axis")
     # sagittal
     sag = info["sagittal"]
-    kind = "procurvatum (distal end caudal)" if sag > 0 else "recurvatum (distal end cranial)"
+    note = "" if sag >= 0 else " = recurvatum (distal end cranial)"
     if not info.get("side_known", True):
-        kind = "direction unknown - limb side not set"
-    lines.append(f"Orange plane (condylar axis - metaphysis point): {abs(sag):.1f}° to the femoral axis, {kind}")
+        note = " (direction unknown - limb side not set)"
+    lines.append(f"Procurvatum: {sag:.1f}°{note} - orange plane (condylar axis - metaphysis point) to the femoral axis")
     if info.get("sagittal_cora_outside"):
-        lines.append(f"CORA sagittal: none on the femur - they would meet {info['sagittal_cora_level']:.0f} mm "
-                     "from the condylar axis")
+        lines.append(f"CORA sagittal (procurvatum): none on the femur - they would meet "
+                     f"{info['sagittal_cora_level']:.0f} mm from the condylar axis")
     elif "sagittal_cora" in info:
-        lines.append(f"CORA sagittal: {info['sagittal_cora_level']:.1f} mm proximal of the condylar axis "
-                     "(femoral axis through the orange plane)")
+        lines.append(f"CORA sagittal (procurvatum): {info['sagittal_cora_level']:.1f} mm proximal of the condylar "
+                     "axis (femoral axis through the orange plane)")
     else:
-        lines.append("CORA sagittal: none - the femoral axis lies in the orange plane")
+        lines.append("CORA sagittal (procurvatum): none - the femoral axis lies in the orange plane")
     return lines
 
 
@@ -556,14 +556,15 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
         info = getattr(self, "cora_info", None)
         if not info:
             return []
-        rows = [("Femur sagittal angle (condylar axis - metaphysis plane to femoral axis)", info["sagittal"],
+        rows = [("Femur procurvatum (orange plane condylar axis - metaphysis point to femoral axis)", info["sagittal"],
                  "+ = procurvatum (distal end caudal), - = recurvatum"),
                 ("Femur metaphysis point height", info["anchor_level"], "mm proximal of the condylar axis")]
         if "cora" in info:
             rows.append(("Femur CORA frontal height", info["cora_level"],
                          f"mm proximal of the condylar axis (aLDFA target {info['target']:.1f} deg)"))
         if "sagittal_cora" in info:
-            rows.append(("Femur CORA sagittal height", info["sagittal_cora_level"], "mm proximal of the condylar axis"))
+            rows.append(("Femur CORA sagittal (procurvatum) height", info["sagittal_cora_level"],
+                         "mm proximal of the condylar axis"))
         return rows
 
     def __init__(self):

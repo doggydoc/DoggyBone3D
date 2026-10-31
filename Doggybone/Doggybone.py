@@ -1955,13 +1955,14 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         label = form.labelForField(box)
         if label is not None:
             label.setVisible(config.sagittal_input)
-            label.setText("Sagittal target" if target_mode else "Sagittal (manual)")
+            label.setText(("Procurvatum target" if config.name == "Femur" else "Sagittal target")
+                          if target_mode else "Sagittal (manual)")
         if target_mode:
             box.setRange(-45.0, 90.0)
             if config.name == "Femur":
                 box.setToolTip(
-                    "TARGET angle of the plane condylar axis - metaphysis point to the femoral axis after the "
-                    "correction (+ = procurvatum, - = recurvatum; see aLDFA / Antetorsion). Starts at the current "
+                    "TARGET procurvatum after the correction: angle of the orange plane (condylar axis - metaphysis "
+                    "point) to the femoral axis (+ = procurvatum, - = recurvatum; see aLDFA / Antetorsion). Starts at the current "
                     "value (no sagittal correction); frontal, sagittal and torsion are solved together. Without "
                     "the point 'Femur distal metaphysis' this field is a manual correction angle.")
             else:
@@ -2045,7 +2046,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
                        f"{abs(info['frontal']):.1f}°")
             if "cora" in info and not info.get("cora_outside"):
                 frontal += f" - CORA frontal {info['cora_level']:.1f} mm above the condylar axis"
-            sagittal = f"Distal sagittal plane to the femoral axis: {info['sagittal']:.1f}°"
+            sagittal = f"Procurvatum (orange plane to the femoral axis): {info['sagittal']:.1f}°"
             if "sagittal_cora" in info and not info.get("sagittal_cora_outside"):
                 sagittal += f" - CORA sagittal {info['sagittal_cora_level']:.1f} mm above the condylar axis"
             cora_text = "\n" + frontal + "\n" + sagittal
