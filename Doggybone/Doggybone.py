@@ -2672,6 +2672,8 @@ class MeasurementsPanel(qt.QWidget):
         node.GetDisplayNode().SetColor(*color)
         self._show_unless_original_hidden(node)
 
+    PLANE_THICKNESS = 1.5      # mm - planes are drawn as slabs
+
     def show_plane(self, label, corners, color, opacity=0.25):
         """Translucent rectangle (e.g. a frontal plane), kept with the axis nodes (shown / hidden with them)."""
         if not self.axes_visible:
@@ -2686,21 +2688,39 @@ class MeasurementsPanel(qt.QWidget):
             node.GetDisplayNode().SetVisibility2D(False)
             node.GetDisplayNode().BackfaceCullingOff()
         self.axis_nodes[label] = node
+        # a thin SLAB (PLANE_THICKNESS mm), not a flat polygon: still visible when seen edge-on, and it
+        # cuts every slice view (MPR) as a band
+        corners = [np.asarray(c, float) for c in corners]
+        normal = np.cross(corners[1] - corners[0], corners[2] - corners[1])
+        normal = normal / max(float(np.linalg.norm(normal)), 1e-9)
+        thickness = self.PLANE_THICKNESS
         points = vtk.vtkPoints()
         polygon = vtk.vtkPolygon()
         polygon.GetPointIds().SetNumberOfIds(len(corners))
         for i, c in enumerate(corners):
-            points.InsertNextPoint(float(c[0]), float(c[1]), float(c[2]))
+            q = c - 0.5 * thickness * normal
+            points.InsertNextPoint(float(q[0]), float(q[1]), float(q[2]))
             polygon.GetPointIds().SetId(i, i)
         cells = vtk.vtkCellArray()
         cells.InsertNextCell(polygon)
         polydata = vtk.vtkPolyData()
         polydata.SetPoints(points)
         polydata.SetPolys(cells)
-        node.SetAndObservePolyData(polydata)
+        extrude = vtk.vtkLinearExtrusionFilter()
+        extrude.SetInputData(polydata)
+        extrude.SetExtrusionTypeToVectorExtrusion()
+        extrude.SetVector(float(normal[0]), float(normal[1]), float(normal[2]))
+        extrude.SetScaleFactor(thickness)
+        extrude.CappingOn()
+        triangles = vtk.vtkTriangleFilter()
+        triangles.SetInputConnection(extrude.GetOutputPort())
+        triangles.Update()
+        node.SetAndObservePolyData(triangles.GetOutput())
         display = node.GetDisplayNode()
         display.SetColor(*color)
-        display.SetOpacity(opacity)
+        display.SetOpacity(max(opacity, 0.35))
+        display.SetVisibility2D(True)
+        display.SetSliceIntersectionThickness(3)
         self._show_unless_original_hidden(node)
 
     def hide_axis(self, label):

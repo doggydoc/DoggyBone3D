@@ -80,18 +80,18 @@ LANDMARKS = [
                      "'Update 33 % / 50 %' sets it from the femur head and condyle spheres; a click at any height is "
                      "centred in the cross-section.",
                      r"Resources/descriptions/distfemurmidpoint.png", axis_from=FEMUR_AXIS, fraction=0.50),
-    CentroidLandmark('Femur distal axis point',
-                     "OPTIONAL - proximal point of the distal segment: click further proximal, but still distal of the "
-                     "deformity. The frontal distal axis runs through it at the aLDFA target to the condylar axis; "
-                     "with 'Femur distal metaphysis' the line between both gives the sagittal deviation. Centred "
-                     "in the cross-section.",
-                     r"", axis_from=FEMUR_AXIS),
-    CentroidLandmark('Femur distal metaphysis',
-                     "OPTIONAL - distal point of the distal segment: click the distal metaphysis just proximal of the "
-                     "trochlea and the condyles. With 'Femur distal axis point' the line between both gives the "
-                     "sagittal deviation; alone, the frontal distal axis runs through it at the aLDFA target. "
-                     "Centred in the cross-section.",
-                     r"", axis_from=FEMUR_AXIS),
+    SimpleLandmark('Femur distal axis point',
+                   "OPTIONAL - proximal centre of the distal segment, set BY HAND (not centred automatically): place "
+                   "it in the bone centre further proximal, but still distal of the deformity - check it in two slice "
+                   "views. The frontal distal axis runs through it at the aLDFA target to the condylar axis; with "
+                   "'Femur distal metaphysis' the line between both gives the sagittal deviation.",
+                   r""),
+    SimpleLandmark('Femur distal metaphysis',
+                   "OPTIONAL - distal centre of the distal segment, set BY HAND (not centred automatically): place it "
+                   "in the centre of the distal metaphysis just proximal of the trochlea and the condyles - check it "
+                   "in two slice views. With 'Femur distal axis point' the line between both gives the sagittal "
+                   "deviation; alone, the frontal distal axis runs through it at the aLDFA target.",
+                   r""),
     SimpleLandmark('femur neck', 
                    "Choose the center of the proximal femoral metaphysis on the height of the highest elevation of the lesser trochanter.", 
                    r"Resources/descriptions/femurneck.png"),
