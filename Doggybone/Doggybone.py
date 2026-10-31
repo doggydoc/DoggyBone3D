@@ -1597,6 +1597,15 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
             if node is not None:
                 slicer.mrmlScene.RemoveNode(node)
 
+    def _reload_and_enter(self):
+        """Rebuild the module for the new scene and ENTER the new widget: Slicer does not call enter()
+        again after the reload, so no measurement would be active and no landmark could be placed."""
+        slicer.util.reloadScriptedModule(self.moduleName)
+        module = getattr(slicer.modules, self.moduleName.lower(), None)
+        widget = module.widgetRepresentation().self() if module is not None else None
+        if widget is not None and widget is not self and slicer.util.selectedModule() == self.moduleName:
+            qt.QTimer.singleShot(0, widget.enter)
+
     def enter(self):
         # Called by Slicer whenever the user switches to this module's tab. Also call the base
         # class's own enter(), if it defines one, in case Slicer's module-switching machinery
@@ -1606,7 +1615,7 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         self._redraw_module_panel()
         if getattr(self, "_reload_on_enter", False):           # scene was closed / loaded meanwhile
             self._reload_on_enter = False
-            qt.QTimer.singleShot(0, lambda: slicer.util.reloadScriptedModule(self.moduleName))
+            qt.QTimer.singleShot(0, self._reload_and_enter)
             return
         self._current_panel().activate()
         self._schedule_condyle_circles()
@@ -3559,7 +3568,7 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
             selection.SetActivePlaceNodeID(other_id)
             landmark.start_interaction()
             self.assertEqual(selection.GetActivePlaceNodeID(), own_id)
-            self.assertEqual(selection.GetReferenceActivePlaceNodeClassName(), "vtkMRMLMarkupsFiducialNode")
+            self.assertEqual(selection.GetActivePlaceNodeClassName(), "vtkMRMLMarkupsFiducialNode")
             stray = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "stray list")
             selection.SetActivePlaceNodeID(stray.GetID())
             selection.SetActivePlaceNodeID(other_id)

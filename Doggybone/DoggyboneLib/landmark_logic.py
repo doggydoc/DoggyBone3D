@@ -211,8 +211,9 @@ class SimpleLandmark:
         if selection is None or self._markups_node is None:
             return
         node_id = self._markups_node.GetID()
-        if selection.GetReferenceActivePlaceNodeClassName() != "vtkMRMLMarkupsFiducialNode":
-            selection.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
+        # (Get/SetActivePlaceNodeClassName: the 'Reference' getter does not exist in every Slicer version)
+        if selection.GetActivePlaceNodeClassName() != "vtkMRMLMarkupsFiducialNode":
+            selection.SetActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
         if selection.GetActivePlaceNodeID() != node_id:
             selection.SetActivePlaceNodeID(node_id)
 
