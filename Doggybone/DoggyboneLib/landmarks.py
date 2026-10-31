@@ -80,6 +80,11 @@ LANDMARKS = [
                      "'Update 33 % / 50 %' sets it from the femur head and condyle spheres; a click at any height is "
                      "centred in the cross-section.",
                      r"Resources/descriptions/distfemurmidpoint.png", axis_from=FEMUR_AXIS, fraction=0.50),
+    CentroidLandmark('Femur distal metaphysis',
+                     "Click the distal metaphysis just proximal of the trochlea and the condyles (distal of the "
+                     "deformity). The point is set to the area centroid of the cross-section; the distal partial "
+                     "axis for the CORA runs through it at the aLDFA target to the condylar axis.",
+                     r"", axis_from=FEMUR_AXIS),
     SimpleLandmark('femur neck', 
                    "Choose the center of the proximal femoral metaphysis on the height of the highest elevation of the lesser trochanter.", 
                    r"Resources/descriptions/femurneck.png"),

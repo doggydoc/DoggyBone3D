@@ -607,6 +607,8 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         osteotomy_form_layout.addRow("Sagittal (TPA)", sagittal_field)
 
         self.target_wedge_value.valueChanged.connect(self._on_target_values_changed)
+        from DoggyboneLib import measurement_logic as _ml
+        _ml.set_aldfa_target_provider(self._femur_wedge_target)
         self.target_rotation_value.valueChanged.connect(self._on_target_values_changed)
         self.femur_sagittal_value.valueChanged.connect(self._on_target_values_changed)
         self._on_osteotomy_bone_changed(self.osteotomy_bone.currentIndex)
@@ -1588,6 +1590,13 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
                 editor.setSegmentationNode(None)
             except Exception:
                 pass
+
+    def _femur_wedge_target(self):
+        """aLDFA target of the femur in the planning (for the femur CORA measurement)."""
+        if getattr(self, "_target_bone", None) == "Femur":
+            return float(self.target_wedge_value.value)
+        stored = getattr(self, "_targets_per_bone", {}).get("Femur")
+        return float(stored[0]) if stored else float(self.WEDGE_TARGET_DEFAULT["Femur"])
 
     def _rotation_target_default(self, bone):
         """The bone's default torsion target; None in the bone config = no reference value known:
