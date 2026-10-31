@@ -1955,8 +1955,9 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         label = form.labelForField(box)
         if label is not None:
             label.setVisible(config.sagittal_input)
-            label.setText(("Procurvatum target" if config.name == "Femur" else "Sagittal target")
-                          if target_mode else "Sagittal (manual)")
+            femur = config.name == "Femur"
+            label.setText(("Pro/Recurvatum Target" if femur else "Sagittal target") if target_mode
+                          else ("Pro/Recurvatum (manual)" if femur else "Sagittal (manual)"))
         if target_mode:
             box.setRange(-45.0, 90.0)
             if config.name == "Femur":
@@ -1985,6 +1986,19 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             was_blocked = box.blockSignals(True)
             box.setValue(0.0)
             box.blockSignals(was_blocked)
+        # calculated correction: the sagittal part ('Pro/Recurvatum'; the tibia keeps its TPA row)
+        calc = getattr(self, "calculated_sagittal", None)
+        calc_label = form.labelForField(calc) if calc is not None else None
+        if calc is not None and not config.target_table:
+            calc.setVisible(config.sagittal_input)
+            calc.setSuffix(" \N{DEGREE SIGN}")
+            calc.setToolTip("Sagittal part of the correction: current - target pro/recurvatum (target mode) or "
+                            "the manual angle; + = procurvatum reduced.")
+            if calc_label is not None:
+                calc_label.setVisible(config.sagittal_input)
+                calc_label.setText("Pro/Recurvatum")
+        elif calc_label is not None:
+            calc_label.setText("Sagittal (TPA)")
 
     def _on_technique_changed(self):
         """Switched to CWO with two almost identical planes: recommend an OWO right away."""
@@ -2047,6 +2061,15 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             sagittal = (f"CORA sagittal (Pro/Recurvatum): {info['sagittal']:.1f}° - orange plane "
                         "(condylar axis - metaphysis point)")
             cora_text = "\n" + frontal + "\n" + sagittal
+        calc = getattr(self, "calculated_sagittal", None)
+        config = self._bone_config(bone)
+        if calc is not None and config.sagittal_input and not config.target_table:
+            if self._sagittal_target_mode(bone):
+                current_sagittal = self._current_sagittal_value(side, bone)
+                calc.setValue((round(current_sagittal, 1) - float(self.femur_sagittal_value.value))
+                              if current_sagittal is not None else 0.0)
+            else:
+                calc.setValue(float(self.femur_sagittal_value.value))
 
         ok, delta, rotation_message = self._calculated_rotation_delta(side, bone)
         if ok:
