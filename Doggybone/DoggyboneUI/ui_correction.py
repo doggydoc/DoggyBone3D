@@ -1342,6 +1342,7 @@ class CorrectionMixin:
                 # visible through the fragments.
                 display.SetOccludedVisibility(True)
                 display.SetOccludedOpacity(0.6)
+                display.SetVisibility(True)              # a new preview always shows its gizmo
         finally:
             self._fine_shift_updating = False
 
@@ -1488,7 +1489,8 @@ class CorrectionMixin:
         """Scene objects of ONE bone's osteotomy planning: fragments, removed wedge, combined bone and
         the cutting planes."""
         names = list(self._preview_node_names(side, bone))
-        names = [names[0], names[1], names[3], names[4], self._plane_node_name(side, bone)]
+        names = [names[0], names[1], names[3], names[4], self._plane_node_name(side, bone),
+                 self._fine_shift_node_names(side, bone)[1]]                    # + the X/Y fine-shift gizmo
         if hasattr(self, "_distal_plane_node_name"):
             names.append(self._distal_plane_node_name(side, bone))
         nodes = []
@@ -1497,6 +1499,19 @@ class CorrectionMixin:
             if node is not None and node.GetDisplayNode() is not None:
                 nodes.append(node)
         return nodes
+
+    def _show_fine_shift_gizmo(self, side, bone):
+        """The X/Y fine-shift gizmo of the ACTIVE preview, when that bone is selected (it may have been
+        hidden by the guide tools, the measurements or the other bone's planning)."""
+        state = getattr(self, "_fine_shift_state", None) or {}
+        if state.get("side") != side or state.get("bone") != bone:
+            return
+        gizmo = slicer.mrmlScene.GetFirstNodeByName(self._fine_shift_node_names(side, bone)[1])
+        if gizmo is None or gizmo.GetDisplayNode() is None:
+            return
+        if not self._compare_mode():
+            gizmo.GetDisplayNode().RemoveAllViewNodeIDs()   # not left over from the compare views
+        gizmo.GetDisplayNode().SetVisibility(True)
 
     def _corrected_overlay_nodes(self, side, bone=None):
         """Corrected landmarks / spheres / axes of that side - of one bone, or of all bones (None)."""
@@ -1588,6 +1603,7 @@ class CorrectionMixin:
                             self._update_corrected_landmarks(state)
                             corrected = self._corrected_overlay_nodes(s, b)
                     self._stash_restore(("corrected", s, b))
+                    self._show_fine_shift_gizmo(s, b)
                     if corrected:
                         if not any(node.GetDisplayNode().GetVisibility() for node in corrected):
                             for node in corrected:             # e.g. after a module reload: show them
