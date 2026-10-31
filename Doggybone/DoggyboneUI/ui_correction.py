@@ -1551,6 +1551,7 @@ class CorrectionMixin:
                 self._restore_original_overlay(s)       # also when nothing was remembered (reload)
         combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
         if combined is not None and combined.GetPolyData() is not None and combined.GetPolyData().GetNumberOfPoints() > 0:
+            self._show_preview_fragments()               # this bone's fragments (also if hidden meanwhile)
             self._sync_original_segmentation()
         else:
             self._ensure_segmentation_visible()          # no preview of this bone: the original bone
