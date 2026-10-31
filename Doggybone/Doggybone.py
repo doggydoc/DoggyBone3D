@@ -2044,11 +2044,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         if info and wedge_measurement()[0]:
             frontal = (f"Distal frontal plane (aLDFA {info['target']:.1f}°) to the femoral axis: "
                        f"{abs(info['frontal']):.1f}°")
-            if "cora" in info and not info.get("cora_outside"):
-                frontal += f" - CORA frontal {info['cora_level']:.1f} mm above the condylar axis"
             sagittal = f"Procurvatum (orange plane to the femoral axis): {info['sagittal']:.1f}°"
-            if "sagittal_cora" in info and not info.get("sagittal_cora_outside"):
-                sagittal += f" - CORA sagittal {info['sagittal_cora_level']:.1f} mm above the condylar axis"
             cora_text = "\n" + frontal + "\n" + sagittal
 
         ok, delta, rotation_message = self._calculated_rotation_delta(side, bone)

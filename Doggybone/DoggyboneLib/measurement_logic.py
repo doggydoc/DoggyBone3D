@@ -498,16 +498,15 @@ def femur_cora_lines(info):
     # frontal
     if info.get("cora_outside"):
         lines.append(f"CORA frontal: none on the femur - the axes are almost parallel ({abs(info['frontal']):.1f}° to "
-                     f"the target), they would meet {info['cora_level']:.0f} mm from the condylar axis")
+                     f"the target)")
     elif "cora" in info:
         kind = "varus" if info["frontal"] > 0 else "valgus"
-        lines.append(f"CORA frontal: {info['cora_level']:.1f} mm proximal of the condylar axis (femoral axis through "
-                     f"the blue plane) - correction {abs(info['frontal']):.1f}° ({kind}) to the target")
+        lines.append(f"CORA frontal: femoral axis through the blue plane (marker) - correction "
+                     f"{abs(info['frontal']):.1f}° ({kind}) to the target")
         if info["cora_level"] < info["anchor_level"]:
             lines.append("CORA frontal lies DISTAL of the metaphysis point - check the point and the target")
         if abs(info["frontal"]) < FEMUR_CORA_RELIABLE_DEG:
-            lines.append(f"CORA frontal UNRELIABLE: only {abs(info['frontal']):.1f}° - 1 mm axis offset moves it by "
-                         f"{1.0 / np.tan(np.radians(max(abs(info['frontal']), 0.1))):.0f} mm")
+            lines.append(f"CORA frontal UNRELIABLE: only {abs(info['frontal']):.1f}° - a small axis offset moves it far")
     else:
         lines.append("CORA frontal: none - the femoral axis already stands at the target to the condylar axis")
     # sagittal
@@ -517,11 +516,10 @@ def femur_cora_lines(info):
         note = " (direction unknown - limb side not set)"
     lines.append(f"Procurvatum: {sag:.1f}°{note} - orange plane (condylar axis - metaphysis point) to the femoral axis")
     if info.get("sagittal_cora_outside"):
-        lines.append(f"CORA sagittal (procurvatum): none on the femur - they would meet "
-                     f"{info['sagittal_cora_level']:.0f} mm from the condylar axis")
+        lines.append("CORA sagittal (procurvatum): none on the femur - the femoral axis is almost parallel to the "
+                     "orange plane")
     elif "sagittal_cora" in info:
-        lines.append(f"CORA sagittal (procurvatum): {info['sagittal_cora_level']:.1f} mm proximal of the condylar "
-                     "axis (femoral axis through the orange plane)")
+        lines.append("CORA sagittal (procurvatum): femoral axis through the orange plane (marker)")
     else:
         lines.append("CORA sagittal (procurvatum): none - the femoral axis lies in the orange plane")
     return lines
