@@ -167,7 +167,7 @@ class FemurCoraTest(unittest.TestCase):
         self.assertNotIn(ml.FEMUR_CORA, m.spheres)
         low, _top = m.axes["Femoral shaft axis"]
         self.assertAlmostEqual(float(low[2]), 0.0, delta=0.5)          # knee: condylar level (z = 0)
-        self.assertTrue(any("No frontal CORA on the femur" in line for line in ml.femur_cora_lines(info)))
+        self.assertTrue(any("CORA frontal: none on the femur" in line for line in ml.femur_cora_lines(info)))
 
     def test_bad_target_falls_back_to_reference(self):
         ml.set_aldfa_target_provider(lambda: 0.0)

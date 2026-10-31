@@ -495,30 +495,35 @@ def femur_cora_lines(info):
         return ["Distal planes / CORA: set 'Femur distal metaphysis' (by hand, centre of the metaphysis just proximal "
                 "of the trochlear groove)"]
     lines = [f"Blue plane: through the metaphysis point at the aLDFA target {info['target']:.1f}° to the condylar axis"]
+    # frontal
     if info.get("cora_outside"):
-        lines.append(f"No frontal CORA on the femur: the axes are almost parallel ({abs(info['frontal']):.1f}° to "
-                     f"the target) - they would meet {info['cora_level']:.0f} mm from the condylar axis")
+        lines.append(f"CORA frontal: none on the femur - the axes are almost parallel ({abs(info['frontal']):.1f}° to "
+                     f"the target), they would meet {info['cora_level']:.0f} mm from the condylar axis")
     elif "cora" in info:
         kind = "varus" if info["frontal"] > 0 else "valgus"
-        lines.append(f"CORA frontal (femoral axis through the blue plane): {info['cora_level']:.1f} mm proximal "
-                     f"of the condylar axis - correction {abs(info['frontal']):.1f}° ({kind}) to the target")
+        lines.append(f"CORA frontal: {info['cora_level']:.1f} mm proximal of the condylar axis (femoral axis through "
+                     f"the blue plane) - correction {abs(info['frontal']):.1f}° ({kind}) to the target")
         if info["cora_level"] < info["anchor_level"]:
-            lines.append("Frontal CORA lies DISTAL of the metaphysis point - check the point and the target")
+            lines.append("CORA frontal lies DISTAL of the metaphysis point - check the point and the target")
         if abs(info["frontal"]) < FEMUR_CORA_RELIABLE_DEG:
-            lines.append(f"UNRELIABLE: only {abs(info['frontal']):.1f}° - 1 mm axis offset moves the CORA by "
+            lines.append(f"CORA frontal UNRELIABLE: only {abs(info['frontal']):.1f}° - 1 mm axis offset moves it by "
                          f"{1.0 / np.tan(np.radians(max(abs(info['frontal']), 0.1))):.0f} mm")
     else:
-        lines.append("No frontal CORA: the femoral axis already stands at the target to the condylar axis")
+        lines.append("CORA frontal: none - the femoral axis already stands at the target to the condylar axis")
+    # sagittal
     sag = info["sagittal"]
     kind = "procurvatum (distal end caudal)" if sag > 0 else "recurvatum (distal end cranial)"
     if not info.get("side_known", True):
         kind = "direction unknown - limb side not set"
-    text = f"Orange plane (condylar axis - metaphysis point): {abs(sag):.1f}° to the femoral axis, {kind}"
+    lines.append(f"Orange plane (condylar axis - metaphysis point): {abs(sag):.1f}° to the femoral axis, {kind}")
     if info.get("sagittal_cora_outside"):
-        text += "; no sagittal CORA on the femur"
+        lines.append(f"CORA sagittal: none on the femur - they would meet {info['sagittal_cora_level']:.0f} mm "
+                     "from the condylar axis")
     elif "sagittal_cora" in info:
-        text += f"; CORA sagittal {info['sagittal_cora_level']:.1f} mm proximal of the condylar axis"
-    lines.append(text)
+        lines.append(f"CORA sagittal: {info['sagittal_cora_level']:.1f} mm proximal of the condylar axis "
+                     "(femoral axis through the orange plane)")
+    else:
+        lines.append("CORA sagittal: none - the femoral axis lies in the orange plane")
     return lines
 
 
