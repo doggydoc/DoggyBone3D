@@ -122,7 +122,8 @@ class CombinedCorrectionMixin:
         middle = self._transformed(self._proximal_part(middle_node.GetPolyData(), cut_l[0], cut_l[1], cut_l[2]), H_u)
         distal = self._transformed(distal_node.GetPolyData(), H_both)
         model_names = self._combined_names(side)
-        self._hide_for_combined(side)
+        views = self._combined_views()
+        self._hide_for_combined(side, keep_original=views is not None)
         for name, polydata, color in zip(model_names[:3], (fixed, middle, distal), self.COMBINED_COLORS):
             self._combined_model(name, polydata, color)
 
@@ -160,6 +161,8 @@ class CombinedCorrectionMixin:
         display.SetSelectedColor(0.2, 1.0, 0.4)
         display.SetGlyphScale(2.0)
         display.SetPointLabelsVisibility(False)
+        if views is not None:
+            self._split_combined_views(side, views)
 
         # every measurement of both bones: before -> after both corrections
         lines = [f"<b>{side.capitalize()}: {upper} + {lower} corrected</b> "
@@ -191,24 +194,57 @@ class CombinedCorrectionMixin:
         slicer.util.forceRenderAllViews()
         return True, "<br>".join(lines)
 
-    def _hide_for_combined(self, side):
-        """Single previews, corrected overlays, original landmarks and the bone segmentation give way."""
+    def _combined_views(self):
+        """(corrected view id, original view id, slice view ids) when two 3D views are shown side by side -
+        the combined correction LEFT, the original segmentation with its landmarks RIGHT; else None."""
+        layout_manager = slicer.app.layoutManager()
+        shown = [layout_manager.threeDWidget(i) for i in range(layout_manager.threeDViewCount)
+                 if layout_manager.threeDWidget(i).isVisible()]
+        if len(shown) < 2:
+            return None
+        shown.sort(key=lambda widget: widget.mapToGlobal(qt.QPoint(0, 0)).x())
+        slices = [layout_manager.sliceWidget(name).mrmlSliceNode().GetID() for name in layout_manager.sliceViewNames()
+                  if layout_manager.sliceWidget(name) is not None]
+        return shown[0].mrmlViewNode().GetID(), shown[-1].mrmlViewNode().GetID(), slices
+
+    def _original_display_nodes(self, side):
+        panel = self.left_panel if side == "left" else self.right_panel
+        nodes = [slicer.mrmlScene.GetNodeByID(panel.markup_node_id) if panel is not None else None,
+                 slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)]
+        return [n for n in nodes if n is not None and n.GetDisplayNode() is not None]
+
+    def _split_combined_views(self, side, views):
+        """Combined correction only in the left 3D view; original segmentation + landmarks only in the right
+        one (and the slice views). The previous view assignment is remembered and restored."""
+        corrected_id, original_id, slices = views
+        for name in self._combined_names(side):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetViewNodeIDs([corrected_id])
+        saved = self.__dict__.setdefault("_combined_saved_views", {})
+        for node in self._original_display_nodes(side):
+            display = node.GetDisplayNode()
+            saved.setdefault(node.GetID(), (list(display.GetViewNodeIDs()), bool(display.GetVisibility()),
+                                            bool(display.GetVisibility3D()) if hasattr(display, "GetVisibility3D") else None))
+            display.SetViewNodeIDs([original_id] + slices)
+            display.SetVisibility(True)
+            if hasattr(display, "SetVisibility3D"):
+                display.SetVisibility3D(True)
+
+    def _hide_for_combined(self, side, keep_original=False):
+        """Single previews, corrected overlays and (one 3D view only) the original landmarks / bone
+        segmentation give way."""
         if self.__dict__.get("_combined_hidden_side") == side:
             return
         nodes = []
         for bone in self.BONES.names:
             nodes += self._bone_preview_nodes(side, bone)
             nodes += self._corrected_overlay_nodes(side, bone)
-        panel = self.left_panel if side == "left" else self.right_panel
-        markups = slicer.mrmlScene.GetNodeByID(panel.markup_node_id) if panel is not None else None
-        if markups is not None and markups.GetDisplayNode() is not None:
-            nodes.append(markups)
         nodes += [n for n in slicer.util.getNodesByClass("vtkMRMLModelNode")
                   if (n.GetName() or "").startswith(f"Doggybone {side} ") and (n.GetName() or "").endswith((" axis", " sphere"))
                   and n.GetDisplayNode() is not None]
-        segmentation = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
-        if segmentation is not None and segmentation.GetDisplayNode() is not None:
-            nodes.append(segmentation)
+        if not keep_original:
+            nodes += self._original_display_nodes(side)
         self._stash_hide(("combined", side), nodes)
         self._combined_hidden_side = side
 
@@ -220,5 +256,14 @@ class CombinedCorrectionMixin:
                 if node is not None:
                     slicer.mrmlScene.RemoveNode(node)
             self._stash_restore(("combined", side))
+        for node_id, (view_ids, visible, visible_3d) in self.__dict__.pop("_combined_saved_views", {}).items():
+            node = slicer.mrmlScene.GetNodeByID(node_id)
+            display = node.GetDisplayNode() if node is not None else None
+            if display is None:
+                continue
+            display.SetViewNodeIDs(view_ids)
+            display.SetVisibility(visible)
+            if visible_3d is not None and hasattr(display, "SetVisibility3D"):
+                display.SetVisibility3D(visible_3d)
         self._combined_hidden_side = None
         slicer.util.forceRenderAllViews()
