@@ -745,12 +745,12 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         # With an active preview (always, no options): the original segmentation is hidden in 3D,
         # the landmarks / spheres / axes are shown in the corrected position and the cutting planes
         # are hidden - everything comes back with 'Remove preview'. The landmark names: checkbox.
-        self.hide_landmark_labels = qt.QCheckBox("Hide all landmark descriptions")
-        self.hide_landmark_labels.setChecked(True)
-        self.hide_landmark_labels.setToolTip(
-            "Hide the names of all landmarks in the 3D and slice views - original and corrected position, "
-            "left and right. Uncheck to show them again.")
-        self.hide_landmark_labels.toggled.connect(lambda _c: self._apply_landmark_label_visibility())
+        self.show_landmark_labels = qt.QCheckBox("Show all landmark descriptions")
+        self.show_landmark_labels.setChecked(False)
+        self.show_landmark_labels.setToolTip(
+            "Show the names of all landmarks in the 3D and slice views - original and corrected position, "
+            "left and right (while measuring the names are always shown).")
+        self.show_landmark_labels.toggled.connect(lambda _c: self._apply_landmark_label_visibility())
         self.show_cutting_planes = qt.QCheckBox("Show cutting planes")
         self.show_cutting_planes.setChecked(True)
         self.show_cutting_planes.setToolTip(
@@ -759,15 +759,15 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         self.show_cutting_planes.toggled.connect(lambda _c: self._apply_cutting_plane_visibility())
         view_row = qt.QHBoxLayout()
         view_row.setContentsMargins(0, 0, 0, 0)
-        view_row.addWidget(self.hide_landmark_labels)
+        view_row.addWidget(self.show_landmark_labels)
         view_row.addWidget(self.show_cutting_planes)
         view_row.addStretch(1)
-        self.compare_views_checkbox = qt.QCheckBox("Compare original | corrected (two 3D views)")
+        self.compare_views_checkbox = qt.QCheckBox("Show original/corrected 3D views")
         self.compare_views_checkbox.setChecked(False)
         self.compare_views_checkbox.setToolTip(
-            "Two 3D views side by side: left the ORIGINAL bone with its landmarks, axes and cutting planes, "
-            "right the CORRECTED bone (correction preview) with the corrected landmarks and axes. Both views "
-            "turn and zoom together. Untick to return to the previous layout.")
+            "Two 3D views side by side: the CORRECTED bone (correction preview) with the corrected landmarks and "
+            "axes, and the ORIGINAL bone with its landmarks, axes and cutting planes. Both views turn and zoom "
+            "together. Untick to return to the previous layout.")
         self.compare_views_checkbox.toggled.connect(self.onCompareViewsToggled)
         view_widget = qt.QWidget()
         view_widget.setLayout(view_row)
@@ -2172,12 +2172,12 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             surface.GetDisplayNode().SetOpacity(value / 100.0)
 
     def _landmark_labels_hidden(self):
-        box = getattr(self, "hide_landmark_labels", None)
-        return bool(box.checked) if box is not None else False
+        box = getattr(self, "show_landmark_labels", None)
+        return (not bool(box.checked)) if box is not None else False
 
     def _apply_landmark_label_visibility(self):
         """Landmark names (original landmarks of both sides and the corrected landmarks) on / off
-        according to 'Hide all landmark descriptions'."""
+        according to 'Show all landmark descriptions'."""
         show = not self._landmark_labels_hidden()
         # measuring (original dataset): the names of the original landmarks are always shown - they are
         # needed to place / check the points; the checkbox applies to the osteotomy views

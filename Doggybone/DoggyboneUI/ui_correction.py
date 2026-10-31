@@ -451,7 +451,7 @@ class CorrectionMixin:
             self.correction_status.setText(self.correction_status.text + "\n" + advice)
         self._update_corrected_landmarks()
         self.onHideAnnotationsToggled(True)            # cutting planes hidden while the preview is shown
-        self._apply_landmark_label_visibility()         # landmark names: 'Hide all landmark descriptions'
+        self._apply_landmark_label_visibility()         # landmark names: 'Show all landmark descriptions'
 
         # After the cut only the X/Y gizmo on the contact (master) face stays interactive; the
         # cutting planes' own handles are switched off so they cannot be moved by accident.
