@@ -1931,7 +1931,8 @@ class CorrectionMixin:
             measurement = self._get_measurement_by_name(panel, bone_name) if bone_name else None
             if measurement is None:
                 continue
-            needed = [l.name for l in measurement.get_landmarks()]
+            needed = [l.name for l in measurement.get_landmarks()
+                      if l.name not in getattr(measurement, "OPTIONAL_LANDMARKS", [])]
             if any(name not in measure_points for name in needed):
                 continue
             corrected = copy.copy(measurement)          # own spheres/axes - the original stays as is

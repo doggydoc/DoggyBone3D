@@ -14,6 +14,5 @@ MEASUREMENTS = [
     TibiaTorsionMeasurement,
     FemorotibialRotationMeasurement,
     TibiotalarRotationMeasurement,
-    TibialMetatarsalAngleMeasurement,
-    FemurCoraMeasurement,
+    TibialMetatarsalAngleMeasurement
 ]

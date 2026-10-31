@@ -46,6 +46,10 @@ class BaseMeasurement:
     # measurement itself.
     LANDMARK_ORDER = []
 
+    # Landmarks the measurement uses when they are placed but does not need (e.g. the distal partial
+    # axis of the femur): _measure asks for them with 'name in point_dict'.
+    OPTIONAL_LANDMARKS = []
+
     def __init__(self, name):
         self.name = name                 # internal key (used by the planning / export)
         self.display_name = name         # shown in the GUI
@@ -87,6 +91,9 @@ class BaseMeasurement:
                 self.queried_keys.append(key)
                 return np.random.rand(3)
 
+            def __contains__(self, key):          # optional landmarks are asked for with 'in'
+                return True
+
         fake_dict = FakeDict()
         self._measure(fake_dict, fake_dict)
         # _measure legitimately reads some landmarks more than once (e.g. once to build a
@@ -121,11 +128,13 @@ class BaseMeasurement:
 
     def __call__(self):
         # Check if all landmarks were placed
+        optional = set(self.OPTIONAL_LANDMARKS)
         for landmark in self.landmarks:
-            if not landmark.placed:
+            if not landmark.placed and landmark.name not in optional:
                 return False, None, "Not all landmarks defined"
-        point_dict = {l.name: l.get_position() for l in self.landmarks}
-        radius_dict = {l.name: getattr(l, "radius", None) for l in self.landmarks}
+        used = [l for l in self.landmarks if l.placed]
+        point_dict = {l.name: l.get_position() for l in used}
+        radius_dict = {l.name: getattr(l, "radius", None) for l in used}
         try:
             angle, message = self._measure(point_dict, radius_dict)
         except ValueError as error:          # degenerate landmark geometry (see helpers.angle)
@@ -349,9 +358,148 @@ class FemorotibialRotationMeasurement(BaseMeasurement):
         else:
             raise ValueError(f"Unknown side {self.side}")
 
+# ---- femur: distal partial axis and CORA (optional, part of aLDFA / Antetorsion) ---------------------
+# One point in the distal metaphysis: the distal partial axis is CONSTRUCTED through it at the aLDFA
+# target to the condylar axis (joint-line method after Paley - for a deformity far distally, where the
+# distal segment is too short for two shaft points). A second point further proximal in the distal
+# segment: the distal partial axis is MEASURED (both points centred in the cross-section). The CORA is
+# the intersection of the proximal (shaft 33 % / 50 %) and the distal partial axis in the frontal plane.
+FEMUR_DISTAL_AXIS_POINT = "Femur distal axis point"
+FEMUR_DISTAL_ANCHOR = "Femur distal metaphysis"
+FEMUR_DISTAL_OPTIONAL = [FEMUR_DISTAL_AXIS_POINT, FEMUR_DISTAL_ANCHOR]
+FEMUR_CORA = "CORA"
+AXIS_FEMUR_DISTAL = "Distal partial axis"
+FEMUR_CORA_MARKER_RADIUS = 2.0
+FEMUR_CORA_RELIABLE_DEG = 5.0      # below this angulation 1 mm axis offset moves the CORA by > 11 mm
+FEMUR_DISTAL_SEGMENT_TOLERANCE_DEG = 2.0
+
+_aldfa_target_provider = None
+
+
+def set_aldfa_target_provider(provider):
+    """provider() -> the planned aLDFA target in degrees (the femur target of the planning)."""
+    global _aldfa_target_provider
+    _aldfa_target_provider = provider
+
+
+def aldfa_target():
+    if _aldfa_target_provider is not None:
+        try:
+            value = float(_aldfa_target_provider())
+            if 45.0 < value < 135.0:
+                return value
+        except Exception:
+            pass
+    return ALDFA_REFERENCE_DEG
+
+
+def _unit3(v):
+    v = np.asarray(v, float)
+    n = float(np.linalg.norm(v))
+    return v / n if n > 1e-12 else v
+
+
+def femur_distal_cora(point_dict, medial, lateral):
+    """Distal partial axis + CORA from the optional points, or None if the metaphysis point is not set.
+    Returns a dict with the drawn axes / marker and the values for the result lines."""
+    if FEMUR_DISTAL_ANCHOR not in point_dict:
+        if FEMUR_DISTAL_AXIS_POINT in point_dict:
+            point_dict[FEMUR_DISTAL_AXIS_POINT]              # registration: both names are queried
+        return None
+    anchor = np.asarray(point_dict[FEMUR_DISTAL_ANCHOR], float)
+    second = point_dict[FEMUR_DISTAL_AXIS_POINT] if FEMUR_DISTAL_AXIS_POINT in point_dict else None
+    target = aldfa_target()
+    p33 = np.asarray(point_dict["Femur midpoint 33%"], float)
+    p50 = np.asarray(point_dict["Femur midpoint 50%"], float)
+    medial, lateral = np.asarray(medial, float), np.asarray(lateral, float)
+    e1 = _unit3(lateral - medial)                        # condylar axis, medial -> lateral
+    p = _unit3(p33 - p50)                                # proximal partial axis, towards proximal
+    e2 = _unit3(p - np.dot(p, e1) * e1)                  # frontal plane, perpendicular to the condyles
+    n = np.cross(e1, e2)                                 # frontal plane normal (cranio-caudal)
+    deg = lambda a, b: float(np.degrees(np.arccos(np.clip(np.dot(_unit3(a), _unit3(b)), -1.0, 1.0))))
+    current = deg(p, e1)                                 # aLDFA of the proximal partial axis
+    measured = second is not None
+    if measured:
+        u = _unit3(np.asarray(second, float) - anchor)
+        if np.dot(u, p) < 0:
+            u = -u
+    else:
+        t = np.radians(target)
+        u = np.cos(t) * e1 + np.sin(t) * e2
+    u_front = _unit3(u - np.dot(u, n) * n)
+    distal_aldfa = deg(u_front, e1)                      # aLDFA of the distal partial axis (frontal)
+    frontal = current - distal_aldfa                     # angulation between the partial axes, + varus
+    u_sag = _unit3(u - np.dot(u, e1) * e1)
+    sagittal = float(np.degrees(np.arctan2(np.dot(u_sag, n), np.dot(u_sag, e2))))   # vs the proximal axis
+    joint_centre = 0.5 * (medial + lateral)
+    info = {"measured": measured, "target": target, "current": current, "distal_aldfa": distal_aldfa,
+            "frontal": frontal, "sagittal": sagittal,
+            "anchor_level": float(np.dot(anchor - joint_centre, e2))}
+    axes, spheres = {}, {}
+    if abs(frontal) >= 0.5:
+        proj = lambda q: q - np.dot(q - p50, n) * n
+        a0 = proj(anchor)
+        w = proj(anchor + u) - a0
+        s, _r = np.linalg.lstsq(np.stack([p, -w], axis=1), a0 - p50, rcond=None)[0]
+        cora = p50 + s * p                               # on the proximal partial axis
+        info["cora"] = cora
+        info["cora_level"] = float(np.dot(cora - joint_centre, e2))
+        axes["Femoral shaft axis"] = (cora, p33)
+        axes[AXIS_FEMUR_DISTAL] = (anchor - 10.0 * u, anchor + np.dot(cora - anchor, u) * u)
+        spheres[FEMUR_CORA] = (cora, FEMUR_CORA_MARKER_RADIUS)
+    else:
+        axes[AXIS_FEMUR_DISTAL] = (anchor - 10.0 * u, anchor + 40.0 * u)
+    info["axes"], info["spheres"] = axes, spheres
+    return info
+
+
+def femur_cora_lines(info):
+    if not info:
+        return ["Distal partial axis: set 'Femur distal metaphysis' (and optionally 'Femur distal axis point') "
+                "for the CORA"]
+    lines = []
+    if info["measured"]:
+        lines.append(f"Distal partial axis (2 points, measured): aLDFA of the distal segment {info['distal_aldfa']:.1f}°")
+    else:
+        lines.append(f"Distal partial axis (1 point, at the target {info['target']:.1f}° to the condylar axis)")
+    if "cora" not in info:
+        lines.append("No CORA: the partial axes are parallel in the frontal plane")
+        return lines
+    kind = "varus" if info["frontal"] > 0 else "valgus"
+    lines.append(f"CORA (red marker): {info['cora_level']:.1f} mm proximal of the condylar axis, "
+                 f"{info['cora_level'] - info['anchor_level']:.1f} mm above the metaphysis point - "
+                 f"partial axes {abs(info['frontal']):.1f}° {kind} (frontal)")
+    correction = info["current"] - info["target"]
+    lines.append(f"Correction to the target {info['target']:.1f}°: {correction:+.1f}° at the CORA")
+    if info["measured"]:
+        rest = info["distal_aldfa"] - info["target"]
+        if abs(rest) > FEMUR_DISTAL_SEGMENT_TOLERANCE_DEG:
+            lines.append(f"The distal segment itself stands {rest:+.1f}° off the target: after the correction "
+                         f"the partial axes stay {abs(rest):.1f}° apart (deformity partly within the distal segment)")
+        lines.append(f"Sagittal: distal partial axis {info['sagittal']:+.1f}° to the proximal axis (+ = cranial)")
+    if info["cora_level"] < info["anchor_level"]:
+        lines.append("CORA lies DISTAL of the metaphysis point - check the points and the target")
+    if abs(info["frontal"]) < FEMUR_CORA_RELIABLE_DEG:
+        lines.append(f"UNRELIABLE: only {abs(info['frontal']):.1f}° - 1 mm axis offset moves the CORA by "
+                     f"{1.0 / np.tan(np.radians(max(abs(info['frontal']), 0.1))):.0f} mm")
+    return lines
+
+
 class VarusValgusFemurMeasurement(BaseMeasurement):
-    SPHERE_LABELS = ["medial femur condyle", "lateral femur condyle"]
-    AXIS_LABELS = ["Femoral shaft axis", "Femoral condylar axis"]
+    SPHERE_LABELS = ["medial femur condyle", "lateral femur condyle", FEMUR_CORA]
+    AXIS_LABELS = ["Femoral shaft axis", "Femoral condylar axis", AXIS_FEMUR_DISTAL]
+    OPTIONAL_LANDMARKS = FEMUR_DISTAL_OPTIONAL
+    LANDMARK_ORDER = ["Femur midpoint 33%", "Femur midpoint 50%", "medial femur condyle", "lateral femur condyle",
+                      FEMUR_DISTAL_AXIS_POINT, FEMUR_DISTAL_ANCHOR]
+
+    def result_lines(self, value, description):
+        return [f"{value:.2f}\N{DEGREE SIGN} {description}"] + femur_cora_lines(getattr(self, "cora_info", None))
+
+    def _add_distal_axis(self, point_dict, medial, lateral):
+        self.cora_info = femur_distal_cora(point_dict, medial, lateral)
+        if self.cora_info:
+            self.axes.update(self.cora_info["axes"])
+            self.spheres.update(self.cora_info["spheres"])
 
     def __init__(self):
         super().__init__("aLDFA (Varus/Valgus Femur)")
@@ -388,6 +536,7 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
         # magnitude comparison, not a handedness/chirality question, so it needs no side-dependent
         # sign logic (unlike the rotation measurements elsewhere in this module).
         aldfa = angle(vector_axis_femur_vv, vector_dist_femur_vv)*180/math.pi
+        self._add_distal_axis(point_dict, medial_condyle, lateral_condyle)
         # Canine reference aLDFA ~94 deg: above = distal femoral varus, below = valgus, at the
         # reference (+/- ALDFA_NORMAL_TOLERANCE_DEG) = normal.
         if abs(aldfa - ALDFA_REFERENCE_DEG) <= ALDFA_NORMAL_TOLERANCE_DEG:
@@ -395,10 +544,11 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
         return aldfa, "aLDFA - Varus" if aldfa > ALDFA_REFERENCE_DEG else "aLDFA - Valgus"
 
 class AntetorsionMeasurement(BaseMeasurement):
-    SPHERE_LABELS = ["femur head", "medial femur condyle", "lateral femur condyle"]
-    AXIS_LABELS = ["Femoral condylar axis", "Femoral neck axis", "Femoral shaft axis"]
+    SPHERE_LABELS = ["femur head", "medial femur condyle", "lateral femur condyle", FEMUR_CORA]
+    AXIS_LABELS = ["Femoral condylar axis", "Femoral neck axis", "Femoral shaft axis", AXIS_FEMUR_DISTAL]
+    OPTIONAL_LANDMARKS = FEMUR_DISTAL_OPTIONAL
     LANDMARK_ORDER = ["femur head", "femur neck", "Femur midpoint 33%", "Femur midpoint 50%",
-                      "medial femur condyle", "lateral femur condyle"]
+                      "medial femur condyle", "lateral femur condyle", FEMUR_DISTAL_AXIS_POINT, FEMUR_DISTAL_ANCHOR]
 
     def __init__(self):
         super().__init__("Antetorsion")
@@ -411,6 +561,7 @@ class AntetorsionMeasurement(BaseMeasurement):
             aldfa_value, aldfa_description = self._aldfa
             kind = aldfa_description.split(" - ", 1)[-1] if " - " in aldfa_description else aldfa_description
             lines.append(f"aLDFA: {aldfa_value:.2f}\N{DEGREE SIGN} ({kind})")
+            lines += femur_cora_lines(getattr(self, "cora_info", None))
         return lines
 
     def _measure(self, point_dict, radius_dict):
@@ -434,6 +585,10 @@ class AntetorsionMeasurement(BaseMeasurement):
         aldfa = VarusValgusFemurMeasurement()
         aldfa.side = self.side
         self._aldfa = aldfa._measure(point_dict, radius_dict)
+        self.cora_info = aldfa.cora_info
+        if self.cora_info:
+            self.axes.update(self.cora_info["axes"])
+            self.spheres.update(self.cora_info["spheres"])
         normal = vector_with_two_points(point_dict["Femur midpoint 50%"], point_dict["Femur midpoint 33%"])
         vector_distal_femur = vector_with_two_points(medial_condyle, lateral_condyle)
         vector_femur_neck = vector_with_two_points(center, point_dict["femur neck"])
@@ -491,115 +646,3 @@ class TibialMetatarsalAngleMeasurement(BaseMeasurement):
         is_outward = tma < 90
         deviation = abs(tma - 90)
         return deviation, "External rotation" if is_outward else "Internal rotation"
-
-
-# ---- femur: CORA from a distal partial axis set by the aLDFA target ----------------------------------
-# The deformity of a distal femoral varus / valgus usually lies far distally - too short a segment for two
-# shaft points. The distal partial axis is therefore CONSTRUCTED: it runs through one centred point in the
-# distal metaphysis and stands at the aLDFA TARGET to the condylar axis (joint-line method after Paley).
-# Its intersection with the proximal partial axis (shaft 33 % / 50 %) in the frontal plane is the CORA.
-FEMUR_DISTAL_ANCHOR = "Femur distal metaphysis"
-FEMUR_CORA = "CORA"
-AXIS_FEMUR_SHAFT = "Femoral shaft axis"
-AXIS_FEMUR_CONDYLAR = "Femoral condylar axis"
-AXIS_FEMUR_DISTAL = "Distal partial axis (aLDFA target)"
-FEMUR_CORA_MARKER_RADIUS = 2.0
-FEMUR_CORA_RELIABLE_DEG = 5.0      # below this angulation 1 mm axis offset moves the CORA by > 11 mm
-
-_aldfa_target_provider = None
-
-
-def set_aldfa_target_provider(provider):
-    """provider() -> the planned aLDFA target in degrees (the femur target of the planning)."""
-    global _aldfa_target_provider
-    _aldfa_target_provider = provider
-
-
-def aldfa_target():
-    if _aldfa_target_provider is not None:
-        try:
-            value = float(_aldfa_target_provider())
-            if 45.0 < value < 135.0:
-                return value
-        except Exception:
-            pass
-    return ALDFA_REFERENCE_DEG
-
-
-def _unit3(v):
-    v = np.asarray(v, float)
-    n = float(np.linalg.norm(v))
-    return v / n if n > 1e-12 else v
-
-
-class FemurCoraMeasurement(BaseMeasurement):
-    SPHERE_LABELS = ["medial femur condyle", "lateral femur condyle", FEMUR_CORA]
-    AXIS_LABELS = [AXIS_FEMUR_SHAFT, AXIS_FEMUR_CONDYLAR, AXIS_FEMUR_DISTAL]
-    AXIS_ENDPOINTS = {AXIS_FEMUR_SHAFT: ("Femur midpoint 50%", "Femur midpoint 33%")}
-    LANDMARK_ORDER = ["Femur midpoint 33%", "Femur midpoint 50%", FEMUR_DISTAL_ANCHOR,
-                      "medial femur condyle", "lateral femur condyle"]
-
-    def __init__(self):
-        super().__init__("Femur CORA (distal partial axis)")
-        self.display_name = "CORA femur - distal axis at the aLDFA target"
-        self.info = {}
-
-    def _measure(self, point_dict, radius_dict):
-        target = aldfa_target()
-        p33, p50 = np.asarray(point_dict["Femur midpoint 33%"], float), np.asarray(point_dict["Femur midpoint 50%"], float)
-        anchor = np.asarray(point_dict[FEMUR_DISTAL_ANCHOR], float)
-        medial, medial_radius = sphere_landmark(point_dict, radius_dict, "medial femur condyle")
-        lateral, lateral_radius = sphere_landmark(point_dict, radius_dict, "lateral femur condyle")
-        medial, lateral = np.asarray(medial, float), np.asarray(lateral, float)
-        self.spheres = {"medial femur condyle": (medial, medial_radius),
-                        "lateral femur condyle": (lateral, lateral_radius)}
-        e1 = _unit3(lateral - medial)                       # condylar axis, medial -> lateral
-        p = _unit3(p33 - p50)                               # proximal partial axis, towards proximal
-        e2 = _unit3(p - np.dot(p, e1) * e1)                 # in the frontal plane, towards proximal
-        n = np.cross(e1, e2)                                # normal of the frontal plane
-        current = float(np.degrees(np.arccos(np.clip(np.dot(p, e1), -1.0, 1.0))))   # = aLDFA
-        t = np.radians(target)
-        u = np.cos(t) * e1 + np.sin(t) * e2                 # distal partial axis, towards proximal
-        joint_centre = 0.5 * (medial + lateral)
-        correction = current - target                       # + : varus to correct (valgisation)
-        # CORA: intersection in the frontal plane (both lines projected into the plane through p50)
-        proj = lambda q: q - np.dot(q - p50, n) * n
-        a0, b0 = proj(anchor), proj(anchor + u)
-        w = b0 - a0
-        cora = None
-        if abs(correction) >= 0.5:
-            s, r = np.linalg.lstsq(np.stack([p, -w], axis=1), a0 - p50, rcond=None)[0]
-            cora = p50 + s * p                              # on the proximal partial axis
-        anchor_level = float(np.dot(anchor - joint_centre, e2))     # perpendicular to the condylar axis
-        self.info = {"target": target, "current": current, "correction": correction,
-                     "anchor_level": anchor_level, "offset_sagittal": float(np.dot(anchor - p50, n))}
-        self.axes = {AXIS_FEMUR_CONDYLAR: (medial, lateral)}
-        if cora is not None:
-            cora_level = float(np.dot(cora - joint_centre, e2))
-            self.info.update({"cora": cora, "cora_level": cora_level})
-            cora_on_distal = anchor + np.dot(cora - anchor, u) * u
-            self.axes[AXIS_FEMUR_SHAFT] = (cora, p33)
-            self.axes[AXIS_FEMUR_DISTAL] = (anchor - 10.0 * u, cora_on_distal)
-            self.spheres[FEMUR_CORA] = (cora, FEMUR_CORA_MARKER_RADIUS)
-        else:
-            self.axes[AXIS_FEMUR_SHAFT] = (p50, p33)
-            self.axes[AXIS_FEMUR_DISTAL] = (anchor - 10.0 * u, anchor + 40.0 * u)
-        return correction, "frontal correction at the CORA"
-
-    def result_lines(self, value, description):
-        i = self.info
-        lines = [f"aLDFA {i['current']:.1f}° -> target {i['target']:.1f}° (target from the planning)"]
-        if "cora" not in i:
-            lines.append("No CORA: the shaft axis already stands at the target to the condylar axis")
-            return lines
-        kind = "varus" if value > 0 else "valgus"
-        lines.append(f"Correction at the CORA (frontal): {abs(value):.1f}° ({kind} to correct)")
-        lines.append(f"CORA (red marker): {i['cora_level']:.1f} mm proximal of the condylar axis, "
-                     f"{i['cora_level'] - i['anchor_level']:.1f} mm proximal of the metaphysis point")
-        if i["cora_level"] < i["anchor_level"]:
-            lines.append("CORA lies DISTAL of the metaphysis point - check the point and the target")
-        if abs(value) < FEMUR_CORA_RELIABLE_DEG:
-            lines.append(f"UNRELIABLE: only {abs(value):.1f}° - 1 mm axis offset moves the CORA by "
-                         f"{1.0 / np.tan(np.radians(max(abs(value), 0.1))):.0f} mm")
-        lines.append("Distal partial axis: through the metaphysis point at the aLDFA target to the condylar axis")
-        return lines

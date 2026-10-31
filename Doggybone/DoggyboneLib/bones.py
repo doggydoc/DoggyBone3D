@@ -26,8 +26,7 @@ FEMUR = BoneConfig(
     reference_end="distal",                        # condyles
     landmark_keyword="femur",
     sagittal_input=True,
-    measurements=("Antetorsion", "aLDFA (Varus/Valgus Femur)", "Femur CORA (distal partial axis)",
-                  "Femorotibial Rotation"),
+    measurements=("Antetorsion", "aLDFA (Varus/Valgus Femur)", "Femorotibial Rotation"),
     # start the plane distal to the 50 % landmark, halfway to the condyles (same shaft line)
     start_plane_toward_ml_landmarks=0.5,
 )

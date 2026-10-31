@@ -1925,7 +1925,8 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
             for name in (self.WEDGE_MEASUREMENT_NAME[bone], self.ROTATION_MEASUREMENT_NAME[bone]):
                 measurement = self._get_measurement_by_name(panel, name)
                 for landmark in (measurement.get_landmarks() if measurement is not None else []):
-                    if not landmark.placed and landmark.name not in missing:
+                    if not landmark.placed and landmark.name not in missing \
+                            and landmark.name not in getattr(measurement, "OPTIONAL_LANDMARKS", []):
                         missing.append(landmark.name)
             shown = missing[:8]
             missing_text = "".join(f"\n  • {name}" for name in shown) \
