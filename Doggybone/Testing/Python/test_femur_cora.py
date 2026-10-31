@@ -90,9 +90,9 @@ class FemurCoraTest(unittest.TestCase):
         orange = m.get_planes()[ml.PLANE_FEMUR_SAGITTAL][0]
         for q in (points["medial femur condyle"], points["lateral femur condyle"], points[ANCHOR], info["sagittal_cora"]):
             self.assertLess(distance_to_plane(orange, q), 1e-6)
-        self.assertTrue(any(line.startswith("Procurvatum: 11.3") for line in ml.femur_cora_lines(info)))
+        self.assertTrue(any(line.startswith("CORA sagittal (Pro/Recurvatum): 11.3") for line in ml.femur_cora_lines(info)))
         m, _ = self.aldfa(points, radii, side="right")
-        self.assertTrue(any("= recurvatum" in line for line in ml.femur_cora_lines(m.cora_info)))
+        self.assertTrue(any(line.startswith("CORA sagittal (Pro/Recurvatum): -11.3") for line in ml.femur_cora_lines(m.cora_info)))
 
     def test_coras_lie_on_the_femoral_axis(self):
         points, radii, _cora = femur(100.0, axis_offset=2.0, anchor=(-2.0, 0.0, 18.0) + 3.0 * N)
@@ -128,7 +128,7 @@ class FemurCoraTest(unittest.TestCase):
         m._measure(points, radii)
         np.testing.assert_allclose(m.cora_info["cora"], cora, atol=1e-6)
         self.assertEqual(set(m.get_planes()), set(ml.PLANES_FEMUR_DISTAL))
-        self.assertTrue(any("Procurvatum:" in line for line in m.result_lines(20.0, "Antetorsion")))
+        self.assertTrue(any("CORA sagittal (Pro/Recurvatum):" in line for line in m.result_lines(20.0, "Antetorsion")))
 
     def test_registration_and_optional_landmark(self):
         points, radii, _ = femur(102.0)

@@ -509,19 +509,14 @@ def femur_cora_lines(info):
             lines.append(f"CORA frontal UNRELIABLE: only {abs(info['frontal']):.1f}° - a small axis offset moves it far")
     else:
         lines.append("CORA frontal: none - the femoral axis already stands at the target to the condylar axis")
-    # sagittal
+    # sagittal: one line - the angle of the orange plane to the femoral axis (+ procurvatum, - recurvatum)
     sag = info["sagittal"]
-    note = "" if sag >= 0 else " = recurvatum (distal end cranial)"
+    text = f"CORA sagittal (Pro/Recurvatum): {sag:.1f}° - orange plane (condylar axis - metaphysis point)"
     if not info.get("side_known", True):
-        note = " (direction unknown - limb side not set)"
-    lines.append(f"Procurvatum: {sag:.1f}°{note} - orange plane (condylar axis - metaphysis point) to the femoral axis")
-    if info.get("sagittal_cora_outside"):
-        lines.append("CORA sagittal (procurvatum): none on the femur - the femoral axis is almost parallel to the "
-                     "orange plane")
-    elif "sagittal_cora" in info:
-        lines.append("CORA sagittal (procurvatum): femoral axis through the orange plane (marker)")
-    else:
-        lines.append("CORA sagittal (procurvatum): none - the femoral axis lies in the orange plane")
+        text += " - direction unknown (limb side not set)"
+    elif "sagittal_cora" not in info or info.get("sagittal_cora_outside"):
+        text += " - no CORA on the femur"
+    lines.append(text)
     return lines
 
 
