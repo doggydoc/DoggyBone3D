@@ -3248,6 +3248,24 @@ class MeasurementWidget(qt.QWidget):
             except Exception:
                 pass
 
+_PIXMAP_CACHE = {}
+
+
+def _cached_pixmap(path):
+    """(full pixmap, pixmap scaled to the panel width) of a landmark reference image - loaded and scaled
+    ONCE per file: every measurement of both sides has its own landmark widgets (~100), and decoding
+    the same large PNGs again for each of them made opening the module take several seconds."""
+    entry = _PIXMAP_CACHE.get(path)
+    if entry is None:
+        pixmap = qt.QPixmap(path)
+        if pixmap.isNull():
+            raise ValueError(f"Could not load image from file '{path}'")
+        scaled = pixmap.scaled(qt.QSize(ResizableImage.TARGET_WIDTH, 100000), qt.Qt.KeepAspectRatio,
+                               qt.Qt.SmoothTransformation)
+        entry = _PIXMAP_CACHE[path] = (pixmap, scaled)
+    return entry
+
+
 class LandmarkWidget(qt.QWidget):
     '''
     Info-box for landmarks
@@ -3265,10 +3283,8 @@ class LandmarkWidget(qt.QWidget):
         self.position_label = qt.QLabel("Position: not set")
         if self.landmark.image_path != "":
             path = osp.join(MODULE_PATH, self.landmark.image_path)
-            pixmap = qt.QPixmap(path)
-            if pixmap.isNull():
-                raise ValueError(f"Could not load image from file '{path}'")
-            self.image = ResizableImage(pixmap)
+            pixmap, scaled = _cached_pixmap(path)
+            self.image = ResizableImage(pixmap, scaled)
         else:
             self.image = None
 
@@ -3414,10 +3430,10 @@ class ResizableImage(qt.QLabel):
     POPUP_MAX_WIDTH = 900
     POPUP_MAX_HEIGHT = 700
 
-    def __init__(self, pixmap) -> None:
+    def __init__(self, pixmap, scaled=None) -> None:
         super().__init__()
         self.raw_pixmap = pixmap
-        self.setPixmap(self.raw_pixmap.scaled(
+        self.setPixmap(scaled if scaled is not None else self.raw_pixmap.scaled(
             qt.QSize(self.TARGET_WIDTH, 100000), qt.Qt.KeepAspectRatio, qt.Qt.SmoothTransformation))
         self.setAlignment(qt.Qt.AlignCenter)
         self.setCursor(qt.Qt.PointingHandCursor)
