@@ -3129,8 +3129,12 @@ class MeasurementWidget(qt.QWidget):
                         r, g, b = [int(round(c * 255)) for c in color]
                         legend_parts.append(f'<span style="color:rgb({r},{g},{b})">&#9632;</span> {label}')
                     planes = self.measurement.get_planes() if hasattr(self.measurement, "get_planes") else {}
+                    plane_names = getattr(self.measurement, "PLANE_DISPLAY_NAMES", {})
                     for label, (corners, color) in planes.items():
                         self.dialog.show_plane(label, corners, color)
+                        r, g, b = [int(round(c * 255)) for c in color]
+                        legend_parts.append(f'<span style="color:rgb({r},{g},{b})">&#9632;</span> '
+                                            f'{plane_names.get(label, label)}')
                     for label in getattr(self.measurement, "PLANE_LABELS", []):
                         if label not in planes:                  # e.g. only one distal point set now
                             self.dialog.hide_axis(label)

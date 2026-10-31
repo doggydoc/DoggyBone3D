@@ -372,6 +372,9 @@ FEMUR_CORA = "CORA"
 PLANE_FEMUR_TARGET = "Distal plane at the aLDFA target"
 PLANE_FEMUR_SAGITTAL = "Distal plane condylar axis - metaphysis"
 PLANES_FEMUR_DISTAL = [PLANE_FEMUR_TARGET, PLANE_FEMUR_SAGITTAL]
+# names in the legend of the measurement (the node names above stay - saved scenes keep working)
+FEMUR_PLANE_DISPLAY_NAMES = {PLANE_FEMUR_TARGET: "Metaphysis frontal plane (aLDFA target)",
+                             PLANE_FEMUR_SAGITTAL: "Metaphysis sagittal plane (condylar axis - metaphysis point)"}
 FEMUR_CORA_SAGITTAL = "CORA sagittal"
 FEMUR_CORA_MARKER_RADIUS = 2.0
 FEMUR_CORA_RELIABLE_DEG = 5.0      # below this angulation 1 mm axis offset moves the CORA by > 11 mm
@@ -524,6 +527,7 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
     SPHERE_LABELS = ["medial femur condyle", "lateral femur condyle", FEMUR_CORA, FEMUR_CORA_SAGITTAL]
     AXIS_LABELS = ["Femoral shaft axis", "Femoral condylar axis"]
     PLANE_LABELS = PLANES_FEMUR_DISTAL
+    PLANE_DISPLAY_NAMES = FEMUR_PLANE_DISPLAY_NAMES
 
     def get_planes(self):
         info = getattr(self, "cora_info", None)
@@ -606,6 +610,7 @@ class AntetorsionMeasurement(BaseMeasurement):
     SPHERE_LABELS = ["femur head", "medial femur condyle", "lateral femur condyle", FEMUR_CORA, FEMUR_CORA_SAGITTAL]
     AXIS_LABELS = ["Femoral condylar axis", "Femoral neck axis", "Femoral shaft axis"]
     PLANE_LABELS = PLANES_FEMUR_DISTAL
+    PLANE_DISPLAY_NAMES = FEMUR_PLANE_DISPLAY_NAMES
 
     def get_planes(self):
         info = getattr(self, "cora_info", None)
