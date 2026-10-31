@@ -2036,6 +2036,19 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
                 current_parts.append(f"{self.WEDGE_MEASUREMENT_NAME[bone]} {current_wedge:.1f}°")
             else:
                 self.calculated_wedge.setValue(0.0)
+        # femur with the metaphysis point: the distal planes and CORAs of the measurement, so the planned
+        # correction can be read against them (frontal plane angle = the varus / valgus correction)
+        cora_text = ""
+        info = getattr(wedge_measurement, "cora_info", None) if wedge_measurement is not None else None
+        if info and wedge_measurement()[0]:
+            frontal = (f"Distal frontal plane (aLDFA {info['target']:.1f}°) to the femoral axis: "
+                       f"{abs(info['frontal']):.1f}°")
+            if "cora" in info and not info.get("cora_outside"):
+                frontal += f" - CORA frontal {info['cora_level']:.1f} mm above the condylar axis"
+            sagittal = f"Distal sagittal plane to the femoral axis: {info['sagittal']:.1f}°"
+            if "sagittal_cora" in info and not info.get("sagittal_cora_outside"):
+                sagittal += f" - CORA sagittal {info['sagittal_cora_level']:.1f} mm above the condylar axis"
+            cora_text = "\n" + frontal + "\n" + sagittal
 
         ok, delta, rotation_message = self._calculated_rotation_delta(side, bone)
         if ok:
@@ -2063,7 +2076,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             missing_text = "".join(f"\n  • {name}" for name in shown) \
                 + (f"\n  … and {len(missing) - len(shown)} more" if len(missing) > len(shown) else "")
             self.current_values_label.setText(
-                " | ".join(current_parts) + (f"\nMissing ({len(missing)}):{missing_text}" if missing else "")
+                " | ".join(current_parts) + cora_text + (f"\nMissing ({len(missing)}):{missing_text}" if missing else "")
                 if current_parts else
                 (f"No landmarks on the {side.upper()} side - they are placed on the {other_side.upper()} "
                  f"side. Set 'Side' to {other_side.capitalize()} (or measure the {side} leg)."
