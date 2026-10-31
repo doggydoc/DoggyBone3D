@@ -440,6 +440,8 @@ def femur_distal_cora(point_dict, medial, lateral, side=None):
     joint_centre = 0.5 * (medial + lateral)
     level = lambda x: float(np.dot(np.asarray(x, float) - joint_centre, e2))   # mm above the condylar axis
     two = anchor is not None and second is not None
+    if two and level(anchor) > level(second):            # the order of the two points does not matter:
+        anchor, second = second, anchor                  # the higher one is the proximal point
     frontal_point = np.asarray(second if second is not None else anchor, float)
     t = np.radians(target)
     u = np.cos(t) * e1 + np.sin(t) * e2                  # frontal distal axis at the target, towards proximal

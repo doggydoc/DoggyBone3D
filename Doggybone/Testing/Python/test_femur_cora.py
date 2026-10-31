@@ -107,6 +107,16 @@ class FemurCoraTest(unittest.TestCase):
         m, _ = self.aldfa(points, radii)
         self.assertTrue(any("procurvatum" in line for line in ml.femur_cora_lines(m.cora_info)))
 
+    def test_order_of_the_two_points_does_not_matter(self):
+        points, radii, cora, _v = femur(104.0, cora_z=35.0, sagittal_deg=8.0)
+        m1, _ = self.aldfa(points, radii)
+        swapped = dict(points)
+        swapped[ml.FEMUR_DISTAL_ANCHOR], swapped[ml.FEMUR_DISTAL_AXIS_POINT] = \
+            points[ml.FEMUR_DISTAL_AXIS_POINT], points[ml.FEMUR_DISTAL_ANCHOR]
+        m2, _ = self.aldfa(swapped, radii)
+        np.testing.assert_allclose(m2.cora_info["cora"], m1.cora_info["cora"], atol=1e-9)
+        self.assertAlmostEqual(m2.cora_info["sagittal"], m1.cora_info["sagittal"], places=9)
+
     def test_frontal_axis_uses_the_target_not_the_measured_frontal_direction(self):
         # the two points lean 97 deg frontally - the frontal axis still stands at the target 94 deg
         points, radii, _cora, _v = femur(104.0, distal=97.0)
