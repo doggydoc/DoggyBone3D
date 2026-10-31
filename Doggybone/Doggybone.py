@@ -1299,11 +1299,25 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         self._finish_limb_bar()
 
         # After a full UI rebuild (this whole setup() re-runs on every module Reload), Qt/macOS
-        # occasionally doesn't repaint the panel immediately - it looks frozen (though it isn't;
-        # switching to another app and back forces a repaint and "unsticks" it). Explicitly
-        # flushing pending Qt events here gives it an immediate chance to repaint instead of
-        # relying on that.
-        slicer.app.processEvents()
+        # occasionally doesn't repaint the panel immediately. Do NOT flush events here
+        # (slicer.app.processEvents()): setup() runs while Slicer is still building the module -
+        # the panel is not yet inside Slicer's module panel, so it is a window of its own. Flushing
+        # events then lets macOS show it as a separate window - with Slicer in full screen on
+        # ANOTHER Space (desktop) - and the click in the module list is half consumed (Doggybone
+        # had to be chosen several times). Repaint once the panel is in place instead.
+        qt.QTimer.singleShot(0, self._repaint_module_panel)
+        qt.QTimer.singleShot(200, self._repaint_module_panel)
+
+    def _repaint_module_panel(self):
+        """Repaint the module panel once Slicer has put it into its dock (see the end of setup)."""
+        try:
+            widget = self.parent
+            if widget is None or widget.window() is not slicer.util.mainWindow():
+                return                       # not embedded (yet) - never show a window of its own
+            widget.update()
+            widget.repaint()
+        except Exception:
+            logging.exception("Doggybone: panel repaint failed (continuing)")
 
 
 
@@ -3423,6 +3437,9 @@ class ResizableImage(qt.QLabel):
             return
 
         popup = qt.QDialog(self)
+        # a tool window stays with Slicer - also when Slicer runs in macOS full screen (a plain
+        # dialog opens on another Space there)
+        popup.setWindowFlags(qt.Qt.Tool | qt.Qt.WindowTitleHint | qt.Qt.WindowCloseButtonHint)
         popup.setWindowTitle("Landmark reference image")
 
         pixmap = self.raw_pixmap
@@ -3554,6 +3571,13 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
         for name in ("opacity_slider", "guide_extrude_button", "guide_export_button", "left_panel", "right_panel"):
             self.assertIsNotNone(getattr(widget, name, None), name)
         self.assertTrue(widget.guide_export_button.text.startswith("Export guides"))
+        # the panel sits in Slicer's main window - no separate window (macOS: another Space)
+        self.assertIs(widget.parent.window(), slicer.util.mainWindow())
+        main = slicer.util.mainWindow()
+        strays = [w for w in qt.QApplication.topLevelWidgets()
+                  if w is not main and w.visible and widget.parent.isAncestorOf(w) is False
+                  and w.isAncestorOf(widget.parent)]
+        self.assertEqual(strays, [])
 
     def test_measurement_labels(self):
         self.delayDisplay("Measurement labels")
