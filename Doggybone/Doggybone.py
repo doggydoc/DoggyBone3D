@@ -90,6 +90,7 @@ importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_edit'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_build'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_pins'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_limb_bar'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_combined'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_centering'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_condyle_circles'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_saw'))
@@ -105,6 +106,7 @@ from DoggyboneUI.ui_tibia import TibiaTargetsMixin
 from DoggyboneUI.ui_limb_bar import LimbBarMixin
 from DoggyboneUI.ui_centering import CenteringMixin
 from DoggyboneUI.ui_condyle_circles import CondyleCirclesMixin
+from DoggyboneUI.ui_combined import CombinedCorrectionMixin
 
 #
 # Doggybone
@@ -152,7 +154,7 @@ MIT License.
       self.parent.icon = qt.QIcon(iconPath)
 
 
-class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
+class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, CondyleCirclesMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
                       ScriptedLoadableModuleWidget):
     """
     Base widget that manages the measurement groups

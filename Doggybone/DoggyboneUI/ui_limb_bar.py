@@ -87,6 +87,20 @@ class LimbBarMixin:
         buttons.addWidget(refresh)
         buttons.addWidget(export)
         layout.addLayout(buttons)
+        # both corrections of the limb in one picture (see CombinedCorrectionMixin)
+        self.combined_checkbox = qt.QCheckBox("Show both corrections together")
+        self.combined_checkbox.setToolTip(
+            "Both planned corrections of this side in one picture: above the upper cut fixed (yellow), between "
+            "the cuts moved by the upper correction (turquoise), below the lower cut moved by both (orange). "
+            "The landmarks move the same way; all measurements are listed before -> after. Needs the "
+            "correction preview of both bones.")
+        self.combined_checkbox.toggled.connect(self._on_combined_toggled)
+        layout.addWidget(self.combined_checkbox)
+        self.combined_values = qt.QLabel("")
+        self.combined_values.setWordWrap(True)
+        self.combined_values.setTextFormat(qt.Qt.RichText)
+        self.combined_values.setTextInteractionFlags(qt.Qt.TextSelectableByMouse)
+        layout.addWidget(self.combined_values)
         self.overview_status = StatusLabel("")
         self.overview_status.setWordWrap(True)
         layout.addWidget(self.overview_status)
@@ -101,7 +115,7 @@ class LimbBarMixin:
         bone = self.osteotomy_bone.currentText if getattr(self, "osteotomy_bone", None) is not None else None
         self.limb_level_buttons.get(bone, self.limb_level_buttons[self.BONES.default.name]).setChecked(True)
 
-        self.limb_side.currentIndexChanged.connect(lambda _i: self._on_limb_side_changed())
+        self.limb_side.currentIndexChanged.connect(lambda _i: (self._combined_off(), self._on_limb_side_changed()))
         for button in self.limb_level_buttons.values():
             button.connect("clicked()", self._on_limb_level_changed)
         # code that still sets the hidden selectors directly (tests, scene restore): the bar follows
@@ -128,9 +142,31 @@ class LimbBarMixin:
         if self.current_limb_level() == OVERVIEW:
             self._refresh_overview()
 
+    def _on_combined_toggled(self, checked):
+        if not hasattr(self, "show_combined_correction"):
+            return
+        if not checked:
+            self.hide_combined_correction()
+            self.combined_values.setText("")
+            return
+        ok, text = self.show_combined_correction(self.limb_side.currentText.lower())
+        self.combined_values.setText(text if ok else "")
+        if not ok:
+            self.overview_status.setText(text)
+            was = self.combined_checkbox.blockSignals(True)
+            self.combined_checkbox.setChecked(False)
+            self.combined_checkbox.blockSignals(was)
+
+    def _combined_off(self):
+        box = getattr(self, "combined_checkbox", None)
+        if box is not None and box.checked:
+            box.setChecked(False)                         # -> _on_combined_toggled: everything back
+
     def _on_limb_level_changed(self, *_args):
         level = self.current_limb_level()
         overview = level == OVERVIEW
+        if not overview:
+            self._combined_off()
         if not overview and getattr(self, "osteotomy_bone", None) is not None \
                 and self.osteotomy_bone.currentText != level:
             self.osteotomy_bone.setCurrentText(level)          # -> _on_osteotomy_bone_changed
