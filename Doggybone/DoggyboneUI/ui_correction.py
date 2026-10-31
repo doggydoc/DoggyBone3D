@@ -1448,9 +1448,107 @@ class CorrectionMixin:
     CORRECTED_PREFIX = "Doggybone {side} corrected"
     CORRECTED_STATUS_MARK = "\nCorrected position (measured on the moved landmarks): "
 
+    # --- which dataset / which bone is shown ----------------------------------------------------------
+    # Measurements: ALWAYS the original dataset (landmarks are placed on the original bone only) - every
+    # osteotomy preview, the corrected landmarks / axes and the cutting planes are hidden. Osteotomy
+    # planning: only the SELECTED bone's planning objects; the other bone's are hidden (and come back when
+    # that bone is selected again). Hidden objects are remembered and restored, never deleted.
+    def _bone_preview_nodes(self, side, bone):
+        """Scene objects of ONE bone's osteotomy planning: fragments, removed wedge, combined bone and
+        the cutting planes."""
+        names = list(self._preview_node_names(side, bone))
+        names = [names[0], names[1], names[3], names[4], self._plane_node_name(side, bone)]
+        if hasattr(self, "_distal_plane_node_name"):
+            names.append(self._distal_plane_node_name(side, bone))
+        nodes = []
+        for name in names:
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and node.GetDisplayNode() is not None:
+                nodes.append(node)
+        return nodes
+
+    def _corrected_overlay_nodes(self, side):
+        prefix = self.CORRECTED_PREFIX.format(side=side)
+        return [node for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode")
+                for node in slicer.util.getNodesByClass(class_name)
+                if (node.GetName() or "").startswith(prefix) and node.GetDisplayNode() is not None]
+
+    def _stash_hide(self, key, nodes):
+        saved = self.__dict__.setdefault("_view_stash", {}).setdefault(key, [])
+        for node in nodes:
+            display = node.GetDisplayNode()
+            if display is not None and display.GetVisibility():
+                display.SetVisibility(False)
+                if node.GetID() not in saved:
+                    saved.append(node.GetID())
+
+    def _stash_restore(self, key):
+        for node_id in self.__dict__.get("_view_stash", {}).pop(key, []):
+            node = slicer.mrmlScene.GetNodeByID(node_id)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(True)
+
+    def _show_original_dataset(self):
+        """Measurements section opened: the original bone with the original landmarks only."""
+        for side in ("left", "right"):
+            nodes = self._corrected_overlay_nodes(side)
+            for bone in self.BONES.names:
+                nodes += self._bone_preview_nodes(side, bone)
+            self._stash_hide(("original", side), nodes)
+            if self._original_overlay_hidden(side):
+                self._restore_original_overlay(side)
+        self._original_view_active = True
+        self._ensure_segmentation_visible()
+        slicer.util.forceRenderAllViews()
+
+    def _show_osteotomy_view(self):
+        """Osteotomy / guide section opened: back from the original-dataset view (if it was active)."""
+        if getattr(self, "_original_view_active", False):
+            self._original_view_active = False
+            for side in ("left", "right"):
+                self._stash_restore(("original", side))
+        self._apply_bone_view()
+
+    def _apply_bone_view(self):
+        """Only the selected side / bone's planning objects and corrected overlay are shown."""
+        if getattr(self, "_original_view_active", False) or not hasattr(self, "osteotomy_bone"):
+            return
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        for s in ("left", "right"):
+            for b in self.BONES.names:
+                if (s, b) == (side, bone):
+                    self._stash_restore(("bone", s, b))
+                else:
+                    self._stash_hide(("bone", s, b), self._bone_preview_nodes(s, b))
+        state = getattr(self, "_fine_shift_state", None) or {}
+        for s in ("left", "right"):
+            corrected = self._corrected_overlay_nodes(s)
+            owners = {node.GetAttribute("Doggybone.CorrectedBone") for node in corrected} - {None}
+            owner = next(iter(owners)) if owners else state.get("bone", bone)
+            active = s == side and owner == bone
+            if active:
+                self._stash_restore(("corrected", s))
+                if corrected:
+                    if not any(node.GetDisplayNode().GetVisibility() for node in corrected):
+                        for node in corrected:                 # e.g. after a module reload: show them
+                            node.GetDisplayNode().SetVisibility(True)
+                    self._hide_original_overlay(s)
+            elif corrected:
+                self._stash_hide(("corrected", s), corrected)
+                if self._original_overlay_hidden(s):
+                    self._restore_original_overlay(s)
+        combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
+        if combined is not None and combined.GetPolyData() is not None and combined.GetPolyData().GetNumberOfPoints() > 0:
+            self._sync_original_segmentation()
+        else:
+            self._ensure_segmentation_visible()          # no preview of this bone: the original bone
+        slicer.util.forceRenderAllViews()
+
     def _on_osteotomy_panel_opened(self):
-        """Back in the osteotomy planning (e.g. from the guide tools): coloured fragments, original /
-        compare views as the osteotomy planning shows them."""
+        """Back in the osteotomy planning (e.g. from the guide tools / measurements): coloured fragments,
+        original / compare views as the osteotomy planning shows them - the selected bone only."""
+        self._show_osteotomy_view()
         self._show_preview_fragments()
         self._sync_original_segmentation()
 
@@ -1459,6 +1557,8 @@ class CorrectionMixin:
         the combined bone - it is the same surface, both visible at once fight for the same pixels and
         the turquoise only flickers through the beige. The combined bone stays in the scene (reduction
         guide, export) and is shown by the reduction guide mode."""
+        if getattr(self, "_original_view_active", False):
+            return                                       # measurements: original dataset only
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         proximal_name, distal_name, _t, combined_name, _w = self._preview_node_names(side, bone)
@@ -1476,6 +1576,15 @@ class CorrectionMixin:
         is hidden in 3D (it stays in the slice views) - whatever showed it again (bone switch, guide
         tools, opacity). Exception: the saw guide is being planned (guide panel open, saw mode) -
         that guide sits on the uncut bone."""
+        if getattr(self, "_original_view_active", False):
+            # measurements: the original bone in 2D and 3D, no preview (see _show_original_dataset)
+            segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+            display = segmentation_node.GetDisplayNode() if segmentation_node is not None else None
+            if display is not None:
+                display.SetVisibility(True)
+                if hasattr(display, "SetVisibility3D"):
+                    display.SetVisibility3D(True)
+            return
         if getattr(self, "_guide_shown_surface", None):
             return      # a guide tool shows its own bone surface - the segmentation stays hidden meanwhile
         guide_panel = getattr(self, "_guide_collapsible", None)
@@ -2003,6 +2112,8 @@ class CorrectionMixin:
             self.correction_status.setText(self.correction_status.text + self.CORRECTED_STATUS_MARK +
                                            "; ".join(results) + f" [{len(moved_names)} landmarks moved]")
 
+        for node in self._corrected_overlay_nodes(side):
+            node.SetAttribute("Doggybone.CorrectedBone", bone)     # which bone's preview these belong to
         self._hide_original_overlay(side)
         self._apply_segment_opacity()
 

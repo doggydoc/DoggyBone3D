@@ -411,6 +411,10 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         measurements_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #6b46c1; color: white; font-weight: bold; }")
         self.layout.addWidget(measurements_collapsible_button)
+        self._measurements_collapsible = measurements_collapsible_button
+        # landmarks are placed on the ORIGINAL bone only: opening the measurements shows the original dataset
+        measurements_collapsible_button.connect(
+            'contentsCollapsed(bool)', lambda collapsed: None if collapsed else self._show_original_dataset())
         measurements_layout = qt.QVBoxLayout(measurements_collapsible_button)
 
         self.side_selector = qt.QComboBox()
@@ -532,6 +536,7 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
             lambda _i: (self._ensure_landmark_observers(), self._schedule_values_refresh()))
         # the measurement panel shows the side that is planned (its landmarks feed the corrections)
         self.osteotomy_side.currentIndexChanged.connect(self._sync_measurement_side)
+        self.osteotomy_side.currentIndexChanged.connect(lambda _i: self._apply_bone_view())
         osteotomy_form_layout.addRow("Side", self.osteotomy_side)
 
         self.osteotomy_bone = qt.QComboBox()
@@ -783,7 +788,8 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         self.layout.addWidget(guide_collapsible_button)
         self._guide_collapsible = guide_collapsible_button
         # opening / closing the guide panel switches the uncut bone on / off in 3D (saw guide vs. preview)
-        guide_collapsible_button.connect('contentsCollapsed(bool)', lambda _c: self._sync_original_segmentation())
+        guide_collapsible_button.connect('contentsCollapsed(bool)', lambda collapsed: (
+            None if collapsed else self._show_osteotomy_view(), self._sync_original_segmentation()))
         guide_layout = qt.QVBoxLayout(guide_collapsible_button)
         guide_info_label = qt.QLabel(
             "Footprint = coloured area on the bone surface where the guide sits. Paint it by hand "
@@ -1823,6 +1829,7 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         self.target_wedge_value.setToolTip(config.wedge_target_tooltip)
         self._set_tibia_mode_visible(config.target_table)
         self._update_sagittal_box(bone, force=True)
+        self._apply_bone_view()                          # the other bone's planning / corrected axes hidden
         self._update_plane_handle_interactivity()
         if hasattr(self, "_on_guide_bone_switched") and hasattr(self, "guide_status"):
             self._on_guide_bone_switched()
