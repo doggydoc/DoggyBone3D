@@ -446,11 +446,18 @@ def femur_distal_cora(point_dict, medial, lateral, side=None):
     t = np.radians(target)
     u = np.cos(t) * e1 + np.sin(t) * e2
     cora = _line_intersection_in_plane(p50, p, anchor, u, n) if abs(current - target) >= 0.5 else None
+    top_level = level(p33)
+
+    def on_femur(point):                                 # a CORA beyond the knee / the 33 % point is not drawn
+        return 0.0 <= level(point) <= top_level
     if cora is not None:
         info["cora"], info["cora_level"] = cora, level(cora)
-        spheres[FEMUR_CORA] = (cora, FEMUR_CORA_MARKER_RADIUS)
-        coras.append(cora)
-    reach = float(np.dot(cora - anchor, u)) + 10.0 if cora is not None else 40.0
+        if on_femur(cora):
+            spheres[FEMUR_CORA] = (cora, FEMUR_CORA_MARKER_RADIUS)
+            coras.append(cora)
+        else:
+            info["cora_outside"] = True
+    reach = float(np.dot(cora - anchor, u)) + 10.0 if cora is not None and on_femur(cora) else 40.0
     below = max(float(np.dot(anchor - joint_centre, u)), 10.0)
     planes[PLANE_FEMUR_TARGET] = (rectangle(anchor, u, below, max(reach, 20.0), n, max(0.6 * condyle_width, 8.0)),
                                   (0.3, 0.6, 1.0))
@@ -467,13 +474,16 @@ def femur_distal_cora(point_dict, medial, lateral, side=None):
     sag = _line_intersection_in_plane(p50, p, anchor, v, e1) if abs(info["sagittal"]) >= 0.5 else None
     if sag is not None:
         info["sagittal_cora"], info["sagittal_cora_level"] = sag, level(sag)
-        spheres[FEMUR_CORA_SAGITTAL] = (sag, FEMUR_CORA_MARKER_RADIUS)
-        coras.append(sag)
+        if on_femur(sag):
+            spheres[FEMUR_CORA_SAGITTAL] = (sag, FEMUR_CORA_MARKER_RADIUS)
+            coras.append(sag)
+        else:
+            info["sagittal_cora_outside"] = True
     height = float(np.dot(anchor - joint_centre, v))
-    top = max(height, float(np.dot(sag - joint_centre, v)) if sag is not None else height) + 10.0
+    top = max(height, float(np.dot(sag - joint_centre, v)) if sag is not None and on_femur(sag) else height) + 10.0
     planes[PLANE_FEMUR_SAGITTAL] = (rectangle(joint_centre, v, 0.0, top, e1, 0.5 * condyle_width + 5.0),
                                     (1.0, 0.6, 0.2))
-    # the femoral axis is drawn from the 33 % point down to the lowest CORA (or to the condylar level)
+    # the femoral axis is drawn from the 33 % point down to the knee (condylar level) - never beyond it
     ends = coras + [p50 + np.dot(joint_centre - p50, p) * p]
     axes["Femoral shaft axis"] = (min(ends, key=level), p33)
     info["axes"], info["spheres"], info["planes"] = axes, spheres, planes
@@ -485,7 +495,10 @@ def femur_cora_lines(info):
         return ["Distal planes / CORA: set 'Femur distal metaphysis' (by hand, centre of the metaphysis just proximal "
                 "of the trochlear groove)"]
     lines = [f"Blue plane: through the metaphysis point at the aLDFA target {info['target']:.1f}° to the condylar axis"]
-    if "cora" in info:
+    if info.get("cora_outside"):
+        lines.append(f"No frontal CORA on the femur: the axes are almost parallel ({abs(info['frontal']):.1f}° to "
+                     f"the target) - they would meet {info['cora_level']:.0f} mm from the condylar axis")
+    elif "cora" in info:
         kind = "varus" if info["frontal"] > 0 else "valgus"
         lines.append(f"CORA frontal (femoral axis through the blue plane): {info['cora_level']:.1f} mm proximal "
                      f"of the condylar axis - correction {abs(info['frontal']):.1f}° ({kind}) to the target")
@@ -501,7 +514,9 @@ def femur_cora_lines(info):
     if not info.get("side_known", True):
         kind = "direction unknown - limb side not set"
     text = f"Orange plane (condylar axis - metaphysis point): {abs(sag):.1f}° to the femoral axis, {kind}"
-    if "sagittal_cora" in info:
+    if info.get("sagittal_cora_outside"):
+        text += "; no sagittal CORA on the femur"
+    elif "sagittal_cora" in info:
         text += f"; CORA sagittal {info['sagittal_cora_level']:.1f} mm proximal of the condylar axis"
     lines.append(text)
     return lines

@@ -158,6 +158,17 @@ class FemurCoraTest(unittest.TestCase):
         self.assertTrue(FEMUR.sagittal_target_optional)
         self.assertTrue(FEMUR.sagittal_input)
 
+    def test_axis_ends_at_the_knee_and_far_coras_are_not_drawn(self):
+        # nearly at the target, the point 3 mm beside the axis: the axes meet far beyond the knee
+        points, radii, _cora = femur(95.5, anchor=(3.0, 0.0, 12.0))
+        m, _ = self.aldfa(points, radii)
+        info = m.cora_info
+        self.assertTrue(info.get("cora_outside"))
+        self.assertNotIn(ml.FEMUR_CORA, m.spheres)
+        low, _top = m.axes["Femoral shaft axis"]
+        self.assertAlmostEqual(float(low[2]), 0.0, delta=0.5)          # knee: condylar level (z = 0)
+        self.assertTrue(any("No frontal CORA on the femur" in line for line in ml.femur_cora_lines(info)))
+
     def test_bad_target_falls_back_to_reference(self):
         ml.set_aldfa_target_provider(lambda: 0.0)
         self.assertEqual(ml.aldfa_target(), ml.ALDFA_REFERENCE_DEG)
