@@ -1499,6 +1499,8 @@ class CorrectionMixin:
                 self._restore_original_overlay(side)
         self._original_view_active = True
         self._ensure_segmentation_visible()
+        if hasattr(self, "_apply_landmark_label_visibility"):
+            self._apply_landmark_label_visibility()      # landmark names on while measuring
         slicer.util.forceRenderAllViews()
 
     def _show_osteotomy_view(self):
@@ -1507,6 +1509,8 @@ class CorrectionMixin:
             self._original_view_active = False
             for side in ("left", "right"):
                 self._stash_restore(("original", side))
+            if hasattr(self, "_apply_landmark_label_visibility"):
+                self._apply_landmark_label_visibility()
         self._apply_bone_view()
 
     def _apply_bone_view(self):

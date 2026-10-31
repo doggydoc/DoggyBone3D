@@ -1383,7 +1383,61 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
                           slicer.vtkMRMLMarkupsNode.PointModifiedEvent,
                           slicer.vtkMRMLMarkupsNode.PointRemovedEvent):
                 self._landmark_observers.append((node, node.AddObserver(event, self._schedule_values_refresh)))
+            # a point deleted with Slicer's own tools (right click, markups toolbar): re-link by name
+            self._landmark_observers.append((node, node.AddObserver(
+                slicer.vtkMRMLMarkupsNode.PointRemovedEvent,
+                lambda caller, event, panel=panel: self._schedule_point_removed(panel))))
             observed.add(node.GetID())
+
+    def _schedule_point_removed(self, panel):
+        if getattr(self, "_point_removed_pending", False):
+            return
+        self._point_removed_pending = True
+
+        def run():
+            self._point_removed_pending = False
+            try:
+                self._on_landmark_point_removed(panel)
+            except Exception:
+                logging.exception("Doggybone: re-linking after a deleted point failed (continuing)")
+        qt.QTimer.singleShot(0, run)
+
+    def _on_landmark_point_removed(self, panel):
+        """A control point was REMOVED from the landmark list (not the module's 'Delete', which keeps it
+        as '<name> (deleted)'): every landmark index behind it has shifted. All landmarks of that side are
+        re-linked by name; a landmark whose point is gone is un-placed and everything drawn for it
+        (cross-section contour, sphere, axes, values) disappears."""
+        node = slicer.mrmlScene.GetNodeByID(getattr(panel, "markup_node_id", "") or "")
+        if node is None:
+            return
+        labels = [node.GetNthControlPointLabel(i) for i in range(node.GetNumberOfControlPoints())]
+        stale = [l for l in panel.landmarks if l.placed and (l._id is None or l._id >= len(labels)
+                                                              or labels[l._id] != l.name)]
+        if not stale:
+            return
+        was_placed = {l.name for l in panel.landmarks if l.placed}
+        for landmark in panel.landmarks:
+            if landmark.placed:
+                landmark._id, landmark.placed = None, False
+        self._relink_existing_landmarks(panel)
+        for landmark in panel.landmarks:
+            if landmark.name in was_placed and not landmark.placed:
+                cleanup = (("_outline_visible", (False,)), ("_remove_sphere_preview", ()), ("_hide_radius_handle", ()))
+                for method, args in cleanup:             # contour of a centred point, sphere / radius handle
+                    if hasattr(landmark, method):
+                        try:
+                            getattr(landmark, method)(*args)
+                        except Exception:
+                            logging.exception("Doggybone: cleaning up a deleted landmark failed (continuing)")
+                if hasattr(landmark, "section_frame"):
+                    landmark.section_frame = None
+                for callback in landmark.change_callbacks:
+                    callback()
+        current = panel.measurement_stack.currentWidget() if hasattr(panel, "measurement_stack") else None
+        if current is not None and getattr(current, "enabled", False):
+            current.update_measurement()
+            if hasattr(current, "_resume_current_landmark"):
+                current._resume_current_landmark()
 
     def _schedule_values_refresh(self, caller=None, event=None):
         if getattr(self, "_values_refresh_pending", False):
@@ -2077,21 +2131,27 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         """Landmark names (original landmarks of both sides and the corrected landmarks) on / off
         according to 'Hide all landmark descriptions'."""
         show = not self._landmark_labels_hidden()
+        # measuring (original dataset): the names of the original landmarks are always shown - they are
+        # needed to place / check the points; the checkbox applies to the osteotomy views
+        measuring = getattr(self, "_original_view_active", False)
+        if not measuring and hasattr(self, "_measurements_collapsible") and hasattr(self, "_osteotomy_collapsible"):
+            measuring = (not self._measurements_collapsible.collapsed) and self._osteotomy_collapsible.collapsed
+        show_original = show or measuring
         nodes = []
         for panel in (getattr(self, "left_panel", None), getattr(self, "right_panel", None)):
             if panel is not None and getattr(panel, "markup_node_id", None):
-                nodes.append(slicer.mrmlScene.GetNodeByID(panel.markup_node_id))
+                nodes.append((slicer.mrmlScene.GetNodeByID(panel.markup_node_id), show_original))
             box = getattr(panel, "show_labels_checkbox", None)
-            if box is not None and bool(box.checked) != show:      # the measurement panel shows the same state
+            if box is not None and bool(box.checked) != show_original:   # the measurement panel shows the same state
                 was = box.blockSignals(True)
-                box.setChecked(show)
+                box.setChecked(show_original)
                 box.blockSignals(was)
-        nodes += [n for n in slicer.util.getNodesByClass("vtkMRMLMarkupsFiducialNode")
+        nodes += [(n, show) for n in slicer.util.getNodesByClass("vtkMRMLMarkupsFiducialNode")
                   if (n.GetName() or "").startswith("Doggybone") and (n.GetName() or "").endswith("corrected landmarks")]
-        for node in nodes:
+        for node, visible in nodes:
             display = node.GetDisplayNode() if node is not None else None
             if display is not None:
-                display.SetPointLabelsVisibility(show)
+                display.SetPointLabelsVisibility(visible)
 
     CUTTING_PLANE_SUFFIXES = (" proximal plane", " distal plane", " proximal plane L marker", " proximal plane M marker",
                               " distal plane L marker", " distal plane M marker", " L marker", " M marker")
