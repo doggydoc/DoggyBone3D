@@ -1546,6 +1546,8 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
             pass
         self._remove_centering_observers()
         self._remove_condyle_circle_observers()
+        if hasattr(self, "_compare_watch_scene"):
+            self._compare_watch_scene(False)            # else the old widget keeps re-assigning 3D views
         for node, tag in getattr(self, "_landmark_observers", []):
             try:
                 node.RemoveObserver(tag)
