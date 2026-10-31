@@ -80,17 +80,11 @@ LANDMARKS = [
                      "'Update 33 % / 50 %' sets it from the femur head and condyle spheres; a click at any height is "
                      "centred in the cross-section.",
                      r"Resources/descriptions/distfemurmidpoint.png", axis_from=FEMUR_AXIS, fraction=0.50),
-    SimpleLandmark('Femur distal axis point',
-                   "OPTIONAL - proximal centre of the distal segment, set BY HAND (not centred automatically): place "
-                   "it in the bone centre further proximal, but still distal of the deformity - check it in two slice "
-                   "views. The frontal distal axis runs through it at the aLDFA target to the condylar axis; with "
-                   "'Femur distal metaphysis' the line between both gives the sagittal deviation.",
-                   r""),
     SimpleLandmark('Femur distal metaphysis',
-                   "OPTIONAL - distal centre of the distal segment, set BY HAND (not centred automatically): place it "
-                   "in the centre of the distal metaphysis just proximal of the trochlea and the condyles - check it "
-                   "in two slice views. With 'Femur distal axis point' the line between both gives the sagittal "
-                   "deviation; alone, the frontal distal axis runs through it at the aLDFA target.",
+                   "OPTIONAL - set BY HAND in the centre of the distal metaphysis, just PROXIMAL of the trochlear "
+                   "groove (sulcus trochlearis) - check it in two slice views. Blue plane: through it at the aLDFA "
+                   "target to the condylar axis; orange plane: through the condylar axis and this point. The CORAs "
+                   "are where the femoral axis pierces the planes.",
                    r""),
     SimpleLandmark('femur neck', 
                    "Choose the center of the proximal femoral metaphysis on the height of the highest elevation of the lesser trochanter.", 
