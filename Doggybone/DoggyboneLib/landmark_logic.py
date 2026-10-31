@@ -173,13 +173,12 @@ class SimpleLandmark:
             self._private_observers.append(self._markups_node.AddObserver(slicer.vtkMRMLMarkupsNode.PointModifiedEvent, 
                                                                          lambda caller, event: self._changed_callback(caller)))
         else:
-            # place into THIS landmark's list (left / right): the active list may still be the other
-            # side's after a reload or 'Delete all' - the point would land there with a default name
-            # ('DoggyboneFiducialsRight-1') and belong to no landmark
-            selection = slicer.app.applicationLogic().GetSelectionNode()
-            if selection is not None and self._markups_node is not None:
-                selection.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
-                selection.SetActivePlaceNodeID(self._markups_node.GetID())
+            # Place into THIS landmark's list (its side). Slicer places into the "active" list, which
+            # any newly created markups node (pins, planes, handles, a list selected elsewhere) can
+            # take over - the point then landed in the other side's list. So: make this list active
+            # (class AND id) right before placing, and keep it active until the point is placed.
+            self._activate_own_list()
+            self._watch_active_list()
             slicer.modules.markups.logic().StartPlaceMode(0)
             self._private_observers.append(self._markups_node.AddObserver(slicer.vtkMRMLMarkupsNode.PointAddedEvent, 
                                                                          lambda caller, event: self._added_callback()))
@@ -195,10 +194,61 @@ class SimpleLandmark:
         # Turn off placement mode and remove observers
         for observer in self._private_observers:
             self._markups_node.RemoveObserver(observer)
+        self._private_observers = []
+        self._unwatch_active_list()
 
         interaction_node = slicer.mrmlScene.GetNodeByID("vtkMRMLInteractionNodeSingleton")
         interaction_node.SwitchToViewTransformMode()
         interaction_node.SetPlaceModePersistence(0)                                                       
+
+    # --- the list that receives a new point ---------------------------------------------------------
+    @staticmethod
+    def _selection_node():
+        return slicer.app.applicationLogic().GetSelectionNode()
+
+    def _activate_own_list(self):
+        selection = self._selection_node()
+        if selection is None or self._markups_node is None:
+            return
+        node_id = self._markups_node.GetID()
+        if selection.GetReferenceActivePlaceNodeClassName() != "vtkMRMLMarkupsFiducialNode":
+            selection.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
+        if selection.GetActivePlaceNodeID() != node_id:
+            selection.SetActivePlaceNodeID(node_id)
+
+    _waiting = None      # the one landmark (of any side) currently waiting to be placed
+
+    def _watch_active_list(self):
+        """While this landmark waits to be placed, any switch of the active list is undone. Only one
+        landmark waits at a time - a previous one (e.g. of the other side) stops guarding."""
+        previous = SimpleLandmark._waiting
+        if previous is not None and previous is not self:
+            previous._unwatch_active_list()
+        self._unwatch_active_list()
+        SimpleLandmark._waiting = self
+        selection = self._selection_node()
+        if selection is None:
+            return
+
+        def keep(_caller, _event):
+            if getattr(self, "_reasserting", False):
+                return
+            self._reasserting = True
+            try:
+                self._activate_own_list()
+            finally:
+                self._reasserting = False
+
+        self._selection_observers = [(selection, selection.AddObserver(event, keep)) for event in (
+            slicer.vtkMRMLSelectionNode.ActivePlaceNodeIDChangedEvent,
+            slicer.vtkMRMLSelectionNode.ActivePlaceNodeClassNameChangedEvent)]
+
+    def _unwatch_active_list(self):
+        for node, tag in getattr(self, "_selection_observers", None) or []:
+            node.RemoveObserver(tag)
+        self._selection_observers = []
+        if SimpleLandmark._waiting is self:
+            SimpleLandmark._waiting = None
 
     def center_in_slices(self, excluded_slice_nodes=None):
         position_RAS = [0.0, 0.0, 0.0]

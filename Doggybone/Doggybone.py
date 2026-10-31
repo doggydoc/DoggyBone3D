@@ -3468,6 +3468,8 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
         self.test_split_axis_prediction()
         self.setUp()
         self.test_guide_export()
+        self.setUp()
+        self.test_landmark_goes_to_its_side()
         self.delayDisplay("Doggybone 3D: all tests passed")
 
     # --- helpers -----------------------------------------------------------------------------------
@@ -3505,6 +3507,46 @@ class DoggyboneTest(ScriptedLoadableModuleTest):
             landmark._id = None
 
     # --- tests -------------------------------------------------------------------------------------
+    def test_landmark_goes_to_its_side(self):
+        """A landmark is placed into the list of the shown side, even if another list (the other side,
+        a newly created markups node, a plane) became the active place list in between."""
+        self.delayDisplay("Landmark placement stays on its side")
+        widget = self._widget()
+        selection = slicer.app.applicationLogic().GetSelectionNode()
+        for side_index, panel, other in ((0, widget.left_panel, widget.right_panel),
+                                         (1, widget.right_panel, widget.left_panel)):
+            widget.side_selector.setCurrentIndex(side_index)
+            slicer.app.processEvents()
+            own_id, other_id = panel.markup_node_id, other.markup_node_id
+            landmark = panel.measurement_stack.currentWidget().landmark_stack.currentWidget().landmark
+            self.assertFalse(landmark.placed)
+            landmark.stop_interaction()
+            # the other side's list and then a plane become active before placing
+            selection.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsPlaneNode")
+            selection.SetActivePlaceNodeID(other_id)
+            landmark.start_interaction()
+            self.assertEqual(selection.GetActivePlaceNodeID(), own_id)
+            self.assertEqual(selection.GetReferenceActivePlaceNodeClassName(), "vtkMRMLMarkupsFiducialNode")
+            stray = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "stray list")
+            selection.SetActivePlaceNodeID(stray.GetID())
+            selection.SetActivePlaceNodeID(other_id)
+            self.assertEqual(selection.GetActivePlaceNodeID(), own_id)
+            # place the point the way Slicer does: into the active list
+            active = slicer.mrmlScene.GetNodeByID(selection.GetActivePlaceNodeID())
+            active.AddControlPoint(10.0 * side_index, 5.0, 3.0)
+            slicer.app.processEvents()
+            self.assertTrue(landmark.placed)
+            other_node = slicer.mrmlScene.GetNodeByID(other_id)
+            self.assertNotIn(landmark.name, [other_node.GetNthControlPointLabel(i)
+                                             for i in range(other_node.GetNumberOfControlPoints())])
+            slicer.mrmlScene.RemoveNode(stray)
+        # once nothing waits, other modules may change the active list again
+        widget.left_panel.deactivate()
+        widget.right_panel.deactivate()
+        free = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "free list")
+        selection.SetActivePlaceNodeID(free.GetID())
+        self.assertEqual(selection.GetActivePlaceNodeID(), free.GetID())
+
     def test_widget(self):
         self.delayDisplay("Module widget")
         widget = self._widget()
