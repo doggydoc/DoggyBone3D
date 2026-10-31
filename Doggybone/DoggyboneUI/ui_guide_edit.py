@@ -771,6 +771,8 @@ class GuideEditMixin:
                     continue
                 node.GetDisplayNode().SetVisibility(True)
         self._guide_hidden_preview = []
+        if hasattr(self, "_enforce_single_surface"):
+            self._enforce_single_surface()               # combined bone shown for painting + fragments: one only
         # back to the module-wide bone opacity (it may have been changed while painting)
         if hasattr(self, "_set_bone_opacity") and getattr(self, "opacity_slider", None) is not None:
             self._set_bone_opacity(self.opacity_slider.value)

@@ -1554,6 +1554,7 @@ class CorrectionMixin:
             self._sync_original_segmentation()
         else:
             self._ensure_segmentation_visible()          # no preview of this bone: the original bone
+        self._enforce_single_surface()
         slicer.util.forceRenderAllViews()
 
     def _on_osteotomy_panel_opened(self):
@@ -1581,6 +1582,32 @@ class CorrectionMixin:
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is not None and node.GetDisplayNode() is not None:
                 node.GetDisplayNode().SetVisibility(True)
+
+    def _enforce_single_surface(self):
+        """The combined bone and the two fragments are the SAME surface - never both visible (a double
+        surface). The reduction-guide view (guide section open, reduction mode) shows the combined bone,
+        every other view the coloured fragments."""
+        if not hasattr(self, "osteotomy_bone"):
+            return
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        proximal_name, distal_name, _t, combined_name, _w = self._preview_node_names(side, bone)
+        combined = slicer.mrmlScene.GetFirstNodeByName(combined_name)
+        fragments = [n for n in (slicer.mrmlScene.GetFirstNodeByName(proximal_name),
+                                 slicer.mrmlScene.GetFirstNodeByName(distal_name))
+                     if n is not None and n.GetDisplayNode() is not None]
+        if combined is None or combined.GetDisplayNode() is None or not combined.GetDisplayNode().GetVisibility():
+            return
+        if not any(n.GetDisplayNode().GetVisibility() for n in fragments):
+            return
+        guide_panel = getattr(self, "_guide_collapsible", None)
+        reduction_view = (guide_panel is not None and not guide_panel.collapsed
+                          and hasattr(self, "_guide_mode_is_reduction") and self._guide_mode_is_reduction())
+        if reduction_view:
+            for node in fragments:
+                node.GetDisplayNode().SetVisibility(False)
+        else:
+            combined.GetDisplayNode().SetVisibility(False)
 
     def _sync_original_segmentation(self):
         """While a correction preview of the current side / bone exists, the ORIGINAL segmentation
@@ -1621,6 +1648,7 @@ class CorrectionMixin:
             display.SetVisibility3D(saw_guide_view)
         else:
             display.SetVisibility(saw_guide_view)
+        self._enforce_single_surface()
 
     def _apply_segment_opacity(self):
         """Opacity of the preview segments (fixed + moved fragment, combined bone)."""
