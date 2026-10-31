@@ -26,6 +26,11 @@ FEMUR = BoneConfig(
     reference_end="distal",                        # condyles
     landmark_keyword="femur",
     sagittal_input=True,
+    # sagittal TARGET = angle of the plane condylar axis - metaphysis point to the femoral axis (aLDFA
+    # measurement); only while 'Femur distal metaphysis' is set - otherwise the manual sagittal correction
+    sagittal_target_measurement="aLDFA (Varus/Valgus Femur)",
+    sagittal_target_key="sagittal",
+    sagittal_target_optional=True,
     measurements=("Antetorsion", "aLDFA (Varus/Valgus Femur)", "Femorotibial Rotation"),
     # start the plane distal to the 50 % landmark, halfway to the condyles (same shaft line)
     start_plane_toward_ml_landmarks=0.5,

@@ -557,7 +557,9 @@ class CorrectionMixin:
             if config.sagittal_target_measurement:
                 sagittal_measurement = self._get_measurement_by_name(panel, config.sagittal_target_measurement)
                 if sagittal_measurement is not None and sagittal_measurement()[0]:
-                    result["sagittal"] = float(sagittal_measurement.values[config.sagittal_target_key])
+                    value = getattr(sagittal_measurement, "values", {}).get(config.sagittal_target_key)
+                    if value is not None:
+                        result["sagittal"] = float(value)
             if config.target_table and hasattr(self, "_tibia_metrics"):
                 result["tibia"] = self._tibia_metrics(panel)
         finally:
@@ -754,8 +756,14 @@ class CorrectionMixin:
                          f"(target {self.femur_sagittal_value.value:.1f}{deg})")
         return ", ".join(parts) if parts else "n/a"
 
-    def _sagittal_target_mode(self, bone):
-        return bool(self._bone_config(bone).sagittal_target_measurement)
+    def _sagittal_target_mode(self, bone, side=None):
+        config = self._bone_config(bone)
+        if not config.sagittal_target_measurement:
+            return False
+        if not getattr(config, "sagittal_target_optional", False):
+            return True
+        side = side or self.osteotomy_side.currentText.lower()
+        return self._current_sagittal_value(side, bone) is not None
 
     def _current_sagittal_value(self, side, bone):
         """Current value of the bone's sagittal target measurement (e.g. procurvatum), or None."""
@@ -766,7 +774,8 @@ class CorrectionMixin:
         measurement = self._get_measurement_by_name(panel, config.sagittal_target_measurement)
         if measurement is None or not measurement()[0]:
             return None
-        return float(measurement.values[config.sagittal_target_key])
+        value = getattr(measurement, "values", {}).get(config.sagittal_target_key)
+        return float(value) if value is not None else None
 
     def _desired_correction_rotation(self, side, bone, moving_is_distal, plane_origin, plane_normal):
         '''Planned rotation (3x3) of the MOVING fragment: frontal correction about the anatomical
@@ -809,7 +818,7 @@ class CorrectionMixin:
         # femur: manual sagittal correction about the ML axis (+ = procurvatum corrected: the far end of
         # the moving fragment goes cranially). Signed about the frame's ml axis like the tibia's.
         ml_unit = osteotomy_logic.normalize(np.asarray(ml, dtype=float))
-        target_mode = self._sagittal_target_mode(bone)
+        target_mode = self._sagittal_target_mode(bone, side)
         if target_mode:
             # sagittal TARGET (e.g. procurvatum between the partial axes): magnitude from current vs.
             # target, direction verified on the moved landmarks (like the frontal correction)

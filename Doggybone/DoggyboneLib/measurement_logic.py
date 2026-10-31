@@ -524,9 +524,27 @@ class VarusValgusFemurMeasurement(BaseMeasurement):
 
     def _add_distal_axis(self, point_dict, medial, lateral):
         self.cora_info = femur_distal_cora(point_dict, medial, lateral, self.side)
+        # .values["sagittal"]: the planning's sagittal TARGET value (see bones.FEMUR) - only with the
+        # metaphysis point; without it the femur keeps the manual sagittal correction
+        self.values = {"sagittal": self.cora_info["sagittal"]} if self.cora_info else {}
         if self.cora_info:
             self.axes.update(self.cora_info["axes"])
             self.spheres.update(self.cora_info["spheres"])
+
+    def export_rows(self):
+        """Extra CSV rows (measurement, value, description) - for collecting reference values."""
+        info = getattr(self, "cora_info", None)
+        if not info:
+            return []
+        rows = [("Femur sagittal angle (condylar axis - metaphysis plane to femoral axis)", info["sagittal"],
+                 "+ = procurvatum (distal end caudal), - = recurvatum"),
+                ("Femur metaphysis point height", info["anchor_level"], "mm proximal of the condylar axis")]
+        if "cora" in info:
+            rows.append(("Femur CORA frontal height", info["cora_level"],
+                         f"mm proximal of the condylar axis (aLDFA target {info['target']:.1f} deg)"))
+        if "sagittal_cora" in info:
+            rows.append(("Femur CORA sagittal height", info["sagittal_cora_level"], "mm proximal of the condylar axis"))
+        return rows
 
     def __init__(self):
         super().__init__("aLDFA (Varus/Valgus Femur)")

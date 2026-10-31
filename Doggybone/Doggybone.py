@@ -1822,38 +1822,59 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
             wedge_label.setText(config.wedge_target_label)
         self.target_wedge_value.setToolTip(config.wedge_target_tooltip)
         self._set_tibia_mode_visible(config.target_table)
+        self._update_sagittal_box(bone, force=True)
+        self._update_plane_handle_interactivity()
+        if hasattr(self, "_on_guide_bone_switched") and hasattr(self, "guide_status"):
+            self._on_guide_bone_switched()
+
+    def _update_sagittal_box(self, bone, force=False):
+        """Sagittal field: TARGET of the bone's sagittal measurement, or a MANUAL correction angle.
+        Reconfigured when the bone changes (force) or the mode changes (e.g. the femur metaphysis
+        point was set / deleted); on a switch the field starts without a correction."""
         box = getattr(self, "femur_sagittal_value", None)
-        if box is not None:
-            box.setVisible(config.sagittal_input)
-            label = self._osteotomy_form_layout.labelForField(box)
-            target_mode = bool(config.sagittal_target_measurement)
-            if label is not None:
-                label.setVisible(config.sagittal_input)
-                label.setText("Sagittal target" if target_mode else "Sagittal (manual)")
-            if target_mode:
-                box.setRange(-45.0, 90.0)
+        form = getattr(self, "_osteotomy_form_layout", None)
+        if box is None or form is None:
+            return
+        config = self._bone_config(bone)
+        target_mode = bool(self._sagittal_target_mode(bone)) if hasattr(self, "_sagittal_target_mode") \
+            else bool(config.sagittal_target_measurement)
+        state = (bone, self.osteotomy_side.currentText.lower(), target_mode)
+        if not force and getattr(self, "_sagittal_box_state", None) == state:
+            return
+        self._sagittal_box_state = state
+        box.setVisible(config.sagittal_input)
+        label = form.labelForField(box)
+        if label is not None:
+            label.setVisible(config.sagittal_input)
+            label.setText("Sagittal target" if target_mode else "Sagittal (manual)")
+        if target_mode:
+            box.setRange(-45.0, 90.0)
+            if config.name == "Femur":
+                box.setToolTip(
+                    "TARGET angle of the plane condylar axis - metaphysis point to the femoral axis after the "
+                    "correction (+ = procurvatum, - = recurvatum; see aLDFA / Antetorsion). Starts at the current "
+                    "value (no sagittal correction); frontal, sagittal and torsion are solved together. Without "
+                    "the point 'Femur distal metaphysis' this field is a manual correction angle.")
+            else:
                 box.setToolTip(
                     "TARGET procurvatum between the partial axes after the correction (+ = procurvatum, "
                     "0 = partial axes parallel, - = recurvatum). Starts at the current value (no sagittal "
                     "correction); frontal, sagittal and torsion are solved together on the moved landmarks.")
-                current = self._current_sagittal_value(self.osteotomy_side.currentText.lower(), bone) \
-                    if hasattr(self, "_current_sagittal_value") else None
-                was_blocked = box.blockSignals(True)
-                box.setValue(round(current, 1) if current is not None else 0.0)
-                box.blockSignals(was_blocked)
-            else:
-                box.setRange(-45.0, 45.0)
-                box.setToolTip(
-                    "Manual sagittal correction of the femur (no measurement needed), about the medio-lateral axis "
-                    "at the cut. + corrects a PROCURVATUM (the far end of the moving fragment goes cranially), "
-                    "- corrects a RECURVATUM. Combined with the varus/valgus and torsion correction; the frontal and "
-                    "torsion values are re-solved so their targets are still met.")
-                was_blocked = box.blockSignals(True)
-                box.setValue(0.0)
-                box.blockSignals(was_blocked)
-        self._update_plane_handle_interactivity()
-        if hasattr(self, "_on_guide_bone_switched") and hasattr(self, "guide_status"):
-            self._on_guide_bone_switched()
+            current = self._current_sagittal_value(self.osteotomy_side.currentText.lower(), bone) \
+                if hasattr(self, "_current_sagittal_value") else None
+            was_blocked = box.blockSignals(True)
+            box.setValue(round(current, 1) if current is not None else 0.0)
+            box.blockSignals(was_blocked)
+        else:
+            box.setRange(-45.0, 45.0)
+            box.setToolTip(
+                "Manual sagittal correction of the femur (no measurement needed), about the medio-lateral axis "
+                "at the cut. + corrects a PROCURVATUM (the far end of the moving fragment goes cranially), "
+                "- corrects a RECURVATUM. Combined with the varus/valgus and torsion correction; the frontal and "
+                "torsion values are re-solved so their targets are still met.")
+            was_blocked = box.blockSignals(True)
+            box.setValue(0.0)
+            box.blockSignals(was_blocked)
 
     def _on_technique_changed(self):
         """Switched to CWO with two almost identical planes: recommend an OWO right away."""
@@ -1892,6 +1913,7 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         panel = self.left_panel if side == "left" else self.right_panel
+        self._update_sagittal_box(bone)                 # target / manual can change with a landmark
         if self._bone_config(bone).target_table and hasattr(self, "_refresh_tibia_current"):
             self._refresh_tibia_current()
 
@@ -2530,6 +2552,10 @@ class MeasurementsPanel(qt.QWidget):
                     writer.writerow({"measurement": measurement.name, 
                                      "value": _csv_number(result_value), 
                                      "description": result_string})
+                    for name, value, description in (measurement.export_rows()
+                                                      if hasattr(measurement, "export_rows") else []):
+                        writer.writerow({"measurement": name, "value": _csv_number(value),
+                                         "description": description})
         
 
     def set_visible_measurements(self, names, active=True):

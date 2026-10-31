@@ -140,6 +140,24 @@ class FemurCoraTest(unittest.TestCase):
             ready, _value, _text = m()                       # the optional point unplaced: still measured
             self.assertTrue(ready)
 
+    def test_sagittal_value_for_the_planning_and_export(self):
+        points, radii, _cora = femur(94.0, axis_offset=2.0, anchor=(0.0, 0.0, 20.0) + 4.0 * N)
+        m, _ = self.aldfa(points, radii)
+        self.assertAlmostEqual(m.values["sagittal"], np.degrees(np.arctan(4.0 / 20.0)), places=6)
+        names = [row[0] for row in m.export_rows()]
+        self.assertIn("Femur sagittal angle (condylar axis - metaphysis plane to femoral axis)", names)
+        del points[ANCHOR]
+        m, _ = self.aldfa(points, radii)
+        self.assertEqual(m.values, {})
+        self.assertEqual(m.export_rows(), [])
+
+    def test_femur_config_uses_the_sagittal_value_optionally(self):
+        from DoggyboneLib.bones import FEMUR
+        self.assertEqual(FEMUR.sagittal_target_measurement, "aLDFA (Varus/Valgus Femur)")
+        self.assertEqual(FEMUR.sagittal_target_key, "sagittal")
+        self.assertTrue(FEMUR.sagittal_target_optional)
+        self.assertTrue(FEMUR.sagittal_input)
+
     def test_bad_target_falls_back_to_reference(self):
         ml.set_aldfa_target_provider(lambda: 0.0)
         self.assertEqual(ml.aldfa_target(), ml.ALDFA_REFERENCE_DEG)

@@ -53,6 +53,8 @@ class BoneConfig:
                                                               # distal shaft landmark to the ML pair
     sagittal_target_measurement: str = ""   # sagittal field = TARGET of this measurement's value (else: manual angle)
     sagittal_target_key: str = ""           # key in that measurement's .values
+    # True: target mode only while that value exists (e.g. an optional landmark is placed), else manual
+    sagittal_target_optional: bool = False
     partial_axes: bool = False            # shaft landmarks span the whole bone (two partial axes) -
                                           # every landmark moves with ITS side of the cut (no split-axis rule)
     max_osteotomies: int = 1
