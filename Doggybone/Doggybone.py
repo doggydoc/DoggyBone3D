@@ -414,7 +414,7 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         self._measurements_collapsible = measurements_collapsible_button
         # landmarks are placed on the ORIGINAL bone only: opening the measurements shows the original dataset
         measurements_collapsible_button.connect(
-            'contentsCollapsed(bool)', lambda collapsed: None if collapsed else self._show_original_dataset())
+            'contentsCollapsed(bool)', lambda collapsed: None if collapsed else self._on_measurements_opened())
         measurements_layout = qt.QVBoxLayout(measurements_collapsible_button)
 
         self.side_selector = qt.QComboBox()
@@ -511,7 +511,8 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         # opening the osteotomy panel (e.g. coming back from the guide tools): original / preview / compare
         # views as the osteotomy planning shows them
         osteotomy_collapsible_button.connect('contentsCollapsed(bool)',
-                                             lambda collapsed: None if collapsed else self._on_osteotomy_panel_opened())
+                                             lambda collapsed: None if collapsed else self._on_planning_section_opened(
+                                                 self._on_osteotomy_panel_opened))
         osteotomy_collapsible_button.text = "Osteotomy Planning"
         osteotomy_collapsible_button.setStyleSheet(
             "ctkCollapsibleButton { background-color: #c05621; color: white; font-weight: bold; }")
@@ -789,7 +790,8 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
         self._guide_collapsible = guide_collapsible_button
         # opening / closing the guide panel switches the uncut bone on / off in 3D (saw guide vs. preview)
         guide_collapsible_button.connect('contentsCollapsed(bool)', lambda collapsed: (
-            None if collapsed else self._show_osteotomy_view(), self._sync_original_segmentation()))
+            None if collapsed else self._on_planning_section_opened(self._show_osteotomy_view),
+            self._sync_original_segmentation()))
         guide_layout = qt.QVBoxLayout(guide_collapsible_button)
         guide_info_label = qt.QLabel(
             "Footprint = coloured area on the bone surface where the guide sits. Paint it by hand "
@@ -1388,6 +1390,25 @@ class DoggyboneWidget(LimbBarMixin, CenteringMixin, CondyleCirclesMixin, TibiaTa
                 slicer.vtkMRMLMarkupsNode.PointRemovedEvent,
                 lambda caller, event, panel=panel: self._schedule_point_removed(panel))))
             observed.add(node.GetID())
+
+    def _on_measurements_opened(self):
+        """Measuring and planning exclude each other: the measurements work on the ORIGINAL dataset, so
+        the osteotomy / guide sections close and every preview is hidden."""
+        for name in ("_osteotomy_collapsible", "_guide_collapsible"):
+            box = getattr(self, name, None)
+            if box is not None and not box.collapsed:
+                box.collapsed = True
+        self._show_original_dataset()
+        panel = self._current_panel() if hasattr(self, "_current_panel") else None
+        current = panel.measurement_stack.currentWidget() if panel is not None else None
+        if current is not None and not getattr(current, "enabled", False):
+            panel.activate()                             # a measurement is active: its landmarks can be placed
+
+    def _on_planning_section_opened(self, show):
+        box = getattr(self, "_measurements_collapsible", None)
+        if box is not None and not box.collapsed:
+            box.collapsed = True                        # planning view: the measurements section closes
+        show()
 
     def _schedule_point_removed(self, panel):
         if getattr(self, "_point_removed_pending", False):
@@ -2637,7 +2658,9 @@ class MeasurementsPanel(qt.QWidget):
             if not hidden:
                 visible.append(i)
         current = self.measurement_list.currentRow
-        if not visible or current in visible or current == -1:      # -1: activate() picks the first visible
+        if not visible or current in visible:
+            return
+        if current == -1 and not active:                 # -1: activate() picks the first visible
             return
         if active:
             self.measurement_list.setCurrentRow(visible[0])          # -> _change_row (enable / disable)

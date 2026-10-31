@@ -1495,10 +1495,18 @@ class CorrectionMixin:
             for bone in self.BONES.names:
                 nodes += self._bone_preview_nodes(side, bone)
             self._stash_hide(("original", side), nodes)
-            if self._original_overlay_hidden(side):
-                self._restore_original_overlay(side)
+            # always (also after a module reload, when nothing was remembered): original landmarks shown
+            self._restore_original_overlay(side)
+            panel = self.left_panel if side == "left" else self.right_panel
+            markups = slicer.mrmlScene.GetNodeByID(panel.markup_node_id) if panel is not None else None
+            if markups is not None and markups.GetDisplayNode() is not None:
+                markups.GetDisplayNode().SetVisibility(True)
         self._original_view_active = True
         self._ensure_segmentation_visible()
+        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+        display = segmentation_node.GetDisplayNode() if segmentation_node is not None else None
+        if display is not None and not self._compare_mode():
+            display.RemoveAllViewNodeIDs()               # shown in every view (not left over from compare views)
         if hasattr(self, "_apply_landmark_label_visibility"):
             self._apply_landmark_label_visibility()      # landmark names on while measuring
         slicer.util.forceRenderAllViews()
@@ -1540,8 +1548,7 @@ class CorrectionMixin:
                     self._hide_original_overlay(s)
             elif corrected:
                 self._stash_hide(("corrected", s), corrected)
-                if self._original_overlay_hidden(s):
-                    self._restore_original_overlay(s)
+                self._restore_original_overlay(s)       # also when nothing was remembered (reload)
         combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
         if combined is not None and combined.GetPolyData() is not None and combined.GetPolyData().GetNumberOfPoints() > 0:
             self._sync_original_segmentation()
