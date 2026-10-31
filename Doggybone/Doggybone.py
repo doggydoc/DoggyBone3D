@@ -2898,10 +2898,11 @@ class MeasurementsPanel(qt.QWidget):
                 markups_node.RemoveAttribute(f"Doggybone.radius.{landmark.name}")
 
         # Remove the corrected-landmark overlay (spheres/axes on the corrected bone) of this side.
-        prefix = f"doggybone {self.side} corrected".lower()
-        for node in list(slicer.util.getNodesByClass("vtkMRMLModelNode")):
-            if node.GetName().lower().startswith(prefix):
-                slicer.mrmlScene.RemoveNode(node)
+        pattern = re.compile(rf"^doggybone {self.side.lower()} (\w+ )?corrected ")   # every bone's set
+        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode"):
+            for node in list(slicer.util.getNodesByClass(class_name)):
+                if pattern.match((node.GetName() or "").lower()):
+                    slicer.mrmlScene.RemoveNode(node)
 
         for index in range(self.measurement_stack.count):
             widget = self.measurement_stack.widget(index)

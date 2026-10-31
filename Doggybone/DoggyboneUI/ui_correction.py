@@ -430,6 +430,8 @@ class CorrectionMixin:
             "base": osteotomy_logic.matrix_to_numpy(matrix),
             "moving_is_distal": moving_is_distal,
         }
+        # each bone's preview is remembered (its corrected landmarks are rebuilt when it is selected again)
+        self.__dict__.setdefault("_fine_shift_states", {})[(side, bone)] = self._fine_shift_state
         self._ensure_fine_shift_nodes(side, bone, transform_node)
         self._apply_fine_shift(update_combined=True, move_gizmo=True)
 
@@ -1445,7 +1447,36 @@ class CorrectionMixin:
         # Snap to the 0.1 mm the fields display, then rebuild the combined model once.
         self._apply_fine_shift(update_combined=True, move_gizmo=True)
 
-    CORRECTED_PREFIX = "Doggybone {side} corrected"
+    # corrected landmarks / spheres / axes: ONE set per side AND bone (femur and tibia keep their own)
+    CORRECTED_PREFIX = "Doggybone {side} {bone} corrected"
+    LEGACY_CORRECTED_PREFIX = "Doggybone {side} corrected"     # scenes from before: one set per side
+
+    def _corrected_prefix(self, side, bone):
+        return self.CORRECTED_PREFIX.format(side=side, bone=bone.lower())
+
+    def _state_for(self, side, bone):
+        """The preview state (cut, moving fragment) of that side / bone: the active one, one remembered
+        from an earlier preview, or rebuilt from the scene (transform + master cutting plane)."""
+        state = getattr(self, "_fine_shift_state", None)
+        if state and state.get("side") == side and state.get("bone") == bone:
+            return state
+        stored = self.__dict__.get("_fine_shift_states", {}).get((side, bone))
+        if stored:
+            return stored
+        proximal_name, distal_name, transform_name, _c, _w = self._preview_node_names(side, bone)
+        transform = slicer.mrmlScene.GetFirstNodeByName(transform_name)
+        distal = slicer.mrmlScene.GetFirstNodeByName(distal_name)
+        if transform is None or distal is None:
+            return None
+        moving_is_distal = distal.GetTransformNodeID() == transform.GetID()
+        plane_name = self._plane_node_name(side, bone) if moving_is_distal else self._distal_plane_node_name(side, bone)
+        plane = slicer.mrmlScene.GetFirstNodeByName(plane_name)
+        if plane is None:
+            return None
+        origin, normal = self._get_plane_origin_normal(plane)
+        return {"side": side, "bone": bone, "origin": np.asarray(origin, float),
+                "normal": np.asarray(normal, float), "moving_is_distal": moving_is_distal}
+
     CORRECTED_STATUS_MARK = "\nCorrected position (measured on the moved landmarks): "
 
     # --- which dataset / which bone is shown ----------------------------------------------------------
@@ -1467,11 +1498,22 @@ class CorrectionMixin:
                 nodes.append(node)
         return nodes
 
-    def _corrected_overlay_nodes(self, side):
-        prefix = self.CORRECTED_PREFIX.format(side=side)
-        return [node for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode")
-                for node in slicer.util.getNodesByClass(class_name)
-                if (node.GetName() or "").startswith(prefix) and node.GetDisplayNode() is not None]
+    def _corrected_overlay_nodes(self, side, bone=None):
+        """Corrected landmarks / spheres / axes of that side - of one bone, or of all bones (None)."""
+        prefixes = tuple(self._corrected_prefix(side, b) for b in ([bone] if bone else list(self.BONES.names)))
+        legacy = self.LEGACY_CORRECTED_PREFIX.format(side=side)
+        nodes = []
+        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode"):
+            for node in slicer.util.getNodesByClass(class_name):
+                name = node.GetName() or ""
+                if node.GetDisplayNode() is None:
+                    continue
+                if name.startswith(prefixes):
+                    nodes.append(node)
+                elif name.startswith(legacy) and (bone is None or node.GetAttribute("Doggybone.CorrectedBone")
+                                                  in (None, bone)):
+                    nodes.append(node)
+        return nodes
 
     def _stash_hide(self, key, nodes):
         saved = self.__dict__.setdefault("_view_stash", {}).setdefault(key, [])
@@ -1523,8 +1565,9 @@ class CorrectionMixin:
 
     def _apply_bone_view(self):
         """Only the selected side / bone's planning objects and corrected overlay are shown."""
-        if getattr(self, "_original_view_active", False) or not hasattr(self, "osteotomy_bone"):
-            return
+        if getattr(self, "_original_view_active", False) or not hasattr(self, "osteotomy_bone") \
+                or not hasattr(self, "correction_status"):
+            return                                       # also while the module is still being built
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         for s in ("left", "right"):
@@ -1533,21 +1576,27 @@ class CorrectionMixin:
                     self._stash_restore(("bone", s, b))
                 else:
                     self._stash_hide(("bone", s, b), self._bone_preview_nodes(s, b))
-        state = getattr(self, "_fine_shift_state", None) or {}
         for s in ("left", "right"):
-            corrected = self._corrected_overlay_nodes(s)
-            owners = {node.GetAttribute("Doggybone.CorrectedBone") for node in corrected} - {None}
-            owner = next(iter(owners)) if owners else state.get("bone", bone)
-            active = s == side and owner == bone
-            if active:
-                self._stash_restore(("corrected", s))
-                if corrected:
-                    if not any(node.GetDisplayNode().GetVisibility() for node in corrected):
-                        for node in corrected:                 # e.g. after a module reload: show them
-                            node.GetDisplayNode().SetVisibility(True)
-                    self._hide_original_overlay(s)
-            elif corrected:
-                self._stash_hide(("corrected", s), corrected)
+            shown = False
+            for b in self.BONES.names:
+                corrected = self._corrected_overlay_nodes(s, b)
+                if (s, b) == (side, bone):
+                    preview = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(s, b)[3])
+                    if not corrected and preview is not None:
+                        state = self._state_for(s, b)       # this bone's set is missing: rebuild it
+                        if state is not None:
+                            self._update_corrected_landmarks(state)
+                            corrected = self._corrected_overlay_nodes(s, b)
+                    self._stash_restore(("corrected", s, b))
+                    if corrected:
+                        if not any(node.GetDisplayNode().GetVisibility() for node in corrected):
+                            for node in corrected:             # e.g. after a module reload: show them
+                                node.GetDisplayNode().SetVisibility(True)
+                        self._hide_original_overlay(s)
+                        shown = True
+                elif corrected:
+                    self._stash_hide(("corrected", s, b), corrected)
+            if not shown:
                 self._restore_original_overlay(s)       # also when nothing was remembered (reload)
         combined = slicer.mrmlScene.GetFirstNodeByName(self._preview_node_names(side, bone)[3])
         if combined is not None and combined.GetPolyData() is not None and combined.GetPolyData().GetNumberOfPoints() > 0:
@@ -1981,13 +2030,12 @@ class CorrectionMixin:
                     except Exception:
                         logging.exception("Doggybone: redrawing a measurement failed (continuing)")
 
-    def _remove_corrected_landmarks(self, side):
+    def _remove_corrected_landmarks(self, side, bone=None):
+        """Remove the corrected set of that side and bone (default: the selected bone)."""
+        bone = bone or self.osteotomy_bone.currentText
         self._restore_original_overlay(side)
-        prefix = self.CORRECTED_PREFIX.format(side=side)
-        for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode"):
-            for node in list(slicer.util.getNodesByClass(class_name)):
-                if node.GetName().startswith(prefix):
-                    slicer.mrmlScene.RemoveNode(node)
+        for node in self._corrected_overlay_nodes(side, bone):
+            slicer.mrmlScene.RemoveNode(node)
         status = self.correction_status.text
         if self.CORRECTED_STATUS_MARK in status:
             self.correction_status.setText(status.split(self.CORRECTED_STATUS_MARK)[0])
@@ -2003,14 +2051,15 @@ class CorrectionMixin:
         node.GetDisplayNode().SetVisibility(True)
         return node
 
-    def _update_corrected_landmarks(self):
+    def _update_corrected_landmarks(self, state=None):
         """Landmarks, spheres and axes in the CORRECTED position: the landmarks on the moving side
         of the master cut are carried along with the correction (incl. fine shift), the others stay.
-        The measurements are evaluated on these points (the original landmarks are never touched)."""
+        The measurements are evaluated on these points (the original landmarks are never touched).
+        state: the preview of a bone (default: the active one) - each bone keeps its own set."""
         import copy
-        state = getattr(self, "_fine_shift_state", None)
+        state = state or getattr(self, "_fine_shift_state", None)
         side = (state or {}).get("side") or self.osteotomy_side.currentText.lower()
-        self._remove_corrected_landmarks(side)
+        self._remove_corrected_landmarks(side, (state or {}).get("bone"))
         if not state:
             return
         bone = state["bone"]
@@ -2055,7 +2104,7 @@ class CorrectionMixin:
         if not points:
             return
 
-        prefix = self.CORRECTED_PREFIX.format(side=side)
+        prefix = self._corrected_prefix(side, bone)
         fiducials = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", f"{prefix} landmarks")
         fiducials.SetLocked(True)
         fiducials.SetMarkupLabelFormat("")
@@ -2152,7 +2201,7 @@ class CorrectionMixin:
             self.correction_status.setText(self.correction_status.text + self.CORRECTED_STATUS_MARK +
                                            "; ".join(results) + f" [{len(moved_names)} landmarks moved]")
 
-        for node in self._corrected_overlay_nodes(side):
+        for node in self._corrected_overlay_nodes(side, bone):
             node.SetAttribute("Doggybone.CorrectedBone", bone)     # which bone's preview these belong to
         self._hide_original_overlay(side)
         self._apply_segment_opacity()
@@ -2346,7 +2395,8 @@ class CorrectionMixin:
         removed_any = False
         self._remove_fine_shift_observers()
         self._fine_shift_state = None
-        self._remove_corrected_landmarks(side)
+        self.__dict__.get("_fine_shift_states", {}).pop((side, bone), None)
+        self._remove_corrected_landmarks(side, bone)
         self._set_cutting_plane_handles(side, bone, True)
         for name in self._preview_node_names(side, bone) + self._fine_shift_node_names(side, bone):
             node = slicer.mrmlScene.GetFirstNodeByName(name)

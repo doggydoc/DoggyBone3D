@@ -606,7 +606,9 @@ class GuideBuildMixin:
         """Saw guide: measured (preoperative) landmarks, spheres, axes and labels; reduction guide:
         the ones in the corrected position. The other set is hidden, never deleted."""
         prefix = f"Doggybone {side} "
-        corrected_prefix = self.CORRECTED_PREFIX.format(side=side)
+        bone = getattr(self, "_guide_bone", None) or self.osteotomy_bone.currentText
+        corrected_ids = {n.GetID() for n in self._corrected_overlay_nodes(side, bone)}
+        other_corrected = {n.GetID() for n in self._corrected_overlay_nodes(side)} - corrected_ids
         panel = self.left_panel if side == "left" else self.right_panel
         measured_ids = {getattr(panel, "markup_node_id", None)}
         for class_name in ("vtkMRMLModelNode", "vtkMRMLMarkupsFiducialNode"):
@@ -615,8 +617,10 @@ class GuideBuildMixin:
                 display = node.GetDisplayNode()
                 if display is None:
                     continue
-                if name.startswith(corrected_prefix):
+                if node.GetID() in corrected_ids:
                     display.SetVisibility(corrected)
+                elif node.GetID() in other_corrected:
+                    display.SetVisibility(False)                 # the other bone's corrected set
                 elif node.GetID() in measured_ids or (
                         name.startswith(prefix) and (name.endswith(" sphere") or name.endswith(" axis"))):
                     if corrected:
