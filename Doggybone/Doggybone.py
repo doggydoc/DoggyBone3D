@@ -2931,6 +2931,8 @@ class MeasurementWidget(qt.QWidget):
             self.dialog.hide_sphere(label)
         for label in self.measurement.AXIS_LABELS:
             self.dialog.hide_axis(label)
+        for label in getattr(self.measurement, "PLANE_LABELS", []):
+            self.dialog.hide_axis(label)
 
     def update_measurement(self):
         if self.enabled:
@@ -2954,6 +2956,9 @@ class MeasurementWidget(qt.QWidget):
                     planes = self.measurement.get_planes() if hasattr(self.measurement, "get_planes") else {}
                     for label, (corners, color) in planes.items():
                         self.dialog.show_plane(label, corners, color)
+                    for label in getattr(self.measurement, "PLANE_LABELS", []):
+                        if label not in planes:                  # e.g. only one distal point set now
+                            self.dialog.hide_axis(label)
                     self.axes_label.setText("<br>".join(legend_parts))
                 else:
                     for label in getattr(self.measurement, "PLANE_LABELS", []):

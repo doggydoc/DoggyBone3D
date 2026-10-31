@@ -72,6 +72,7 @@ class FemurCoraTest(unittest.TestCase):
             self.assertAlmostEqual(info["cora_level"], 30.0, places=6)
             self.assertAlmostEqual(info["frontal"], 8.0, places=6)
             self.assertIn(ml.FEMUR_CORA, m.spheres)
+            self.assertEqual(set(m.get_planes()), {ml.PLANE_FEMUR_TARGET})
 
     def test_two_points_frontal_at_target_sagittal_measured(self):
         points, radii, cora, v = femur(104.0, cora_z=35.0, sagittal_deg=8.0)
@@ -84,7 +85,17 @@ class FemurCoraTest(unittest.TestCase):
         self.assertGreater(info["sagittal"], 7.0)
         np.testing.assert_allclose(info["sagittal_cora"], cora, atol=1e-6)
         self.assertIn(ml.FEMUR_CORA_SAGITTAL, m.spheres)
-        self.assertIn(ml.AXIS_FEMUR_DISTAL_SAGITTAL, m.axes)
+        planes = m.get_planes()
+        self.assertEqual(set(planes), set(ml.PLANES_FEMUR_DISTAL))
+        # the target plane contains the frontal CORA, the sagittal plane both points and the sagittal CORA
+        def on_plane(label, q):
+            c = np.asarray(planes[label][0])
+            normal = np.cross(c[1] - c[0], c[2] - c[1])
+            return abs(np.dot(q - c[0], normal / np.linalg.norm(normal)))
+        self.assertLess(on_plane(ml.PLANE_FEMUR_TARGET, info["cora"]), 1e-6)
+        self.assertLess(on_plane(ml.PLANE_FEMUR_TARGET, points[ml.FEMUR_DISTAL_AXIS_POINT]), 1e-6)
+        for q in (points[ml.FEMUR_DISTAL_ANCHOR], points[ml.FEMUR_DISTAL_AXIS_POINT], info["sagittal_cora"]):
+            self.assertLess(on_plane(ml.PLANE_FEMUR_SAGITTAL, q), 1e-6)
 
     def test_sagittal_sign_follows_the_side(self):
         points, radii, _cora, _v = femur(104.0, sagittal_deg=8.0)
@@ -129,9 +140,9 @@ class FemurCoraTest(unittest.TestCase):
         m._measure(points, radii)
         np.testing.assert_allclose(m.cora_info["cora"], cora, atol=1e-6)
         self.assertIn(ml.FEMUR_CORA, m.spheres)
-        self.assertIn(ml.AXIS_FEMUR_DISTAL_SAGITTAL, m.axes)
+        self.assertEqual(set(m.get_planes()), set(ml.PLANES_FEMUR_DISTAL))
         lines = m.result_lines(20.0, "Antetorsion")
-        self.assertTrue(any("Sagittal" in line for line in lines))
+        self.assertTrue(any("Orange plane" in line for line in lines))
 
     def test_registration_and_optional_landmarks(self):
         points, radii, _cora, _v = femur(102.0)
