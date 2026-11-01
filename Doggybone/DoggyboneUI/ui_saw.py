@@ -238,8 +238,10 @@ class SawMixin:
                 display.SetTranslationHandleComponentVisibility([True, True, False, False])
                 display.SetRotationHandleComponentVisibility([False, False, True, False])
                 display.SetInteractionHandleScale(4.0)
-            old = tags.get(label)
-            if old is not None and old[0] == node.GetID():
+            # keyed by node ID (the gizmos are per bone): a bone switch must not orphan the other
+            # bone's observer; values stay (node ID, tag) for _release_widget_observers
+            old = tags.get(node.GetID())
+            if old is not None:
                 node.RemoveObserver(old[1])
             C, u, v, n = (np.asarray(slot[k], float) for k in ("centre", "u", "v", "normal"))
             bottom = float(np.mean(slot["bottom"]))
@@ -256,7 +258,7 @@ class SawMixin:
                 self._saw_box_updating = False
             tag = node.AddObserver(slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
                                    lambda caller, event, l=label: self._on_saw_box_moved(l))
-            tags[label] = (node.GetID(), tag)
+            tags[node.GetID()] = (node.GetID(), tag)
         self._saw_box_gizmo_tags = tags
 
     def _on_saw_box_moved(self, label):

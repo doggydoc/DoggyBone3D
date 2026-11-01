@@ -106,8 +106,13 @@ def section_centre(polydata, point, normal, reach=40.0, res=0.1, max_distance=6.
         label = int(regions[ia[q[0], q[1]], ib[q[0], q[1]]])
     if outline is not None:                                # the outer contour of that region, for display
         outline.append(_region_outline(regions == label, lo, res, origin, e1, e2))
-    ii, jj = np.nonzero(regions == label)
-    area = len(ii) * res * res
+    region = regions == label
+    ii, jj = np.nonzero(region)
+    # the dilated outline is ~3 pixels wide, centred on the contour: its outer half lies OUTSIDE the
+    # bone - counted half, the area is not overestimated (by ~5 % at r = 6 mm); the centroid keeps
+    # all pixels (the band is symmetric about the contour)
+    outer_wall = region & wall & ndi.binary_dilation(outside, iterations=3)
+    area = (len(ii) - 0.5 * float(outer_wall.sum())) * res * res
     cx = lo[0] + float(ii.mean()) * res
     cy = lo[1] + float(jj.mean()) * res
     return origin + cx * e1 + cy * e2, area
@@ -157,12 +162,45 @@ def crop(polydata, centre, radius=50.0):
     return out if out.GetNumberOfPoints() > 0 else polydata
 
 
+def _point_normals(polydata):
+    """Per-point normals (N x 3) of the surface - its own, or computed - or None."""
+    normals = polydata.GetPointData().GetNormals()
+    if normals is None or normals.GetNumberOfTuples() != polydata.GetNumberOfPoints():
+        f = vtk.vtkPolyDataNormals()
+        f.SetInputData(polydata)
+        f.SplittingOff()                                   # keeps the point ids
+        f.ComputePointNormalsOn()
+        f.ComputeCellNormalsOff()
+        f.Update()
+        out = f.GetOutput()
+        normals = out.GetPointData().GetNormals()
+        if normals is None or out.GetNumberOfPoints() != polydata.GetNumberOfPoints():
+            return None
+    return vtk_to_numpy(normals).astype(float)
+
+
 def local_axis(polydata, point, radius=15.0):
-    """Rough local bone axis: main direction of the surface points within `radius` of point."""
+    """Rough local bone axis from the surface points within `radius` of point (widened up to 3x if
+    there are too few): the direction the surface NORMALS are perpendicular to (the eigenvector of the
+    smallest eigenvalue of their scatter matrix - a tube's axis, however thick the bone: the main
+    direction of the points themselves turns transverse once the patch is wider than long). Without
+    normals: the main direction of the points."""
     P = vtk_to_numpy(polydata.GetPoints().GetData()).astype(float)
-    near = P[np.linalg.norm(P - np.asarray(point, float), axis=1) <= radius]
-    if len(near) < 20:
+    distance = np.linalg.norm(P - np.asarray(point, float), axis=1)
+    for r in (radius, 2.0 * radius, 3.0 * radius):
+        sel = distance <= r
+        if sel.sum() >= 20:
+            break
+    else:
         return None
+    N = _point_normals(polydata)
+    if N is not None:
+        n = N[sel]
+        n = n[np.linalg.norm(n, axis=1) > 1e-9]
+        if len(n) >= 20:
+            _w, v = np.linalg.eigh(n.T @ n)
+            return _unit(v[:, 0])
+    near = P[sel]
     centred = near - near.mean(axis=0)
     _u, _s, vt = np.linalg.svd(centred, full_matrices=False)
     return _unit(vt[0])

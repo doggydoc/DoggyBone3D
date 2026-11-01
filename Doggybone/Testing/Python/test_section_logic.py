@@ -45,6 +45,14 @@ class SectionTest(unittest.TestCase):
         self.assertEqual(index, 0)
         np.testing.assert_allclose(c, [0.0, -9.0], atol=1e-9)
 
+    def test_index_into_the_given_list(self):
+        """Degenerate loops (< 3 points) are skipped - the index still refers to the list passed in."""
+        loops = [np.zeros((2, 2)), ellipse(0.0, -9.0, 3.0, 3.0), np.zeros((1, 2)), ellipse(0.0, 0.0, 7.0, 4.0)]
+        index, c, _ = S.pick_loop_centroid(loops, seed_2d=[1.0, 0.2])
+        self.assertEqual(index, 3)
+        index, c, _ = S.pick_loop_centroid(loops, seed_2d=[0.0, -9.5])
+        self.assertEqual(index, 1)
+
     def test_seed_just_outside(self):
         loops = [ellipse(0.0, 0.0, 7.0, 4.0)]
         index, c, _ = S.pick_loop_centroid(loops, seed_2d=[7.8, 0.0])

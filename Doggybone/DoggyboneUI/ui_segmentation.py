@@ -25,7 +25,8 @@ class SegmentationMixin:
             return None
         volume_node = landmark_logic.get_bone_volume()
         if volume_node is None:
-            volumes = slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")
+            volumes = [v for v in slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")
+                       if not v.IsA("vtkMRMLLabelMapVolumeNode")]
             if len(volumes) != 1:
                 self.segmentation_status.setText("Could not identify the CT volume - run 'Apply' first.")
                 return None
@@ -479,7 +480,14 @@ class SegmentationMixin:
         except Exception:
             pass
         if source is None:
-            others = [n for n in slicer.util.getNodesByClass("vtkMRMLSegmentationNode") if n.GetName() != own_name]
+            # module-internal segmentations ('Doggybone ...') are never taken over
+            others = [n for n in slicer.util.getNodesByClass("vtkMRMLSegmentationNode")
+                      if n.GetName() != own_name and not (n.GetName() or "").startswith("Doggybone")]
+            if len(others) > 1:
+                self.segmentation_status.setText(
+                    "Several segmentations in the scene (" + ", ".join(f"'{n.GetName()}'" for n in others)
+                    + ") - open the one to use in the Segment Editor, then press this button again.")
+                return
             source = others[0] if others else None
         if source is None:
             self.segmentation_status.setText("No Segment Editor segmentation found.")

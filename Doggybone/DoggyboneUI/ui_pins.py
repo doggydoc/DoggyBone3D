@@ -95,6 +95,10 @@ class PinsMixin:
                     reduced, axis, standoff=float(self.reduction_standoff.value),
                     bar_diameter=float(self.reduction_bar_diameter.value),
                     boss_height=float(self.reduction_boss_height.value), wall=wall)
+            if body is None:                            # e.g. a pin tilted too far against the others
+                self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+                self.guide_status.setText("No reduction guide: " + str(info.get("error", "")))
+                return
             label_note = ""
             if self._label_wanted():
                 if self._label_mode() == "Break-off tag":
@@ -148,7 +152,7 @@ class PinsMixin:
         per_segment = {}
         for p in reduced:
             per_segment[p["segment"]] = per_segment.get(p["segment"], 0) + 1
-        lines = [f"Reduction bar over {len(reduced)} pins (" + ", ".join(f"{v} {k}" for k, v in per_segment.items())
+        lines = [f"Reduction bar over {len(reduced)} pins (" + ", ".join(f"{per_segment.get(k, 0)} {k}" for k in ("proximal", "distal"))
                  + f"), bores \u00d8 {2 * info['r_in']:.2f} mm, pin axes parallel within "
                  f"{info['max_axis_deviation_deg']:.1f}\N{DEGREE SIGN}; "
                  + (f"bosses and webs connected over the full height, seated on the corrected bone (fit gap "
@@ -290,12 +294,17 @@ class PinsMixin:
         return value
 
     def _cut_planes(self):
-        """[(label, origin, unit normal)] of the existing cutting planes."""
+        """[(label, origin, unit normal)] of the existing REAL cutting planes (as _plan_saw_slots):
+        opening wedge = only the master plane, the second plane is a virtual target, not a cut."""
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
+        owo = self.osteotomy_technique.currentText.startswith("OWO")
+        master = self.reference_plane_selector.currentText.lower()
         planes = []
         for label, name in (("proximal", self._plane_node_name(side, bone)),
                             ("distal", self._distal_plane_node_name(side, bone))):
+            if owo and label != master:
+                continue
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is not None:
                 origin, normal = self._get_plane_origin_normal(node)
@@ -741,6 +750,9 @@ class PinsMixin:
                     problems.append(f"{segment} pin {k + 1}: {pin['error']} - the row does not fit, "
                                     "reduce Pins / Spacing")
                     break
+                if ok_segment is None:                   # the saw guide could not take it - not placed
+                    problems.append(f"{segment} pin {k + 1}: {reason} - not placed")
+                    continue
                 if k == 0:
                     handles_at[segment] = pin["entry"] + 4.0 * np.asarray(direction, float)
                     if n_cut is not None:
@@ -896,12 +908,11 @@ class PinsMixin:
             node.GetDisplayNode().SetSelectedColor(0.2, 0.8, 1.0)
             node.GetDisplayNode().SetGlyphScale(3.0)
             node.GetDisplayNode().SetTextScale(2.5)
-            self._pin_row_handle_tag = node.AddObserver(slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
-                                                        lambda caller, event: self._on_pin_row_handle_moved())
-        elif getattr(self, "_pin_row_handle_tag", None) is None:
-            self._pin_row_handle_tag = node.AddObserver(slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
-                                                        lambda caller, event: self._on_pin_row_handle_moved())
-        self._pin_row_handle_node_id = node.GetID()      # for releasing the observer on reload
+        # one handle node per bone: {node ID: observer tag}, released on reload (_release_pin_row_handle_observers)
+        tags = self.__dict__.setdefault("_pin_row_handle_tags", {})
+        if node.GetID() not in tags:
+            tags[node.GetID()] = node.AddObserver(slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
+                                                  lambda caller, event: self._on_pin_row_handle_moved())
         self._pin_row_frames = frames
         self._updating_handles = True
         try:
@@ -915,6 +926,17 @@ class PinsMixin:
                 node.GetDisplayNode().SetVisibility(True)
         finally:
             self._updating_handles = False
+
+    def _release_pin_row_handle_observers(self):
+        """Module reload / close: remove the observers on the pin-row handle nodes of ALL bones."""
+        for node_id, tag in list(getattr(self, "_pin_row_handle_tags", {}).items()):
+            node = slicer.mrmlScene.GetNodeByID(node_id)
+            if node is not None:
+                try:
+                    node.RemoveObserver(tag)
+                except Exception:
+                    pass
+        self._pin_row_handle_tags = {}
 
     def _on_pin_row_handle_moved(self):
         if getattr(self, "_updating_handles", False):
@@ -1516,8 +1538,7 @@ class PinsMixin:
         except Exception:
             return
         interactor = view.interactor()
-        if getattr(self, "_guide_view", None) is None:
-            self._guide_view = view
+        self._guide_view = view                       # the view the picker observes (may have changed)
         tags = [interactor.AddObserver(event, self._on_pin_picker, 0.9)
                 for event in ("LeftButtonPressEvent", "LeftButtonReleaseEvent", "KeyPressEvent")]
         self._pin_picker = (interactor, tags)
@@ -1592,9 +1613,11 @@ class PinsMixin:
         for _attempt in range(6):
             raw = pin["entry"] if segment != moved else (Minv @ np.append(pin["entry"], 1.0))[:3]
             ok_segment, reason = self._pin_segment(raw)
-            found = re.search(r"\(([\d.]+) mm, needs ([\d.]+) mm\)", reason or "")
-            if ok_segment is not None or not found:
+            if ok_segment is not None:
                 return pin, shift
+            found = re.search(r"\(([\d.]+) mm, needs ([\d.]+) mm\)", reason or "")
+            if not found:
+                return dict(pin, error=reason), 0.0
             step = float(found.group(2)) - float(found.group(1)) + 0.3
             shift += step
             point = np.asarray(pin.get("centre", pin["entry"]), float) + step * along
@@ -1605,7 +1628,9 @@ class PinsMixin:
             if not centred:
                 new["centre"] = point
             pin = new
-        return pin, shift
+        raw = pin["entry"] if segment != moved else (Minv @ np.append(pin["entry"], 1.0))[:3]
+        ok_segment, reason = self._pin_segment(raw)
+        return (pin, shift) if ok_segment is not None else (dict(pin, error=reason), 0.0)
 
     def _selected_pin_index(self):
         node = slicer.mrmlScene.GetFirstNodeByName(self.REDUCTION_PIN_MARKS)
@@ -1797,6 +1822,7 @@ class PinsMixin:
             return
         pin.setdefault("centre", point)
         pin, shift = self._keep_clear_of_cut(pin, fragments, direction, centred)
+        pin.pop("error", None)            # still moved there - the saw guide warning follows below
         node.SetNthControlPointPositionWorld(index, *[float(v) for v in pin["entry"]])
         node.SetNthControlPointDescription(index, f"{pin['segment']}|{'manual' if centred else 'free'}")
         self._relabel_pins(node)
@@ -1888,6 +1914,9 @@ class PinsMixin:
         if direction_ is not None:
             pin.setdefault("centre", p)
             pin, shift = self._keep_clear_of_cut(pin, self._corrected_fragments(), direction_, centred)
+            if "error" in pin:
+                self._pin_feedback(f"No pin added: the saw guide cannot take it - {pin['error']}.", p, ok=False)
+                return
         index = node.AddControlPointWorld(vtk.vtkVector3d(*[float(v) for v in pin["entry"]]))
         node.SetNthControlPointDescription(index, f"{pin['segment']}|{'manual' if centred else 'free'}")
         self._relabel_pins(node)

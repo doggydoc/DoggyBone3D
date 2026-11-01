@@ -471,6 +471,7 @@ class PlanesMixin:
             self.osteotomy_status.setText("Create and position the MASTER plane first.")
             return
         other = slicer.mrmlScene.GetFirstNodeByName(other_name)
+        created = other is None
         if other is None:
             origin, x, y, n = self._get_plane_frame(master, side, bone)
             other = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsPlaneNode", other_name)
@@ -481,7 +482,15 @@ class PlanesMixin:
             kwargs = {"label": label}
             if color is not None: kwargs["color"] = color
             self._configure_plane_size(other, side, bone, **kwargs)
-        ok, message = self._sync_other_plane(side, bone)
+        try:
+            ok, message = self._sync_other_plane(side, bone)
+        except Exception as exc:
+            logging.exception("Doggybone: deriving the second plane failed")
+            ok, message = False, str(exc)
+        if not ok and created and other.GetScene() is not None:
+            slicer.mrmlScene.RemoveNode(other)          # no plane left lying on the master plane
+            if hasattr(self, "_remove_orphan_display_nodes"):
+                self._remove_orphan_display_nodes()
         self._update_plane_handle_interactivity()
         if not ok:
             # the SECOND plane could not be derived - say why (the wedge advice below would hide it:
@@ -566,7 +575,6 @@ class PlanesMixin:
             ok_rot, torsion_delta = True, 0.0          # tibia: torsion from the target table
         if not ok_rot:
             return False, rotation_message
-        self.rotation_angle.setValue(torsion_delta)
 
         # OWO: the SECOND plane is the virtual target - the master cut face of the moving fragment
         # in its corrected position. It uses exactly the rotation of the preview transform
