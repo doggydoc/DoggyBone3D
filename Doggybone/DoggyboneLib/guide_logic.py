@@ -376,6 +376,8 @@ def external_mask(mesh, labelmap, label_value, margin=4.0, seal_iterations=3, sa
     hi = np.minimum(np.ceil(ijk.max(axis=0)).astype(int) + 1, [ext[1] + 1, ext[3] + 1, ext[5] + 1])
     dims = (ext[5] - ext[4] + 1, ext[3] - ext[2] + 1, ext[1] - ext[0] + 1)
     full = vtk_to_numpy(labelmap.GetPointData().GetScalars()).reshape(dims)
+    if np.any(hi <= lo):                                   # mesh outside the labelmap: nothing to test
+        return np.zeros(len(P), dtype=bool)
     bone = full[lo[2] - ext[4]:hi[2] - ext[4], lo[1] - ext[2]:hi[1] - ext[2], lo[0] - ext[0]:hi[0] - ext[0]] == label_value
     solid = ndi.binary_closing(bone, iterations=int(seal_iterations), border_value=0) | bone
     # porous / thin cortex (low threshold): the medullary canal and the pores may still connect to the
@@ -1054,6 +1056,9 @@ def _hull_order(points):
         return None
 
 
+MAX_PIN_TILT_COS = float(np.cos(np.radians(60.0)))   # reduction guide: pins at most 60 deg off the common axis
+
+
 def reduction_bar(pins, axis, standoff=15.0, bar_diameter=6.0, boss_height=10.0, wall=2.0, voxel=0.15,
                   bone_obb=None, gap=0.15):
     """Reduction guide as a BAR over the pins (no bone contact): around every (reduced, ~parallel)
@@ -1063,7 +1068,8 @@ def reduction_bar(pins, axis, standoff=15.0, bar_diameter=6.0, boss_height=10.0,
     With bone_obb (the corrected bone): every boss reaches DOWN TO THE BONE and its underside follows
     the bone surface of that fragment + gap (patient-specific seat) - the guide only fits when both
     fragments are correctly reduced; bone contact only around the pins.
-    Signed distance field -> iso-surface (always closed). Returns (polydata, info)."""
+    Signed distance field -> iso-surface (always closed). Returns (polydata, info), or (None, {"error": ...})
+    if a pin is tilted more than 60 deg against the axis (the bar would run off to infinity)."""
     from vtk.util.numpy_support import numpy_to_vtk as _n2v
     a = unit(np.asarray(axis, float))
     e1, e2 = _perp_frame(a)
@@ -1072,6 +1078,9 @@ def reduction_bar(pins, axis, standoff=15.0, bar_diameter=6.0, boss_height=10.0,
     axes = np.array([unit(p["axis"]) for p in pins], float)
     local = entries @ frame.T
     local_axes = axes @ frame.T
+    if float(local_axes[:, 2].min()) < MAX_PIN_TILT_COS:
+        return None, {"error": "a pin is tilted more than 60\N{DEGREE SIGN} against the others (or points the "
+                               "opposite way) - no common bar over the pins"}
     r_in = float(max(p["r_in"] for p in pins))
     r_boss = r_in + float(wall)
     r_bar = 0.5 * float(bar_diameter)
@@ -1198,7 +1207,8 @@ def reduction_web(pins, axis, bone_obb, height=15.0, web_width=6.0, wall=2.0, ga
     and WEBS of width web_width joining the bosses along the minimum spanning tree - both over the
     FULL height: from the bone surface (+gap, patient-specific underside) up to a flat top `height`
     mm above the highest pin entry. Through-bores r_in along each pin's own axis.
-    Signed distance field -> iso-surface (always closed). Returns (polydata, info)."""
+    Signed distance field -> iso-surface (always closed). Returns (polydata, info), or (None, {"error": ...})
+    if a pin is tilted more than 60 deg against the axis (the bar would run off to infinity)."""
     from vtk.util.numpy_support import numpy_to_vtk as _n2v
     a = unit(np.asarray(axis, float))
     e1, e2 = _perp_frame(a)
@@ -1207,6 +1217,9 @@ def reduction_web(pins, axis, bone_obb, height=15.0, web_width=6.0, wall=2.0, ga
     axes = np.array([unit(p["axis"]) for p in pins], float)
     local = entries @ frame.T
     local_axes = axes @ frame.T
+    if float(local_axes[:, 2].min()) < MAX_PIN_TILT_COS:
+        return None, {"error": "a pin is tilted more than 60\N{DEGREE SIGN} against the others (or points the "
+                               "opposite way) - no common bar over the pins"}
     r_in = float(max(p["r_in"] for p in pins))
     r_boss = r_in + float(wall)
     half_web = 0.5 * float(web_width)
@@ -1505,8 +1518,6 @@ def saw_block_pair(slot_a, slot_b, bone_obb, gap, voxel=0.12, seat_step=0.15, bl
     corners = np.array(corners)
     origin = corners.mean(axis=0)
     local = (corners - origin) @ np.stack([e_u, e_v, e_w]).T
-    # common length limits along e_u (flat, parallel end faces for the whole block)
-    a_lo, a_hi = float(local[:, 0].min()), float(local[:, 0].max())
     lo = local.min(axis=0) - 3.0
     hi = local.max(axis=0) + 3.0
     na, nb, nc = (int(np.ceil((hi[k] - lo[k]) / voxel)) + 1 for k in range(3))
@@ -1995,8 +2006,6 @@ def find_label_spot(guide, up, directions, units, heights=(3.0, 2.5, 2.0, 1.6, 1
     rel = P - o
     a_lo, a_hi = float((rel @ e1).min()) - 1.0, float((rel @ e1).max()) + 1.0
     b_lo, b_hi = float((rel @ e2).min()) - 1.0, float((rel @ e2).max()) + 1.0
-    z_hi = float((rel @ up).max()) + 5.0
-    z_lo = float((rel @ up).min()) - 5.0
     As = np.arange(a_lo, a_hi, res)
     Bs = np.arange(b_lo, b_hi, res)
     # height map from the surface itself (fast): subdivide long edges to <= res, then keep the highest
@@ -2213,6 +2222,36 @@ def _rasterize_closed(poly_local, origin, voxel, dims):
     conv.Update()
     arr = vtk_to_numpy(conv.GetOutput().GetPointData().GetScalars())
     return arr.reshape(int(dims[2]), int(dims[1]), int(dims[0])).transpose(2, 1, 0) > 0
+
+
+def _rasterize_shells(poly_local, origin, voxel, dims):
+    """Like _rasterize_closed, but every connected closed shell is rasterised on its own and the masks
+    are OR-ed: overlapping shells in one polydata (e.g. the hinge strut's posts sunk into its bridge)
+    stay solid - the stencil's even-odd rule would turn their overlap into a hole. (Not for meshes
+    with nested shells that are meant as cavities.)"""
+    conn = vtk.vtkPolyDataConnectivityFilter()
+    conn.SetInputData(poly_local)
+    conn.SetExtractionModeToAllRegions()
+    conn.Update()
+    count = conn.GetNumberOfExtractedRegions()
+    if count <= 1:
+        return _rasterize_closed(poly_local, origin, voxel, dims)
+    mask = np.zeros(tuple(int(d) for d in dims), dtype=bool)
+    conn.SetExtractionModeToSpecifiedRegions()
+    for region in range(count):
+        conn.InitializeSpecifiedRegionList()
+        conn.AddSpecifiedRegion(region)
+        conn.Update()
+        clean = vtk.vtkCleanPolyData()                   # drop the points of the other shells
+        clean.SetInputConnection(conn.GetOutputPort())
+        clean.PointMergingOff()
+        clean.Update()
+        shell = vtk.vtkPolyData()
+        shell.DeepCopy(clean.GetOutput())
+        if shell.GetNumberOfCells() == 0:
+            continue
+        mask |= _rasterize_closed(shell, origin, voxel, dims)
+    return mask
 
 
 def _smin(a, b, k):
@@ -2712,7 +2751,7 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
     if parts_local:
         pmask = np.zeros(shape, dtype=bool)
         for p in parts_local:
-            pmask |= _rasterize_closed(p, origin, voxel, dims)
+            pmask |= _rasterize_shells(p, origin, voxel, dims)      # parts may hold overlapping shells
         # the exact part meshes are part of the guide as well: their voxel copy stays 0.3 mm INSIDE
         # them (otherwise its voxel steps poke through the exact faces as a rough skin)
         psdf = (ndi.distance_transform_edt(~pmask) - ndi.distance_transform_edt(pmask)) * voxel + 0.3

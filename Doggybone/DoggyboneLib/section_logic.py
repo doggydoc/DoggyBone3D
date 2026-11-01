@@ -73,7 +73,8 @@ def pick_loop_centroid(loops_2d, seed_2d, max_distance=5.0):
     The bone = the LARGEST loop that contains the seed (outer contour - an inner medullary loop is
     smaller); if no loop contains it (the landmark lies on the surface or just outside), the loop
     nearest to the seed within max_distance mm. Returns (index, centroid_2d, area) or (None, None, 0)."""
-    loops = [np.asarray(loop, dtype=float) for loop in loops_2d if len(loop) >= 3]
+    original = [i for i, loop in enumerate(loops_2d) if len(loop) >= 3]     # index into loops_2d
+    loops = [np.asarray(loops_2d[i], dtype=float) for i in original]
     if not loops:
         return None, None, 0.0
     stats = [polygon_area_centroid(loop) for loop in loops]
@@ -89,4 +90,4 @@ def pick_loop_centroid(loops_2d, seed_2d, max_distance=5.0):
         around = [i for i, loop in enumerate(loops) if point_in_polygon(stats[index][1], loop)]
         if around:
             index = max(around, key=lambda i: abs(stats[i][0]))
-    return index, stats[index][1], abs(stats[index][0])
+    return original[index], stats[index][1], abs(stats[index][0])

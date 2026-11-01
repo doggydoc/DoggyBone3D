@@ -33,6 +33,9 @@ def set_bone_volume(volume_node):
     _bone_volume_node = volume_node
 
 def get_bone_volume():
+    # the node may have been removed meanwhile (scene closed / volume deleted)
+    if _bone_volume_node is not None and not slicer.mrmlScene.IsNodePresent(_bone_volume_node):
+        return None
     return _bone_volume_node
 
 
@@ -72,7 +75,9 @@ def snap_to_nearest_bone_voxel(position_ras, in_plane_radius_mm=100.0, out_of_pl
 
     volume_node = get_bone_volume()
     if volume_node is None:
-        volume_nodes = slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")
+        # label maps are scalar volumes too - they are no CT candidates
+        volume_nodes = [n for n in slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")
+                        if not n.IsA("vtkMRMLLabelMapVolumeNode")]
         if len(volume_nodes) != 1:
             return position_ras
         volume_node = volume_nodes[0]
@@ -166,6 +171,8 @@ class SimpleLandmark:
             self._markups_node.SetNthControlPointVisibility(self._id, False)
 
     def start_interaction(self):
+        # idempotent: a second start (row change + click on the row) must not add a second set of observers
+        self._remove_private_observers()
         if self.placed:
             self._markups_node.SetNthControlPointLocked(self._id, False)
             self._markups_node.SetNthControlPointSelected(self._id, True)
@@ -192,14 +199,18 @@ class SimpleLandmark:
             self._markups_node.SetNthControlPointSelected(self._id, False)
         
         # Turn off placement mode and remove observers
-        for observer in self._private_observers:
-            self._markups_node.RemoveObserver(observer)
-        self._private_observers = []
+        self._remove_private_observers()
         self._unwatch_active_list()
 
         interaction_node = slicer.mrmlScene.GetNodeByID("vtkMRMLInteractionNodeSingleton")
         interaction_node.SwitchToViewTransformMode()
         interaction_node.SetPlaceModePersistence(0)                                                       
+
+    def _remove_private_observers(self):
+        for observer in self._private_observers:
+            if self._markups_node is not None:
+                self._markups_node.RemoveObserver(observer)
+        self._private_observers = []
 
     # --- the list that receives a new point ---------------------------------------------------------
     @staticmethod

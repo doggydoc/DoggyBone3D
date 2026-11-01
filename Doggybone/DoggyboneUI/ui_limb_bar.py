@@ -248,4 +248,7 @@ class LimbBarMixin:
         self.onExportAllGuides()
         status = getattr(self, "guide_status", None)
         if status is not None:
-            self.overview_status.setText(status.text)
+            # the full text (status.text is the compact form, its tooltip hint does not apply here);
+            # the warning colour of the guide status is kept
+            self.overview_status.setStyleSheet(status.styleSheet)
+            self.overview_status.setText(getattr(status, "full_text", status.text))

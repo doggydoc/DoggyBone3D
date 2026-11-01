@@ -188,10 +188,11 @@ class GuideEditMixin:
         return float(mass.GetSurfaceArea())
 
     # --- editing tools -------------------------------------------------
-    def _correction_signature(self):
+    def _correction_signature(self, reduction=None):
         """Fingerprint of the current correction (incl. fine shift) - the reduction surface must be
-        rebuilt when it changes, since the moving fragment is somewhere else then."""
-        if not self._guide_mode_is_reduction():
+        rebuilt when it changes, since the moving fragment is somewhere else then. reduction=True
+        computes it regardless of the current guide mode."""
+        if not (self._guide_mode_is_reduction() if reduction is None else reduction):
             return ""
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
@@ -201,6 +202,13 @@ class GuideEditMixin:
         matrix = vtk.vtkMatrix4x4()
         transform.GetMatrixTransformToWorld(matrix)
         return ";".join(f"{matrix.GetElement(r, c):.3f}" for r in range(3) for c in range(4))
+
+    def _reduction_surface_outdated(self):
+        """True when this bone's prepared reduction surface (painted footprint) was made for another
+        correction - 'Extrude' would discard the painted footprint then (independent of the mode)."""
+        node = slicer.mrmlScene.GetFirstNodeByName("Doggybone guide bone surface" + self._bone_tag() + " (reduction)")
+        return (node is not None
+                and node.GetAttribute("Doggybone.CorrectionSignature") != self._correction_signature(reduction=True))
 
     def _ensure_current_reduction_surface(self):
         """Reduction guide: rebuild the prepared surface if the correction changed since it was made.

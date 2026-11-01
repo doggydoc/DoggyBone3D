@@ -44,7 +44,8 @@ class BoneConfig:
     # Fragment that is the anatomical reference ("condylar" fragment): its pins stand
     # perpendicular to the condylar axis, the other fragment's pins are pre-angled. "proximal"/"distal".
     reference_end: str
-    # Lower-case word identifying this bone's landmarks by name (landmark transfer between sides).
+    # Lower-case word identifying this bone's landmarks by name (landmark transfer between sides);
+    # several words separated by "|" (e.g. "femur|trochanter").
     landmark_keyword: str
     # Optional features of the generic UI.
     sagittal_input: bool = False          # manual sagittal correction field (femur procurvatum)
@@ -142,7 +143,7 @@ class BoneSet:
         (e.g. talus / metatarsal landmarks with the tibia)."""
         lowered = (landmark_name or "").lower()
         for bone in self.bones:
-            if bone.landmark_keyword and bone.landmark_keyword in lowered:
+            if bone.landmark_keyword and any(k and k in lowered for k in bone.landmark_keyword.split("|")):
                 return bone
         return self.bones[-1]
 

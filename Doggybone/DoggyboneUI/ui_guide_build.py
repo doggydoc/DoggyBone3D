@@ -33,9 +33,20 @@ class GuideBuildMixin:
             return
         if self._guide_footprint_lost(other):
             return          # nothing to extrude from - the guide line in the status says what to do
+        if other == "reduction" and not self._reduction_is_bar() and self._reduction_surface_outdated():
+            # extruding it now would discard the painted footprint (the correction changed since it
+            # was prepared) - the user has to redo it, it is NOT rebuilt automatically
+            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+            self.guide_status.setText(
+                self._strip_guide_state_note(getattr(self.guide_status, "full_text", self.guide_status.text))
+                + "\nReduction guide NOT rebuilt: the correction changed since its footprint was painted - "
+                  "switch to the reduction guide, paint the footprint again, then Extrude.")
+            return
         first_text = self._strip_guide_state_note(getattr(self.guide_status, "full_text", self.guide_status.text))
         first_style = self.guide_status.styleSheet
         buttons = {"reduction": self.guide_mode_reduction, "saw": self.guide_mode_saw}
+        before = self._guide_body_node(other)
+        before_time = before.GetMTime() if before is not None else -1
         qt.QApplication.setOverrideCursor(qt.Qt.WaitCursor)
         try:
             buttons[other].setChecked(True)            # -> onGuideModeChanged (scene shows the other guide)
@@ -47,9 +58,13 @@ class GuideBuildMixin:
             buttons[first].setChecked(True)            # back to the guide the user extruded
             qt.QApplication.restoreOverrideCursor()
         names = {"reduction": "Reduction guide", "saw": "Saw guide"}
-        worst = STATUS_WARN_STYLE if STATUS_WARN_STYLE in (first_style, other_style) else ""
+        after = self._guide_body_node(other)
+        rebuilt = after is not None and (after is not before or after.GetMTime() != before_time)
+        worst = STATUS_WARN_STYLE if not rebuilt or STATUS_WARN_STYLE in (first_style, other_style) else ""
         self.guide_status.setStyleSheet(worst)
-        self.guide_status.setText(first_text + f"\n\u2713 {names[other]} rebuilt as well (the plan had changed)\n"
+        head = (f"\n\u2713 {names[other]} rebuilt as well (the plan had changed)\n" if rebuilt
+                else f"\n{names[other]} could NOT be rebuilt - switch to it and redo it\n")
+        self.guide_status.setText(first_text + head
                                   + "\n".join(f"{names[other]}: {line}" for line in other_text.split("\n") if line.strip()))
 
     # fixed guide-body parameters (the former fields Rim smoothing / Top smoothing / Min. thickness)
@@ -419,7 +434,9 @@ class GuideBuildMixin:
             jobs.append((node, side, side_text, bone, mode, os.path.join(folder, file_name)))
         # side check: the file name and the label on the guide carry dx / sx - compare the side of
         # each guide with the side its landmarks actually form before anything is written
-        side_checks = {side_text: self.laterality_check(side_text) for side_text in {job[2] for job in jobs}}
+        # (no automatic side check for limbs without one - LATERALITY_SUPPORTED False)
+        side_checks = ({side_text: self.laterality_check(side_text) for side_text in {job[2] for job in jobs}}
+                       if self.LATERALITY_SUPPORTED else {})
         wrong = []
         for side_text, check in sorted(side_checks.items()):
             if check["status"] == "ok" and check["side"] != side_text:
@@ -471,7 +488,8 @@ class GuideBuildMixin:
             if side is None:
                 notes.append("side taken from the current selection (guide built before sides were stored)")
             check = side_checks.get(side_text, {})
-            if check.get("status") != "ok" or check.get("side") != side_text:
+            side_ok = not self.LATERALITY_SUPPORTED or (check.get("status") == "ok" and check.get("side") == side_text)
+            if not side_ok:
                 notes.append("SIDE NOT CONFIRMED by the landmarks"
                              + (" - " + "; ".join(check["messages"]) if check.get("messages") else ""))
             changed = self._guide_changed_parts(node, side, bone, mode)
@@ -480,7 +498,6 @@ class GuideBuildMixin:
                              + " - extrude this guide again")
             elif changed is None:
                 notes.append("not checked for later plan changes (built with an older version)")
-            side_ok = check.get("status") == "ok" and check.get("side") == side_text
             problems += 1 if (not ok or pieces != 1 or open_edges or changed or not side_ok) else 0
             lines.append(f"{'OK' if ok and not notes else 'CHECK'}  {label}: {os.path.basename(path)} "
                          f"({b[1] - b[0]:.0f} x {b[3] - b[2]:.0f} x {b[5] - b[4]:.0f} mm)"
@@ -488,6 +505,8 @@ class GuideBuildMixin:
         for text in outdated:
             lines.append("NOT EXPORTED  " + text)
             problems += 1
+        if not self.LATERALITY_SUPPORTED:
+            lines.append("Side (dx / sx) of each file comes from the guide itself (no automatic side check for this limb).")
         self._last_stl_dir = folder
         self.guide_status.setStyleSheet(STATUS_WARN_STYLE if problems else STATUS_OK_STYLE)
         self.guide_status.setText(f"{len(jobs)} guide(s) exported to {folder} (each centred at 0,0,0):\n"
@@ -505,10 +524,24 @@ class GuideBuildMixin:
         if node is None or node.GetPolyData() is None or node.GetPolyData().GetNumberOfPoints() == 0:
             self.guide_status.setText("No guide body yet - press Extrude first.")
             return
-        bone = self._bone_config().file_code
-        side = "dx" if self.osteotomy_side.currentText == "Right" else "sx"
-        kind = "red" if self._guide_mode_is_reduction() else "cut"
-        default_name = self._export_file_name(bone, side, kind)    # name-number-fem/tib-dx/sx-red/cut.stl
+        # side / bone / mode stored on the guide when it was built (fallback: current selection)
+        side = node.GetAttribute("Doggybone.GuideSide")
+        side_text = side or self.osteotomy_side.currentText
+        bone = node.GetAttribute("Doggybone.GuideBone") or self.osteotomy_bone.currentText
+        mode = node.GetAttribute("Doggybone.GuideMode") or ("reduction" if self._guide_mode_is_reduction() else "saw")
+        try:
+            changed = self._guide_changed_parts(node, side, bone, mode)
+        except Exception:
+            logging.exception("Doggybone: guide outdated check failed (continuing)")
+            changed = None
+        if changed and not slicer.util.confirmOkCancelDisplay(
+                "This guide no longer matches the plan - changed since it was built: " + ", ".join(changed)
+                + ".\n\nPress 'Extrude' again before printing. Export the outdated guide anyway?",
+                windowTitle="Export cutting guide"):
+            return
+        default_name = self._export_file_name(self._bone_config(bone).file_code,
+                                              "dx" if side_text == "Right" else "sx",
+                                              "red" if mode == "reduction" else "cut")    # name-number-fem/tib-dx/sx-red/cut.stl
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
         path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export cutting guide",
                                               os.path.join(start_dir, default_name), "STL (*.stl)")
@@ -517,24 +550,25 @@ class GuideBuildMixin:
         if not path.lower().endswith(".stl"):
             path += ".stl"
         # the guide is moved so the centre of its bounding box lies at 0,0,0 (the scene itself is unchanged)
-        b = node.GetPolyData().GetBounds()
-        centre = [0.5 * (b[0] + b[1]), 0.5 * (b[2] + b[3]), 0.5 * (b[4] + b[5])]
-        shift = vtk.vtkTransform()
-        shift.Translate(-centre[0], -centre[1], -centre[2])
-        moved = vtk.vtkTransformPolyDataFilter()
-        moved.SetInputData(node.GetPolyData())
-        moved.SetTransform(shift)
-        triangles = vtk.vtkTriangleFilter()
-        triangles.SetInputConnection(moved.GetOutputPort())
-        writer = vtk.vtkSTLWriter()
-        writer.SetInputConnection(triangles.GetOutputPort())
-        writer.SetFileName(path)
-        writer.SetFileTypeToBinary()
-        writer.Write()
+        ok, b = self._write_centred_stl(node.GetPolyData(), path)
+        if not ok:
+            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+            self.guide_status.setText(f"Guide NOT written: {path} - check the folder / disk.")
+            return
         self._last_stl_dir = os.path.dirname(path)
+        notes = []
+        if changed:
+            notes.append("OUTDATED - changed since this guide was built: " + ", ".join(changed)
+                         + " - extrude this guide again")
+        if side is None:
+            notes.append("side taken from the current selection (guide built before sides were stored)")
+        if notes:
+            self.guide_status.setStyleSheet(STATUS_WARN_STYLE)
+        centre = [0.5 * (b[0] + b[1]), 0.5 * (b[2] + b[3]), 0.5 * (b[4] + b[5])]
         self.guide_status.setText(
             f"Guide exported: {path}\nCentred at 0,0,0 (size {b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x "
-            f"{b[5] - b[4]:.1f} mm; moved by {-centre[0]:.1f}, {-centre[1]:.1f}, {-centre[2]:.1f} mm).")
+            f"{b[5] - b[4]:.1f} mm; moved by {-centre[0]:.1f}, {-centre[1]:.1f}, {-centre[2]:.1f} mm)."
+            + "".join("\n" + note for note in notes))
 
     def _on_guide_bone_switched(self):
         """Osteotomy bone changed (femur <-> tibia): the other bone's guides, pins and correction preview

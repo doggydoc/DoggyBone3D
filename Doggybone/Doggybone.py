@@ -275,8 +275,6 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         # Keep the landmark bone-snapping threshold in sync with this control's current value
         # from the start, not just from the first time the user moves it.
         landmark_logic.set_bone_threshold(self.snap_threshold.value)
-        # diaphysis centres (CentroidLandmark) are taken from the bone segmentation's surface
-        landmark_logic.set_bone_surface_provider(self._get_bone_polydata)
 
         self.smoothing = qt.QDoubleSpinBox()
         self.smoothing.setRange(0, 1)
@@ -615,8 +613,10 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         osteotomy_form_layout.addRow("Sagittal (TPA)", sagittal_field)
 
         self.target_wedge_value.valueChanged.connect(self._on_target_values_changed)
-        from DoggyboneLib import measurement_logic as _ml
-        _ml.set_aldfa_target_provider(self._femur_wedge_target)
+        self._register_lib_providers()
+        # only USER edits reach this (the code sets the field with blocked signals); connected first,
+        # so the refresh below no longer re-seeds the target from the current value
+        self.target_rotation_value.valueChanged.connect(self._on_rotation_target_edited)
         self.target_rotation_value.valueChanged.connect(self._on_target_values_changed)
         self.femur_sagittal_value.valueChanged.connect(self._on_target_values_changed)
         self._on_osteotomy_bone_changed(self.osteotomy_bone.currentIndex)
@@ -1477,6 +1477,8 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
                 current._resume_current_landmark()
 
     def _schedule_values_refresh(self, caller=None, event=None):
+        if getattr(self, "_predicting_landmarks", False):
+            return              # temporary landmark moves of the correction solver (positions are restored)
         if getattr(self, "_values_refresh_pending", False):
             return
         self._values_refresh_pending = True
@@ -1494,6 +1496,9 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         qt.QTimer.singleShot(300, run)
 
     def _on_scene_reset(self, caller=None, event=None):
+        # the segmented CT is gone with the old scene - snapping must not use the stale node
+        self._bone_volume_node = None
+        landmark_logic.set_bone_volume(None)
         if getattr(self, "_scene_reset_pending", False):
             return
         self._scene_reset_pending = True
@@ -1560,24 +1565,38 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             slicer.app.layoutManager().layoutChanged.disconnect(self._on_layout_changed)
         except Exception:
             pass
-        self._remove_centering_observers()
-        self._remove_condyle_circle_observers()
-        if hasattr(self, "_compare_watch_scene"):
-            self._compare_watch_scene(False)            # else the old widget keeps re-assigning 3D views
-        for node, tag in getattr(self, "_landmark_observers", []):
+
+        # every teardown step on its own: one failing step must not leave the others' observers behind
+        def step(name, function):
             try:
-                node.RemoveObserver(tag)
+                function()
             except Exception:
-                pass
-        self._landmark_observers = []
-        for tag in getattr(self, "_scene_observers", []):
-            slicer.mrmlScene.RemoveObserver(tag)
-        self._scene_observers = []
-        self._remove_fine_shift_observers()
-        self._remove_pin_picker()
-        self._release_widget_observers()
-        self._stop_lasso()
-        self._stop_guide_edit()
+                logging.exception(f"Doggybone: clean-up step '{name}' failed (continuing)")
+
+        def remove_landmark_observers():
+            for node, tag in getattr(self, "_landmark_observers", []):
+                try:
+                    node.RemoveObserver(tag)
+                except Exception:
+                    pass
+            self._landmark_observers = []
+
+        def remove_scene_observers():
+            for tag in getattr(self, "_scene_observers", []):
+                slicer.mrmlScene.RemoveObserver(tag)
+            self._scene_observers = []
+
+        step("centering observers", self._remove_centering_observers)
+        step("condyle circle observers", self._remove_condyle_circle_observers)
+        if hasattr(self, "_compare_watch_scene"):
+            step("compare view", lambda: self._compare_watch_scene(False))   # else the old widget keeps re-assigning 3D views
+        step("landmark observers", remove_landmark_observers)
+        step("scene observers", remove_scene_observers)
+        step("fine shift observers", self._remove_fine_shift_observers)
+        step("pin picker", self._remove_pin_picker)
+        step("widget observers", self._release_widget_observers)
+        step("lasso", self._stop_lasso)
+        step("guide edit", self._stop_guide_edit)
         # module reload: the old landmark objects must stop listening to the (still existing)
         # landmark node - otherwise e.g. an old sphere landmark draws its sphere on a new point
         for panel in (getattr(self, "left_panel", None), getattr(self, "right_panel", None)):
@@ -1597,7 +1616,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         for name in ("Doggybone sphere preview", "Doggybone sphere radius"):
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is not None:
-                slicer.mrmlScene.RemoveNode(node)
+                step(name, lambda node=node: slicer.mrmlScene.RemoveNode(node))
 
     def _reload_and_enter(self):
         """Rebuild the module for the new scene and ENTER the new widget: Slicer does not call enter()
@@ -1607,6 +1626,19 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         widget = module.widgetRepresentation().self() if module is not None else None
         if widget is not None and widget is not self and slicer.util.selectedModule() == self.moduleName:
             qt.QTimer.singleShot(0, widget.enter)
+
+    def _register_lib_providers(self):
+        """The lib modules (landmark_logic, measurement_logic) are shared with the fore-limb module, which
+        subclasses this widget: their module-level providers must point at the widget that is SHOWN, not
+        at whichever widget ran setup() last - so they are (re-)registered in setup() and enter()."""
+        from DoggyboneLib import measurement_logic as _ml
+        landmark_logic.set_bone_threshold(self.snap_threshold.value)
+        # diaphysis centres (CentroidLandmark) are taken from the bone segmentation's surface
+        landmark_logic.set_bone_surface_provider(self._get_bone_polydata)
+        # the CT this widget segmented (the other limb module may have segmented the same scene: keep that)
+        if getattr(self, "_bone_volume_node", None) is not None:
+            landmark_logic.set_bone_volume(self._bone_volume_node)
+        _ml.set_aldfa_target_provider(self._femur_wedge_target)
 
     def enter(self):
         # Called by Slicer whenever the user switches to this module's tab. Also call the base
@@ -1619,6 +1651,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             self._reload_on_enter = False
             qt.QTimer.singleShot(0, self._reload_and_enter)
             return
+        self._register_lib_providers()
         self._current_panel().activate()
         self._schedule_condyle_circles()
         self._schedule_waist()
@@ -1671,15 +1704,8 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             self._remove_pin_gizmo()
         except Exception:
             pass
-        # pin-row handles
-        tag = getattr(self, "_pin_row_handle_tag", None)
-        node = slicer.mrmlScene.GetNodeByID(getattr(self, "_pin_row_handle_node_id", "") or "")
-        if tag is not None and node is not None:
-            try:
-                node.RemoveObserver(tag)
-            except Exception:
-                pass
-        self._pin_row_handle_tag = None
+        # pin-row handles (one node per bone)
+        self._release_pin_row_handle_observers()
         # saw-box gizmos
         for node_id, tag in list(getattr(self, "_saw_box_gizmo_tags", {}).values()):
             node = slicer.mrmlScene.GetNodeByID(node_id)
@@ -1704,7 +1730,10 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         if getattr(self, "_target_bone", None) == "Femur":
             return float(self.target_wedge_value.value)
         stored = getattr(self, "_targets_per_bone", {}).get("Femur")
-        return float(stored[0]) if stored else float(self.WEDGE_TARGET_DEFAULT["Femur"])
+        if stored:
+            return float(stored[0])
+        default = self.WEDGE_TARGET_DEFAULT.get("Femur")          # fore limb: no femur
+        return float(default) if default is not None else measurement_logic.ALDFA_REFERENCE_DEG
 
     def _rotation_target_default(self, bone):
         """The bone's default torsion target; None in the bone config = no reference value known:
@@ -1713,15 +1742,46 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         default = self.ROTATION_TARGET_DEFAULT[bone]
         if default is not None:
             return default
+        current = self._current_rotation_value(bone)
+        return current if current is not None else 0.0
+
+    def _current_rotation_value(self, bone):
+        """The bone's current signed torsion on the planned (osteotomy) side; None while not measured."""
         try:
-            measurement = self._get_measurement_by_name(self._current_panel(), self.ROTATION_MEASUREMENT_NAME[bone])
+            side_box = getattr(self, "osteotomy_side", None)
+            if side_box is not None:
+                panel = self.left_panel if side_box.currentText.lower() == "left" else self.right_panel
+            else:
+                panel = self._current_panel()
+            measurement = self._get_measurement_by_name(panel, self.ROTATION_MEASUREMENT_NAME[bone])
             if measurement is not None:
                 ready, value, description = measurement()
                 if ready:
                     return float(self._signed_rotation_value(bone, value, description))
         except Exception:
             logging.exception("Doggybone: torsion target default failed (continuing)")
-        return 0.0
+        return None
+
+    def _on_rotation_target_edited(self, value=None):
+        if getattr(self, "_target_bone", None) is not None:
+            edited = getattr(self, "_rotation_target_edited", set())
+            edited.add(self._target_bone)
+            self._rotation_target_edited = edited
+
+    def _seed_rotation_target(self, bone):
+        """No reference torsion in the bone config (None): until the vet enters a target, the target
+        follows the CURRENT measured value (no torsion correction) - also once the landmarks are placed
+        after the bone was selected (the default was then evaluated without a measurement)."""
+        if self.ROTATION_TARGET_DEFAULT.get(bone) is not None:
+            return
+        if bone in getattr(self, "_rotation_target_edited", set()):
+            return
+        current = self._current_rotation_value(bone)
+        if current is None or abs(float(self.target_rotation_value.value) - current) < 1e-6:
+            return
+        was_blocked = self.target_rotation_value.blockSignals(True)
+        self.target_rotation_value.setValue(current)
+        self.target_rotation_value.blockSignals(was_blocked)
 
     def _current_panel(self):
         return self.side_stack.currentWidget()
@@ -1847,6 +1907,8 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
             names = {landmark.name for landmark in panel.landmarks}
             items = []
+            if node is None:
+                return items
             for i in range(node.GetNumberOfControlPoints()):
                 name = node.GetNthControlPointLabel(i)
                 if name not in names or node.GetNthControlPointPositionStatus(i) != node.PositionDefined:
@@ -1887,6 +1949,8 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
 
         def place(panel, items):
             node = slicer.mrmlScene.GetNodeByID(panel.markup_node_id)
+            if node is None:
+                return
             for name, position, radius in items:
                 index = node.AddControlPointWorld(vtk.vtkVector3d(*position))
                 node.SetNthControlPointLabel(index, name)
@@ -1894,11 +1958,31 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
                     node.SetAttribute(f"Doggybone.radius.{name}", radius)
             self._relink_existing_landmarks(panel)
 
-        source.clear_all_landmarks()
-        target.clear_all_landmarks()
-        place(source, new_source)
-        place(target, new_target)
-        self.side_selector.setCurrentText(other)       # show the transferred landmarks
+        def set_enabled(panel, enabled):
+            widget = panel.measurement_stack.currentWidget()
+            if widget is None:
+                return
+            if enabled:
+                widget.enable()
+            else:
+                widget.disable()
+
+        try:
+            source.clear_all_landmarks()
+            target.clear_all_landmarks()
+            # clear_all_landmarks re-enables the panels' measurements: no place mode while the points
+            # are added, or an unplaced landmark's observers claim / relabel them
+            set_enabled(source, False)
+            set_enabled(target, False)
+            place(source, new_source)
+            place(target, new_target)
+        finally:
+            self.side_selector.setCurrentText(other)       # show the transferred landmarks
+            # only the shown panel is active (the side change normally does this already)
+            shown = self._current_panel()
+            widget = shown.measurement_stack.currentWidget()
+            if widget is not None and not getattr(widget, "enabled", False):
+                shown.activate()
         self._schedule_values_refresh()
         slicer.util.showStatusMessage(
             f"{len(moving)} landmark(s) ({', '.join(sorted(bones))}) moved {current} -> {other}"
@@ -2037,6 +2121,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         panel = self.left_panel if side == "left" else self.right_panel
+        self._seed_rotation_target(bone)                # no reference torsion: target = current value
         self._update_sagittal_box(bone)                 # target / manual can change with a landmark
         if self._bone_config(bone).target_table and hasattr(self, "_refresh_tibia_current"):
             self._refresh_tibia_current()
@@ -2418,8 +2503,9 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
     def onApplySegmentation(self):
         self.segmentation_status.setText("working...")
 
-        # Get volume data
-        volume_nodes = slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")
+        # Get volume data (label maps are scalar volumes too - not a CT)
+        volume_nodes = [n for n in slicer.util.getNodesByClass("vtkMRMLScalarVolumeNode")
+                        if not n.IsA("vtkMRMLLabelMapVolumeNode")]
         if len(volume_nodes) == 0:
             self.segmentation_status.setText("No data found")
             return
@@ -2427,6 +2513,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             self.segmentation_status.setText("Multiple volumes found. Only one volume is supported currently.")
             return
         volume_node = volume_nodes[0]
+        self._bone_volume_node = volume_node
         landmark_logic.set_bone_volume(volume_node)
 
         # Create segmentation
@@ -2444,24 +2531,25 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         segment_editor_widget = slicer.qMRMLSegmentEditorWidget()
         segment_editor_widget.setMRMLScene(slicer.mrmlScene)
         segment_editor_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode")
-        segment_editor_widget.setMRMLSegmentEditorNode(segment_editor_node)
-        segment_editor_widget.setSegmentationNode(segmentation_node)
-        segment_editor_widget.setCurrentSegmentID(segment_id)
-        if hasattr(segment_editor_widget, "setSourceVolumeNode"):
-            segment_editor_widget.setSourceVolumeNode(volume_node)
-        else:
-            segment_editor_widget.setMasterVolumeNode(volume_node)
+        try:
+            segment_editor_widget.setMRMLSegmentEditorNode(segment_editor_node)
+            segment_editor_widget.setSegmentationNode(segmentation_node)
+            segment_editor_widget.setCurrentSegmentID(segment_id)
+            if hasattr(segment_editor_widget, "setSourceVolumeNode"):
+                segment_editor_widget.setSourceVolumeNode(volume_node)
+            else:
+                segment_editor_widget.setMasterVolumeNode(volume_node)
 
-        # Thresholding
-        segment_editor_widget.setActiveEffectByName("Threshold")
-        effect = segment_editor_widget.activeEffect()
-        effect.setParameter("MinimumThreshold", f"{self.threshold_lower.value}")
-        effect.setParameter("MaximumThreshold", f"{self.threshold_upper.value}")
-        effect.self().onApply()
-
-        # Clean up
-        segment_editor_widget = None
-        slicer.mrmlScene.RemoveNode(segment_editor_node)
+            # Thresholding
+            segment_editor_widget.setActiveEffectByName("Threshold")
+            effect = segment_editor_widget.activeEffect()
+            effect.setParameter("MinimumThreshold", f"{self.threshold_lower.value}")
+            effect.setParameter("MaximumThreshold", f"{self.threshold_upper.value}")
+            effect.self().onApply()
+        finally:
+            # Clean up (also when thresholding failed: no orphaned editor node in the scene)
+            segment_editor_widget = None
+            slicer.mrmlScene.RemoveNode(segment_editor_node)
 
         # Smoothing
         segmentation_node.GetSegmentation().SetConversionParameter("Smoothing factor",f"{self.smoothing.value}")
@@ -2655,34 +2743,41 @@ class MeasurementsPanel(qt.QWidget):
         if file_name == "":
             return
         landmark_dict = {lm.name: lm for lm in self.landmarks}
-        with open(file_name, 'r', newline='') as csvfile:
-            reader = csv.DictReader(csvfile, delimiter=_csv_delimiter_for_file(csvfile),
-                                    quoting=csv.QUOTE_MINIMAL)
-            for row in reader:
-                try:
-                    name = landmarks.current_landmark_name(row['landmark name'])
-                    x = _csv_float(row['x'])
-                    y = _csv_float(row['y'])
-                    z = _csv_float(row['z'])
-                except Exception as e:
-                    errorDisplay("Invalid file. Must contain columns: 'landmark name', 'x', 'y', 'z'")
-                    return
-                if name not in landmark_dict.keys():
-                    errorDisplay(f"Unknown landmark {name}")
-                    return
-                landmark = landmark_dict[name]
-                landmark.define(x, y, z)
-                # Older exports won't have a "radius" column at all, and it's only meaningful
-                # for sphere landmarks - restore it only when both are present.
-                radius_text = row.get('radius') if hasattr(row, 'get') else None
-                if radius_text and hasattr(landmark, "set_radius"):
+        # the shown measurement must not be in place mode while importing: its unplaced landmark's
+        # PointAdded / PointPositionDefined observers would claim / relabel the imported points
+        current_widget = self.measurement_stack.currentWidget()
+        if current_widget is not None:
+            current_widget.disable()
+        try:
+            with open(file_name, 'r', newline='') as csvfile:
+                reader = csv.DictReader(csvfile, delimiter=_csv_delimiter_for_file(csvfile),
+                                        quoting=csv.QUOTE_MINIMAL)
+                for row in reader:
                     try:
-                        landmark.set_radius(_csv_float(radius_text))
-                    except ValueError:
-                        pass
-        # force update
-        self.measurement_stack.currentWidget().disable() 
-        self.measurement_stack.currentWidget().enable()
+                        name = landmarks.current_landmark_name(row['landmark name'])
+                        x = _csv_float(row['x'])
+                        y = _csv_float(row['y'])
+                        z = _csv_float(row['z'])
+                    except Exception as e:
+                        errorDisplay("Invalid file. Must contain columns: 'landmark name', 'x', 'y', 'z'")
+                        return
+                    if name not in landmark_dict.keys():
+                        errorDisplay(f"Unknown landmark {name}")
+                        return
+                    landmark = landmark_dict[name]
+                    landmark.define(x, y, z)
+                    # Older exports won't have a "radius" column at all, and it's only meaningful
+                    # for sphere landmarks - restore it only when both are present.
+                    radius_text = row.get('radius') if hasattr(row, 'get') else None
+                    if radius_text and hasattr(landmark, "set_radius"):
+                        try:
+                            landmark.set_radius(_csv_float(radius_text))
+                        except ValueError:
+                            pass
+        finally:
+            # re-enable = force update
+            if current_widget is not None:
+                current_widget.enable()
 
     def _export_measurements(self):
         file_name = qt.QFileDialog.getSaveFileName(self, 'Export measurements', '',"CSV File (*.csv)")
@@ -2767,17 +2862,26 @@ class MeasurementsPanel(qt.QWidget):
             return
         node.GetDisplayNode().SetVisibility(True)
 
+    @staticmethod
+    def _model_node(cached, name):
+        """The overlay model node: the cached one while it is still in the scene (the user may have
+        deleted it), else the one of that name, else a new one (without display node - the caller
+        creates it)."""
+        if cached is not None and slicer.mrmlScene.IsNodePresent(cached):
+            return cached
+        node = slicer.mrmlScene.GetFirstNodeByName(name)
+        if node is None:
+            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", name)
+        return node
+
     def show_sphere(self, label, center, radius):
         marker = str(label).startswith("CORA")          # CORA marker: a point, not a fitted sphere
         if not self.spheres_visible and not marker:
             self.hide_sphere(label)
             return
 
-        node = self.sphere_nodes.get(label)
-        if node is None:
-            node = slicer.mrmlScene.GetFirstNodeByName(self._sphere_node_name(label))
-        if node is None:
-            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", self._sphere_node_name(label))
+        node = self._model_node(self.sphere_nodes.get(label), self._sphere_node_name(label))
+        if node.GetDisplayNode() is None:
             node.CreateDefaultDisplayNodes()
             display_node = node.GetDisplayNode()
             color = self.SPHERE_COLORS.get(label, (0.8, 0.8, 0.2))
@@ -2827,11 +2931,8 @@ class MeasurementsPanel(qt.QWidget):
             self.hide_axis(label)
             return
 
-        node = self.axis_nodes.get(label)
-        if node is None:
-            node = slicer.mrmlScene.GetFirstNodeByName(self._axis_node_name(label))
-        if node is None:
-            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", self._axis_node_name(label))
+        node = self._model_node(self.axis_nodes.get(label), self._axis_node_name(label))
+        if node.GetDisplayNode() is None:
             node.CreateDefaultDisplayNodes()
             display_node = node.GetDisplayNode()
             display_node.SetVisibility2D(False)
@@ -2856,11 +2957,8 @@ class MeasurementsPanel(qt.QWidget):
         if not self.axes_visible:
             self.hide_axis(label)
             return
-        node = self.axis_nodes.get(label)
-        if node is None:
-            node = slicer.mrmlScene.GetFirstNodeByName(self._axis_node_name(label))
-        if node is None:
-            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", self._axis_node_name(label))
+        node = self._model_node(self.axis_nodes.get(label), self._axis_node_name(label))
+        if node.GetDisplayNode() is None:
             node.CreateDefaultDisplayNodes()
             node.GetDisplayNode().SetVisibility2D(False)
             node.GetDisplayNode().BackfaceCullingOff()
@@ -3116,6 +3214,7 @@ class MeasurementWidget(qt.QWidget):
             return
         current = self.landmark_stack.currentWidget()
         if current is not None:
+            current.landmark.stop_interaction()       # no second set of observers (row change + click)
             current.landmark.start_interaction()
 
     def disable(self):

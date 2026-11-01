@@ -249,9 +249,10 @@ class CorrectionMixin:
                                           else (distal_origin, distal_normal))
             desired_rotation, _desired_info = self._desired_correction_rotation(
                 side, bone, moving_is_distal, fixed_origin, fixed_normal)
-            if desired_rotation is None and tibia_rows:
-                # tibia: the torsion comes only from the solver - without it the preview would silently
-                # drop the torsion
+            if desired_rotation is None and _desired_info:
+                # no verified correction (tibia: the torsion comes only from the solver; other bones: the
+                # directions could not be verified) - without it the preview would silently fall back to
+                # the raw values
                 self.correction_status.setStyleSheet(STATUS_WARN_STYLE)
                 self.correction_status.setText(str(_desired_info))
                 return
@@ -361,9 +362,11 @@ class CorrectionMixin:
                               + ("distal" if moving_is_distal else "proximal")
                               + " plane is a virtual target only, no bone removed)")
 
+        measured_text = (f"{wedge_value_description}, target" if wedge_value_description == "not measured"
+                         else f"{wedge_value:.1f}\N{DEGREE SIGN} vs. target")
         wedge_description = (
             f"{wedge_magnitude:.1f}\N{DEGREE SIGN} ('{wedge_measurement_name}': "
-            f"{wedge_value:.1f}\N{DEGREE SIGN} vs. target {self.target_wedge_value.value:.1f}"
+            f"{measured_text} {self.target_wedge_value.value:.1f}"
             f"\N{DEGREE SIGN}; direction from the two planes, reference: "
             f"{self.reference_plane_selector.currentText}){technique_note}")
 
@@ -449,7 +452,7 @@ class CorrectionMixin:
         advice = self._cwo_wedge_advice(side, bone)
         if advice:
             self.correction_status.setText(self.correction_status.text + "\n" + advice)
-        self._update_corrected_landmarks()
+        # (the corrected landmarks were already rebuilt by _apply_fine_shift(update_combined=True) above)
         self.onHideAnnotationsToggled(True)            # cutting planes hidden while the preview is shown
         self._apply_landmark_label_visibility()         # landmark names: 'Show all landmark descriptions'
 
@@ -539,6 +542,12 @@ class CorrectionMixin:
         axis_ids = {index_by_name[name] for name in split_names} if keep_split_axis else set()
         axis_moves = axis_on_distal == moving_is_distal
         result = {"wedge": None, "torsion": None, "axis_split": bool(split_names)}
+        # the temporary moves must not reach the observers (landmark refresh -> _on_target_values_changed):
+        # events are held back by StartModify, and the one flushed by EndModify (positions restored)
+        # comes while _predicting_landmarks is set. Positions are read directly from the node meanwhile.
+        was_modifying = fiducials.StartModify()
+        was_predicting = getattr(self, "_predicting_landmarks", False)
+        self._predicting_landmarks = True
         try:
             for i, point in enumerate(originals):
                 on_distal_side = float(np.dot(point - o, n)) * distal_sign > 0.0
@@ -567,6 +576,8 @@ class CorrectionMixin:
         finally:
             for i, point in enumerate(originals):
                 fiducials.SetNthControlPointPositionWorld(i, *point)
+            fiducials.EndModify(was_modifying)
+            self._predicting_landmarks = was_predicting
         return result
 
     def _split_axis_warning(self, side, bone, H, plane_origin, plane_normal, moving_is_distal, predicted):
@@ -629,13 +640,17 @@ class CorrectionMixin:
             if np.max(np.abs(r)) < 0.05:
                 break
             J = np.zeros((2, 2))
+            probe_failed = False
             for j in range(2):
                 dx = np.zeros(2)
                 dx[j] = h
                 rj, _ = residual(x + dx)
                 if rj is None:
-                    return x[0], x[1], predicted
+                    probe_failed = True
+                    break
                 J[:, j] = (rj - r) / h
+            if probe_failed:                         # stop here - the deviation guard below still runs
+                break
             if abs(J[1, 1]) < 1e-9 and abs(J[1, 0]) < 1e-9:      # no torsion measurement: 1D
                 J[1, 1] = 1.0
             try:
@@ -693,13 +708,17 @@ class CorrectionMixin:
             if np.max(np.abs(r)) < 0.05:
                 break
             J = np.zeros((3, 3))
+            probe_failed = False
             for j in range(3):
                 dx = np.zeros(3)
                 dx[j] = h
                 rj = residual(x + dx)
                 if rj is None:
-                    return tuple(x)
+                    probe_failed = True
+                    break
                 J[:, j] = (rj - r) / h
+            if probe_failed:                         # stop here - the residual warning below still runs
+                break
             try:
                 step = np.linalg.lstsq(J, -r, rcond=None)[0]
             except np.linalg.LinAlgError:
@@ -864,8 +883,10 @@ class CorrectionMixin:
                 error = abs(predicted["wedge"] - float(self.target_wedge_value.value))
                 if best is None or error < best[0]:
                     best = (error, candidate)
-            if best is not None:
-                R_frontal = best[1]
+            if best is None:
+                return None, ("Frontal correction direction could not be verified on the landmarks "
+                              "(no prediction for either sign).")
+            R_frontal = best[1]
         R = R_frontal
         if torsion > 0.01:
             best = None
@@ -877,8 +898,10 @@ class CorrectionMixin:
                 error = abs(predicted["torsion"] - float(self.target_rotation_value.value))
                 if best is None or error < best[0]:
                     best = (error, candidate)
-            if best is not None:
-                R = best[1]
+            if best is None:
+                return None, ("Torsion correction direction could not be verified on the landmarks "
+                              "(no prediction for either sign).")
+            R = best[1]
         # signs as chosen above, then solve the magnitudes on the landmarks
         frontal_signed = frontal
         if frontal > 0.01:
@@ -1118,8 +1141,7 @@ class CorrectionMixin:
 
         # 1) preview, fine-shift transform and gizmo
         self.onClearPreview()
-        self._remove_fine_shift_observers()
-        self._fine_shift_state = None
+        self._clear_fine_shift_state(side, bone)
         for name in self._fine_shift_node_names(side, bone):
             node = slicer.mrmlScene.GetFirstNodeByName(name)
             if node is not None:
@@ -1304,6 +1326,15 @@ class CorrectionMixin:
             except Exception:
                 logging.exception("Doggybone: non-critical step failed (continuing)")
         self._fine_shift_observers = []
+
+    def _clear_fine_shift_state(self, side, bone):
+        """Drop the active fine-shift state (and its gizmo observers) only if it belongs to (side, bone) -
+        another bone's preview keeps its gizmo working."""
+        state = getattr(self, "_fine_shift_state", None)
+        if state and (state["side"], state["bone"]) != (side, bone):
+            return
+        self._remove_fine_shift_observers()
+        self._fine_shift_state = None
 
     def _ensure_fine_shift_nodes(self, side, bone, correction_transform_node):
         shift_name, gizmo_name = self._fine_shift_node_names(side, bone)
@@ -2409,8 +2440,7 @@ class CorrectionMixin:
         side = self.osteotomy_side.currentText.lower()
         bone = self.osteotomy_bone.currentText
         removed_any = False
-        self._remove_fine_shift_observers()
-        self._fine_shift_state = None
+        self._clear_fine_shift_state(side, bone)
         self.__dict__.get("_fine_shift_states", {}).pop((side, bone), None)
         self._remove_corrected_landmarks(side, bone)
         self._set_cutting_plane_handles(side, bone, True)

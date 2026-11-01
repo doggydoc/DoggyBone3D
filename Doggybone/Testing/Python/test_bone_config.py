@@ -130,6 +130,17 @@ class BoneConfigTest(unittest.TestCase):
         for name in ("", None, "Metatarsal centre", "Talus centre", "medial talus", "lateral cochlea"):
             self.assertEqual(BONES.for_landmark(name).name, old_landmark_bone(name))
 
+    def test_several_landmark_keywords(self):
+        a = BoneConfig("A", "", "a", "A", ("p", "d"), ("m", "l"), ("p",), "w", "r", 0.0, 0.0,
+                       "Internal", "proximal", "alpha|extra")
+        b = BoneConfig("B", " b", "b", "B", ("p", "d"), ("m", "l"), ("p",), "w", "r", 0.0, 0.0,
+                       "Internal", "proximal", "beta")
+        bones = BoneSet([a, b])
+        self.assertEqual(bones.for_landmark("alpha shaft").name, "A")
+        self.assertEqual(bones.for_landmark("extra point").name, "A")      # second keyword
+        self.assertEqual(bones.for_landmark("beta shaft").name, "B")
+        self.assertEqual(bones.for_landmark("something else").name, "B")   # no keyword: the last bone
+
     def test_view_align_choice(self):
         for choice in ("Aligned to femur", "Aligned to tibia"):
             self.assertEqual(BONES.for_text(choice).name, "Femur" if "femur" in choice else "Tibia")

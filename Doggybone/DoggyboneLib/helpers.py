@@ -78,6 +78,8 @@ def fit_sphere_rms(points):
 def project_to_plane(vector, plane_normal):
     '''Component of `vector` in the plane with the given normal (normal need not be unit length).'''
     normal = np.asarray(plane_normal, dtype=float)
+    if np.linalg.norm(normal) < 1e-9:
+        raise ValueError("degenerate plane normal (landmarks coincide or are collinear)")
     normal = normal / np.linalg.norm(normal)
     vector = np.asarray(vector, dtype=float)
     return vector - np.dot(vector, normal) * normal
