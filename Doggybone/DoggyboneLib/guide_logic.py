@@ -1202,11 +1202,14 @@ def reduction_bar(pins, axis, standoff=15.0, bar_diameter=6.0, boss_height=10.0,
 
 
 def reduction_web(pins, axis, bone_obb, height=15.0, web_width=6.0, wall=2.0, gap=0.15, voxel=0.15, ring=False,
-                  filled=False, contact_only=False, clearance=6.0, web_thickness=5.0):
+                  filled=False, contact_only=False, clearance=6.0, web_thickness=5.0, limit_to_contact=True):
     """Reduction guide seated on the corrected bone: a boss (r_in + wall) around every reduced pin
     and WEBS of width web_width joining the bosses along the minimum spanning tree - both over the
     FULL height: from the bone surface (+gap, patient-specific underside) up to a flat top `height`
     mm above the highest pin entry. Through-bores r_in along each pin's own axis.
+    limit_to_contact: the guide reaches down only to the height of its contact points (the lowest pin entry);
+    where the bone falls away below that (flanks, beside the bone) the guide ends at that level instead of
+    running down along the bone.
     Signed distance field -> iso-surface (always closed). Returns (polydata, info), or (None, {"error": ...})
     if a pin is tilted more than 60 deg against the axis (the bar would run off to infinity)."""
     from vtk.util.numpy_support import numpy_to_vtk as _n2v
@@ -1316,6 +1319,10 @@ def reduction_web(pins, axis, bone_obb, height=15.0, web_width=6.0, wall=2.0, ga
     # bone of its neighbours (sampling between columns can otherwise dip a few 1/10 mm into the bone)
     from scipy.ndimage import maximum_filter
     seat = maximum_filter(seat, size=3, mode="nearest")
+    # not lower than the contact points: below the lowest pin entry the guide does not follow the bone down
+    floor = float(local[:, 2].min()) + float(gap)
+    if limit_to_contact:
+        seat = np.maximum(seat, floor)
     # contact only at the pins: the guide stands on the pin columns only (small cylinders seated on the
     # bone); the columns are joined by flat BEAMS, each beam just `clearance` mm above the highest bone
     # below IT (not the highest bone anywhere) - low guide, free space for the plate and screws
@@ -1334,6 +1341,8 @@ def reduction_web(pins, axis, bone_obb, height=15.0, web_width=6.0, wall=2.0, ga
             indices = distance_transform_edt(~finite, return_distances=False, return_indices=True)
             bone_hi = bone_hi[tuple(indices)]
         web_bottom_field = bone_hi - float(gap) + float(clearance)
+        if limit_to_contact:
+            web_bottom_field = np.maximum(web_bottom_field, floor)     # webs not below the contact points
         # ONE block with a flat top: its underside (the webs) follows the bone `clearance` mm above it,
         # the top is level - `web_thickness` above the highest web underside; the columns reach the bone
         on_webs = footprint_2d(top_nodes, bosses=False) <= voxel
@@ -1403,6 +1412,7 @@ def reduction_web(pins, axis, bone_obb, height=15.0, web_width=6.0, wall=2.0, ga
     heights = seat[need] - float(gap)
     info = dict(frame=frame, edges=edges, top=z_top, r_in=r_in, r_boss=r_boss, max_axis_deviation_deg=deviation,
                 ring=ring_built, filled=hull is not None, contact_only=web_levels is not None,
+                limited_to_contact=bool(limit_to_contact),
                 web_clearance=float(clearance) if web_levels is not None else None,
                 protrusion=[float((pin_tops[i] if pin_tops else z_top) - h) for i, h in enumerate(local[:, 2])],
                 guide_height_range=(float(z_top - np.nanmax(heights)), float(z_top - np.nanmin(heights))))
