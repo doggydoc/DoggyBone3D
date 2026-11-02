@@ -76,6 +76,8 @@ from DoggyboneLib import bones
 importlib.reload(bones)
 from DoggyboneLib import bone_export
 importlib.reload(bone_export)
+from DoggyboneLib import bone_split
+importlib.reload(bone_split)
 
 from DoggyboneLib.measurements import MEASUREMENTS
 from DoggyboneLib.landmarks import LANDMARKS
@@ -371,7 +373,10 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         self.export_bone_button = qt.QPushButton("Export bone STL...")
         self.export_bone_button.setToolTip(
             "Save the segmented bone (as shown, after the clean-up) as a binary STL in mm - e.g. to print "
-            "a bone model for test-fitting the guides. Coordinates as in the CT (not moved).")
+            "a bone model for test-fitting the guides. Coordinates as in the CT (not moved). With 'Femur' or "
+            "'Tibia' chosen above only THAT bone is saved - separated from the other bones in the knee "
+            "with its landmarks as seeds (needs the femur head / shaft resp. tibia shaft landmarks); on "
+            "'Overview' the whole segmentation.")
         self.export_bone_button.clicked.connect(lambda: self.onExportBoneStl(self.segmentation_status))
         segmentation_form_layout.addRow("Export", self.export_bone_button)
         segmentation_form_layout.addRow("Status", self.segmentation_status)      # last row of the section
@@ -1361,20 +1366,182 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         fields = [field for field in fields if field]
         return "-".join(fields or ["Doggybone"]) + ".stl"
 
+    # landmarks inside each bone that seed its separation (shaft / head - not the joint surfaces)
+    SPLIT_SEED_LANDMARKS = {
+        "Femur": ("femur head", "femur neck", "Femur midpoint 33%", "Femur midpoint 50%"),
+        "Tibia": ("proximal tibia midpoint", "distal tibia midpoint"),
+    }
+
+    def _split_seed_names(self, bone):
+        names = self.SPLIT_SEED_LANDMARKS.get(bone.name)
+        if names is None:
+            names = tuple(bone.shaft_axis_landmarks) + tuple(
+                name for name in bone.proximal_fallback_landmarks if bone.landmark_keyword in name.lower())
+        return names
+
+    def _single_bone_polydata(self, bone_name, side):
+        """Closed surface of ONE bone of the segmentation (femur and tibia share one segment and touch in
+        the knee): marker watershed on the CT with the landmarks of every bone as seeds
+        (DoggyboneLib.bone_split). Returns (polydata or None, message). Cached per segmentation /
+        landmark state."""
+        from DoggyboneLib import bone_split
+        from vtk.util.numpy_support import vtk_to_numpy
+        segmentation_node = slicer.mrmlScene.GetFirstNodeByName(self.SEGMENTATION_NODE_NAME)
+        if segmentation_node is None or segmentation_node.GetSegmentation().GetNumberOfSegments() == 0:
+            return None, "No bone segmentation - segment the bone first."
+        segmentation = segmentation_node.GetSegmentation()
+        segment_id = segmentation.GetNthSegmentID(0)
+        segment = segmentation.GetSegment(segment_id)
+        points = self._landmark_points(side)
+        seeds_ras = {bone.name: [points[name] for name in self._split_seed_names(bone) if name in points]
+                     for bone in self.BONES}
+        if not seeds_ras.get(bone_name):
+            return None, (f"Place the {bone_name.lower()} landmarks ({side.lower()}) first - "
+                          f"'{', '.join(self._split_seed_names(self.BONES.get(bone_name)))}' mark the bone for the separation.")
+        key = (segmentation_node.GetID(), segmentation_node.GetMTime(), segment.GetMTime(), side,
+               tuple((name, tuple(round(float(x), 2) for p in pts for x in p)) for name, pts in sorted(seeds_ras.items())))
+        cache = getattr(self, "_bone_split_cache", None)
+        if cache is None or cache[0] != key:
+            labelmap = slicer.vtkOrientedImageData()
+            if not segmentation_node.GetBinaryLabelmapRepresentation(segment_id, labelmap):
+                return None, "Could not read the binary labelmap of the segmentation."
+            extent = labelmap.GetExtent()
+            shape = (extent[5] - extent[4] + 1, extent[3] - extent[2] + 1, extent[1] - extent[0] + 1)
+            mask = vtk_to_numpy(labelmap.GetPointData().GetScalars()).reshape(shape) > 0
+            matrix = vtk.vtkMatrix4x4()
+            labelmap.GetImageToWorldMatrix(matrix)
+            image_to_world = np.array([[matrix.GetElement(r, c) for c in range(4)] for r in range(4)])
+            world_to_image = np.linalg.inv(image_to_world)
+            spacing_kji = np.linalg.norm(image_to_world[:3, :3], axis=0)[::-1]
+            offset = np.array([extent[0], extent[2], extent[4]], float)
+            seeds = {name: [((world_to_image @ np.r_[p, 1.0])[:3] - offset)[::-1] for p in pts]
+                     for name, pts in seeds_ras.items()}
+            intensity = self._ct_on_labelmap_grid(labelmap)
+            if intensity is not None:
+                labels, info = bone_split.split_watershed(mask, intensity, spacing_kji, seeds)
+            else:
+                labels, info = bone_split.split(mask, spacing_kji, seeds)
+            surfaces = {}
+            for index, name in enumerate(info["bones"], start=1):
+                surfaces[name] = self._closed_surface_from_mask(labels == index, labelmap, segmentation)
+            cache = (key, surfaces, info)
+            self._bone_split_cache = cache
+        _key, surfaces, info = cache
+        polydata = surfaces.get(bone_name)
+        if polydata is None or polydata.GetNumberOfPoints() == 0:
+            return None, f"The {bone_name.lower()} could not be found in the segmentation."
+        missing = [name for name in info.get("missing", []) if name != bone_name]
+        note = (f"Landmarks of the {', '.join(n.lower() for n in missing)} are missing - everything connected to "
+                f"the {bone_name.lower()} is included." if missing else
+                f"{bone_name} separated from the other bones (pieces without landmarks, e.g. patella, left out).")
+        return polydata, note
+
+    def _ct_on_labelmap_grid(self, labelmap):
+        """CT values on the voxel grid of the labelmap (k, j, i), or None without a CT."""
+        ct = self._corrected_ct_source_volume() if hasattr(self, "_corrected_ct_source_volume") else None
+        if ct is None or ct.GetImageData() is None:
+            return None
+        extent = labelmap.GetExtent()
+        label_matrix = vtk.vtkMatrix4x4()
+        labelmap.GetImageToWorldMatrix(label_matrix)
+        ct_matrix = vtk.vtkMatrix4x4()
+        ct.GetIJKToRASMatrix(ct_matrix)
+        L = np.array([[label_matrix.GetElement(r, c) for c in range(4)] for r in range(4)])
+        C = np.array([[ct_matrix.GetElement(r, c) for c in range(4)] for r in range(4)])
+        if ct.GetParentTransformNode() is None and np.allclose(L, C, atol=1e-4):
+            dims = ct.GetImageData().GetDimensions()
+            if extent[0] >= 0 and extent[2] >= 0 and extent[4] >= 0 and extent[1] < dims[0] \
+                    and extent[3] < dims[1] and extent[5] < dims[2]:
+                return slicer.util.arrayFromVolume(ct)[extent[4]:extent[5] + 1, extent[2]:extent[3] + 1,
+                                                       extent[0]:extent[1] + 1]
+        # other grid: resample the CT onto the labelmap voxels
+        to_ct = vtk.vtkMatrix4x4()
+        world_to_ct = np.linalg.inv(C)
+        if ct.GetParentTransformNode() is not None:
+            parent = vtk.vtkMatrix4x4()
+            ct.GetParentTransformNode().GetMatrixTransformToWorld(parent)
+            world_to_ct = world_to_ct @ np.linalg.inv(
+                np.array([[parent.GetElement(r, c) for c in range(4)] for r in range(4)]))
+        M = world_to_ct @ L
+        for r in range(4):
+            for c in range(4):
+                to_ct.SetElement(r, c, M[r, c])
+        reslice = vtk.vtkImageReslice()
+        source = vtk.vtkImageData()
+        source.ShallowCopy(ct.GetImageData())
+        source.SetOrigin(0, 0, 0)
+        source.SetSpacing(1, 1, 1)
+        reslice.SetInputData(source)
+        reslice.SetResliceAxes(to_ct)
+        reslice.SetOutputExtent(extent)
+        reslice.SetOutputOrigin(0, 0, 0)
+        reslice.SetOutputSpacing(1, 1, 1)
+        reslice.SetInterpolationModeToLinear()
+        reslice.Update()
+        from vtk.util.numpy_support import vtk_to_numpy
+        shape = (extent[5] - extent[4] + 1, extent[3] - extent[2] + 1, extent[1] - extent[0] + 1)
+        return vtk_to_numpy(reslice.GetOutput().GetPointData().GetScalars()).reshape(shape)
+
+    def _closed_surface_from_mask(self, binary, labelmap, segmentation):
+        """Closed surface of a binary mask on the labelmap grid, with the smoothing of the segmentation."""
+        from vtk.util.numpy_support import vtk_to_numpy
+        image = slicer.vtkOrientedImageData()
+        image.SetExtent(labelmap.GetExtent())
+        image.SetSpacing(1, 1, 1)
+        image.SetOrigin(0, 0, 0)
+        matrix = vtk.vtkMatrix4x4()
+        labelmap.GetImageToWorldMatrix(matrix)
+        image.SetImageToWorldMatrix(matrix)
+        image.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 1)
+        vtk_to_numpy(image.GetPointData().GetScalars())[:] = binary.astype(np.uint8).ravel()
+        temp = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", "Doggybone temp bone split")
+        try:
+            for name in ("Smoothing factor", "Decimation factor", "Compute surface normals"):
+                value = segmentation.GetConversionParameter(name)
+                if value:
+                    temp.GetSegmentation().SetConversionParameter(name, value)
+            segment_id = temp.GetSegmentation().AddEmptySegment("bone")
+            slicer.vtkSlicerSegmentationsModuleLogic.SetBinaryLabelmapToSegment(image, temp, segment_id)
+            temp.CreateClosedSurfaceRepresentation()
+            surface = vtk.vtkPolyData()
+            surface.DeepCopy(temp.GetSegmentation().GetSegment(segment_id).GetRepresentation(
+                slicer.vtkSegmentationConverter.GetSegmentationClosedSurfaceRepresentationName()))
+        finally:
+            slicer.mrmlScene.RemoveNode(temp)
+        return surface
+
     def onExportBoneStl(self, status=None):
-        """Binary STL of the segmented bone (the closed surface of the Doggybone segmentation) in mm,
-        in the CT coordinates. status: the label for the result (segmentation or guide panel)."""
+        """Binary STL of the segmented bone in mm, in the CT coordinates. With 'Femur' / 'Tibia' chosen in
+        the level bar only THAT bone (separated from the other bones of the segmentation, see
+        _single_bone_polydata); on 'Overview' the whole segmentation. status: the label for the result
+        (segmentation or guide panel)."""
         if not hasattr(status, "setText"):
             status = self.segmentation_status
-        polydata = self._get_bone_polydata()
+        level = self.current_limb_level() if hasattr(self, "current_limb_level") else "Overview"
+        side = self.limb_side.currentText if getattr(self, "limb_side", None) is not None else "Right"
+        note = ""
+        parts = ()
+        if level in list(self.BONES.names):
+            status.setText(f"Separating the {level.lower()} from the other bones ...")
+            slicer.app.processEvents()
+            with slicer.util.tryWithErrorDisplay("Separating the bone failed.", waitCursor=True):
+                polydata, note = self._single_bone_polydata(level, side)
+            if polydata is None:
+                status.setText(note or "Separating the bone failed.")
+                return
+            parts = (level.lower()[:3], "dx" if side == "Right" else "sx")
+        else:
+            polydata = self._get_bone_polydata()
         if polydata is None or polydata.GetNumberOfPoints() == 0:
             status.setText("No bone segmentation to export - segment the bone first.")
             return
-        default_name = self._export_file_name()                   # name-number.stl
+        default_name = self._export_file_name(*parts)           # name-number(-fem-dx).stl
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
-        path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export segmented bone",
+        title = f"Export {level.lower()}" if parts else "Export segmented bone"
+        path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), title,
                                               os.path.join(start_dir, default_name), "STL (*.stl)")
         if not path:
+            status.setText(note)
             return
         if not path.lower().endswith(".stl"):
             path += ".stl"
@@ -1390,8 +1557,8 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         self._last_stl_dir = os.path.dirname(path)
         b = polydata.GetBounds()
         status.setText(
-            f"Bone exported: {path}\n({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x {b[5] - b[4]:.1f} mm, "
-            f"{polydata.GetNumberOfCells()} triangles)")
+            f"{level if parts else 'Bone'} exported: {path}\n({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x "
+            f"{b[5] - b[4]:.1f} mm, {polydata.GetNumberOfCells()} triangles)" + (f"\n{note}" if note else ""))
 
     def _ensure_landmark_observers(self):
         """Observe the landmark node of BOTH sides - also a node that was created later (new case,
