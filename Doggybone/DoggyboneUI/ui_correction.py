@@ -2406,6 +2406,67 @@ class CorrectionMixin:
             f"(sub-folder ScalarVolume_...). Fragment {info['pasted_voxels']} voxels moved, its original place "
             f"filled with {info['fill']:.0f}.{enlarged} Import the folder in the DICOM module to view it.")
 
+    def onExportCorrectedBoneStl(self):
+        """The osteotomised bone in its PLANNED position as ONE closed STL (DoggyboneLib.bone_export):
+        fixed fragment + moved fragment (incl. fine shift), the gap between the cut faces bridged, so a
+        printed model is one connected piece (e.g. for pre-contouring the plate). CT coordinates, mm."""
+        from DoggyboneLib import bone_export
+        import time
+        side = self.osteotomy_side.currentText.lower()
+        bone = self.osteotomy_bone.currentText
+        proximal_name, distal_name, transform_name, _combined, _wedge = self._preview_node_names(side, bone)
+        transform = slicer.mrmlScene.GetFirstNodeByName(transform_name)
+        nodes = {name: slicer.mrmlScene.GetFirstNodeByName(name) for name in (proximal_name, distal_name)}
+        moving_name = next((name for name, node in nodes.items() if node is not None and transform is not None
+                            and node.GetTransformNodeID() == transform.GetID()), None)
+        fixed_name = distal_name if moving_name == proximal_name else proximal_name
+        moving, fixed = nodes.get(moving_name), nodes.get(fixed_name)
+        if (moving is None or fixed is None or moving.GetPolyData() is None or fixed.GetPolyData() is None
+                or moving.GetPolyData().GetNumberOfPoints() == 0 or fixed.GetPolyData().GetNumberOfPoints() == 0):
+            self.correction_status.setText(
+                f"No correction preview for the {side} {bone.lower()} - press 'Show/update preview' first.")
+            return
+        proximal_plane = slicer.mrmlScene.GetFirstNodeByName(self._plane_node_name(side, bone))
+        distal_plane = slicer.mrmlScene.GetFirstNodeByName(self._distal_plane_node_name(side, bone)) or proximal_plane
+        if proximal_plane is None:
+            self.correction_status.setText("The cutting plane is missing - insert the planes first.")
+            return
+        cuts = {proximal_name: self._get_plane_origin_normal(proximal_plane),
+                distal_name: self._get_plane_origin_normal(distal_plane)}
+        matrix = vtk.vtkMatrix4x4()
+        transform.GetMatrixTransformToWorld(matrix)
+        H = np.array([[matrix.GetElement(r, c) for c in range(4)] for r in range(4)])
+        start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
+        default_name = self._export_file_name(bone.lower()[:3], "dx" if side == "right" else "sx", "corr")
+        path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export corrected bone (one piece)",
+                                              os.path.join(start_dir, default_name), "STL (*.stl)")
+        if not path:
+            return
+        if not path.lower().endswith(".stl"):
+            path += ".stl"
+        self.correction_status.setText("Building the corrected bone as one solid ...")
+        slicer.app.processEvents()
+        started = time.time()
+        with slicer.util.tryWithErrorDisplay("Export of the corrected bone failed.", waitCursor=True):
+            solid, info = bone_export.corrected_solid(fixed.GetPolyData(), moving.GetPolyData(), H,
+                                                      cuts[fixed_name], cuts[moving_name])
+            triangles = vtk.vtkTriangleFilter()
+            triangles.SetInputData(solid)
+            writer = vtk.vtkSTLWriter()
+            writer.SetInputConnection(triangles.GetOutputPort())
+            writer.SetFileName(path)
+            writer.SetFileTypeToBinary()
+            if not writer.Write():
+                self.correction_status.setText(f"Export failed: {path}")
+                return
+            self._last_stl_dir = os.path.dirname(path)
+            b = solid.GetBounds()
+            self.correction_status.setText(
+                f"Corrected bone exported as one piece: {path}\n"
+                f"({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x {b[5] - b[4]:.1f} mm, {solid.GetNumberOfCells()} triangles, "
+                f"{info.get('bridges', 0)} bridge(s) across the osteotomy, voxel {info.get('voxel', 0):.2f} mm, "
+                f"{time.time() - started:.0f} s)")
+
     def _ensure_segmentation_visible(self):
         """Bone segmentation visible in 2D and 3D, the segment itself switched on, and a usable 3D
         opacity: the 'Opacity' slider value, but at least 10 % (at 0 % it is set back to 100 %)."""

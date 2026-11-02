@@ -7,6 +7,7 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneLib/__init__.py
   DoggyboneLib/bone_config.py
   DoggyboneLib/bones.py
+  DoggyboneLib/bone_export.py
   DoggyboneLib/corrected_ct.py
   DoggyboneLib/guide_logic.py
   DoggyboneLib/helpers.py

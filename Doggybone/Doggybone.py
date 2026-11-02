@@ -74,6 +74,8 @@ from DoggyboneLib import bone_config
 importlib.reload(bone_config)
 from DoggyboneLib import bones
 importlib.reload(bones)
+from DoggyboneLib import bone_export
+importlib.reload(bone_export)
 
 from DoggyboneLib.measurements import MEASUREMENTS
 from DoggyboneLib.landmarks import LANDMARKS
@@ -728,7 +730,14 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             "fibula do not move. Series description 'PLANUNG SIMULIERT ... NICHT DIAGNOSTISCH'. "
             "Written to a folder - not sent to a PACS. Needs the preview.")
         self.export_corrected_ct_button.clicked.connect(self.onExportCorrectedCt)
-        preview_grid.addWidget(self.export_corrected_ct_button, 2, 0, 1, 2)
+        preview_grid.addWidget(self.export_corrected_ct_button, 2, 0)
+        self.export_corrected_bone_button = qt.QPushButton("Export corrected bone (STL)...")
+        self.export_corrected_bone_button.setToolTip(
+            "The osteotomised bone in its PLANNED position as ONE closed STL: fixed and moved fragment "
+            "(incl. fine shift), the gap between the cut faces bridged, so the printed model is one "
+            "connected piece (e.g. to pre-contour the plate). CT coordinates, mm. Needs the preview.")
+        self.export_corrected_bone_button.clicked.connect(self.onExportCorrectedBoneStl)
+        preview_grid.addWidget(self.export_corrected_bone_button, 2, 1)
         self.reset_all_button = qt.QPushButton("Reset planning and guides")
         self.reset_all_button.setToolTip(
             "Start the osteotomy over: removes the preview, both cutting planes AND everything of the saw "
