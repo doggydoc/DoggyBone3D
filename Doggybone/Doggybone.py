@@ -735,14 +735,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             "fibula do not move. Series description 'PLANUNG SIMULIERT ... NICHT DIAGNOSTISCH'. "
             "Written to a folder - not sent to a PACS. Needs the preview.")
         self.export_corrected_ct_button.clicked.connect(self.onExportCorrectedCt)
-        preview_grid.addWidget(self.export_corrected_ct_button, 2, 0)
-        self.export_corrected_bone_button = qt.QPushButton("Export corrected bone (STL)...")
-        self.export_corrected_bone_button.setToolTip(
-            "The osteotomised bone in its PLANNED position as ONE closed STL: fixed and moved fragment "
-            "(incl. fine shift), the gap between the cut faces bridged, so the printed model is one "
-            "connected piece (e.g. to pre-contour the plate). CT coordinates, mm. Needs the preview.")
-        self.export_corrected_bone_button.clicked.connect(self.onExportCorrectedBoneStl)
-        preview_grid.addWidget(self.export_corrected_bone_button, 2, 1)
+        preview_grid.addWidget(self.export_corrected_ct_button, 2, 0, 1, 2)
         self.reset_all_button = qt.QPushButton("Reset planning and guides")
         self.reset_all_button.setToolTip(
             "Start the osteotomy over: removes the preview, both cutting planes AND everything of the saw "
@@ -1274,7 +1267,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             "Label with patient no., bone, side and an arrow to proximal - built with 'Extrude'. "
             "'Break-off tag': a small plate at the proximal end of the guide on a thin neck, broken off with "
             "pliers when no longer needed. 'On the guide': raised text on a free flat area of the guide.")
-        # workflow order: Extrude | Label, below Export guides | Export bone STL
+        # workflow order: Extrude | Label, below Export guides | Export bone STL | Export corrected bone
         self.guide_extrude_button.setText("Extrude")
         self.guide_extrude_button.setToolTip("Build the guide body (guide body, saw blocks / pin bosses, label).")
         self.guide_export_bone_button = qt.QPushButton("Export bone STL...")
@@ -1282,15 +1275,29 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             "Save the segmented bone as a binary STL in mm (CT coordinates) - e.g. to print a bone model "
             "for test-fitting the guide.")
         self.guide_export_bone_button.clicked.connect(lambda: self.onExportBoneStl(self.guide_status))
+        self.export_corrected_bone_button = qt.QPushButton("Export corrected bone...")
+        self.export_corrected_bone_button.setToolTip(
+            "The osteotomised bone in its PLANNED position as ONE closed STL: fixed and moved fragment "
+            "(incl. fine shift), the gap between the cut faces bridged, so the printed model is one "
+            "connected piece (e.g. to pre-contour the plate). CT coordinates, mm. Side and bone as chosen "
+            "above; needs the correction preview.")
+        self.export_corrected_bone_button.clicked.connect(lambda: self.onExportCorrectedBoneStl(self.guide_status))
         extrude_row = qt.QGridLayout()
         extrude_row.setContentsMargins(0, 0, 0, 0)
         extrude_row.setHorizontalSpacing(6)
         extrude_row.setVerticalSpacing(2)
-        for index, button in enumerate((self.guide_extrude_button, self.guide_label_mode,
-                                        self.guide_export_button, self.guide_export_bone_button)):
+        for index, button in enumerate((self.guide_extrude_button, self.guide_label_mode)):
             button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             button.setMinimumWidth(60)
-            extrude_row.addWidget(button, index // 2, index % 2)
+            extrude_row.addWidget(button, 0, index)
+        export_row = qt.QHBoxLayout()
+        export_row.setContentsMargins(0, 0, 0, 0)
+        export_row.setSpacing(6)
+        for button in (self.guide_export_button, self.guide_export_bone_button, self.export_corrected_bone_button):
+            button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+            button.setMinimumWidth(60)
+            export_row.addWidget(button, 1)
+        extrude_row.addLayout(export_row, 1, 0, 1, 2)
         extrude_row.setColumnStretch(0, 1)
         extrude_row.setColumnStretch(1, 1)
         extrude_widget = qt.QWidget()

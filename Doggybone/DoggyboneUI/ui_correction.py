@@ -2406,10 +2406,13 @@ class CorrectionMixin:
             f"(sub-folder ScalarVolume_...). Fragment {info['pasted_voxels']} voxels moved, its original place "
             f"filled with {info['fill']:.0f}.{enlarged} Import the folder in the DICOM module to view it.")
 
-    def onExportCorrectedBoneStl(self):
+    def onExportCorrectedBoneStl(self, status=None):
         """The osteotomised bone in its PLANNED position as ONE closed STL (DoggyboneLib.bone_export):
         fixed fragment + moved fragment (incl. fine shift), the gap between the cut faces bridged, so a
-        printed model is one connected piece (e.g. for pre-contouring the plate). CT coordinates, mm."""
+        printed model is one connected piece (e.g. for pre-contouring the plate). CT coordinates, mm.
+        status: the label for the result (default: the correction status)."""
+        if not hasattr(status, "setText"):
+            status = self.correction_status
         from DoggyboneLib import bone_export
         import time
         side = self.osteotomy_side.currentText.lower()
@@ -2423,13 +2426,13 @@ class CorrectionMixin:
         moving, fixed = nodes.get(moving_name), nodes.get(fixed_name)
         if (moving is None or fixed is None or moving.GetPolyData() is None or fixed.GetPolyData() is None
                 or moving.GetPolyData().GetNumberOfPoints() == 0 or fixed.GetPolyData().GetNumberOfPoints() == 0):
-            self.correction_status.setText(
+            status.setText(
                 f"No correction preview for the {side} {bone.lower()} - press 'Show/update preview' first.")
             return
         proximal_plane = slicer.mrmlScene.GetFirstNodeByName(self._plane_node_name(side, bone))
         distal_plane = slicer.mrmlScene.GetFirstNodeByName(self._distal_plane_node_name(side, bone)) or proximal_plane
         if proximal_plane is None:
-            self.correction_status.setText("The cutting plane is missing - insert the planes first.")
+            status.setText("The cutting plane is missing - insert the planes first.")
             return
         cuts = {proximal_name: self._get_plane_origin_normal(proximal_plane),
                 distal_name: self._get_plane_origin_normal(distal_plane)}
@@ -2444,12 +2447,21 @@ class CorrectionMixin:
             return
         if not path.lower().endswith(".stl"):
             path += ".stl"
-        self.correction_status.setText("Building the corrected bone as one solid ...")
+        status.setText("Building the corrected bone as one solid ...")
         slicer.app.processEvents()
         started = time.time()
         with slicer.util.tryWithErrorDisplay("Export of the corrected bone failed.", waitCursor=True):
+            # the other bones of the segmentation (femur on the tibial plateau ...) are taken out
+            others = []
+            if hasattr(self, "_single_bone_polydata"):
+                for other in self.BONES:
+                    if other.name != bone:
+                        other_poly, _note = self._single_bone_polydata(other.name, side.capitalize())
+                        split_info = (getattr(self, "_bone_split_cache", None) or (None, None, {}))[2]
+                        if other_poly is not None and split_info.get("separated") and not split_info.get("missing"):
+                            others.append(other_poly)
             solid, info = bone_export.corrected_solid(fixed.GetPolyData(), moving.GetPolyData(), H,
-                                                      cuts[fixed_name], cuts[moving_name])
+                                                      cuts[fixed_name], cuts[moving_name], others=others)
             triangles = vtk.vtkTriangleFilter()
             triangles.SetInputData(solid)
             writer = vtk.vtkSTLWriter()
@@ -2457,11 +2469,11 @@ class CorrectionMixin:
             writer.SetFileName(path)
             writer.SetFileTypeToBinary()
             if not writer.Write():
-                self.correction_status.setText(f"Export failed: {path}")
+                status.setText(f"Export failed: {path}")
                 return
             self._last_stl_dir = os.path.dirname(path)
             b = solid.GetBounds()
-            self.correction_status.setText(
+            status.setText(
                 f"Corrected bone exported as one piece: {path}\n"
                 f"({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x {b[5] - b[4]:.1f} mm, {solid.GetNumberOfCells()} triangles, "
                 f"{info.get('bridges', 0)} bridge(s) across the osteotomy, voxel {info.get('voxel', 0):.2f} mm, "

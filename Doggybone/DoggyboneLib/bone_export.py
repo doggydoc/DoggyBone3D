@@ -91,8 +91,26 @@ def bridges(loops_a, loops_b, max_distance=25.0):
     return result
 
 
-def solid_union(polys, voxel=0.35, max_voxels=160e6, smooth=True):
-    """Union of closed surfaces as ONE iso-surface. Returns (polydata, info)."""
+def _rasterised(poly, lo, voxel, dims):
+    """Inside of a closed surface on the grid (k, j, i) as uint8 0/1."""
+    stencil = vtk.vtkPolyDataToImageStencil()
+    stencil.SetInputData(poly)
+    stencil.SetOutputOrigin(*lo)
+    stencil.SetOutputSpacing(voxel, voxel, voxel)
+    stencil.SetOutputWholeExtent(0, int(dims[0]) - 1, 0, int(dims[1]) - 1, 0, int(dims[2]) - 1)
+    to_image = vtk.vtkImageStencilToImage()
+    to_image.SetInputConnection(stencil.GetOutputPort())
+    to_image.SetInsideValue(1)
+    to_image.SetOutsideValue(0)
+    to_image.SetOutputScalarTypeToUnsignedChar()
+    to_image.Update()
+    return vtk_to_numpy(to_image.GetOutput().GetPointData().GetScalars()).reshape(dims[::-1]).astype(np.uint8)
+
+
+def solid_union(polys, voxel=0.35, max_voxels=160e6, smooth=True, exclude=()):
+    """Union of closed surfaces as ONE iso-surface; the inside of the closed surfaces in exclude (other
+    bones touching this one, e.g. the femur on the tibial plateau) is taken out again. Returns (polydata,
+    info)."""
     bounds = np.array([p.GetBounds() for p in polys if p.GetNumberOfPoints()], float)
     lo = bounds[:, 0::2].min(axis=0) - 2.0
     hi = bounds[:, 1::2].max(axis=0) + 2.0
@@ -101,20 +119,11 @@ def solid_union(polys, voxel=0.35, max_voxels=160e6, smooth=True):
     dims = (np.ceil((hi - lo) / voxel) + 1).astype(int)
     volume = np.zeros(dims[::-1], dtype=np.uint8)                 # (k, j, i)
     for poly in polys:
-        if poly.GetNumberOfPoints() == 0:
-            continue
-        stencil = vtk.vtkPolyDataToImageStencil()
-        stencil.SetInputData(poly)
-        stencil.SetOutputOrigin(*lo)
-        stencil.SetOutputSpacing(voxel, voxel, voxel)
-        stencil.SetOutputWholeExtent(0, int(dims[0]) - 1, 0, int(dims[1]) - 1, 0, int(dims[2]) - 1)
-        to_image = vtk.vtkImageStencilToImage()
-        to_image.SetInputConnection(stencil.GetOutputPort())
-        to_image.SetInsideValue(1)
-        to_image.SetOutsideValue(0)
-        to_image.SetOutputScalarTypeToUnsignedChar()
-        to_image.Update()
-        volume |= vtk_to_numpy(to_image.GetOutput().GetPointData().GetScalars()).reshape(dims[::-1]).astype(np.uint8)
+        if poly.GetNumberOfPoints():
+            volume |= _rasterised(poly, lo, voxel, dims)
+    for poly in exclude:
+        if poly is not None and poly.GetNumberOfPoints():
+            volume[_rasterised(poly, lo, voxel, dims) > 0] = 0
     image = vtk.vtkImageData()
     image.SetDimensions(*[int(v) for v in dims])
     image.SetOrigin(*lo)
@@ -154,14 +163,37 @@ def solid_union(polys, voxel=0.35, max_voxels=160e6, smooth=True):
     return out, {"voxel": float(voxel), "pieces": int(pieces)}
 
 
-def corrected_solid(fixed_poly, moving_poly, H, fixed_cut, moving_cut, voxel=0.35):
+def _contact(poly, fragment, samples=3000):
+    """How close the surface poly comes to the fragment: mean of the 5 % smallest point distances."""
+    points = vtk_to_numpy(poly.GetPoints().GetData())
+    if len(points) > samples:
+        points = points[np.linspace(0, len(points) - 1, samples).astype(int)]
+    locator = vtk.vtkStaticPointLocator()
+    locator.SetDataSet(fragment)
+    locator.BuildLocator()
+    frag = vtk_to_numpy(fragment.GetPoints().GetData())
+    d = np.array([np.linalg.norm(frag[locator.FindClosestPoint(p)] - p) for p in points])
+    d.sort()
+    return float(d[:max(1, len(d) // 20)].mean())
+
+
+def corrected_solid(fixed_poly, moving_poly, H, fixed_cut, moving_cut, voxel=0.35, others=()):
     """The corrected bone as one solid: fixed fragment + moved fragment (moving_poly moved by H) + bridges
     over the gap between their cut faces. fixed_cut / moving_cut: (origin, normal) of each fragment's cut
-    face in ITS OWN (original) coordinates."""
+    face in ITS OWN (original) coordinates. others: closed surfaces of the OTHER bones in the original
+    position (they share the segmentation, e.g. the femur on the tibia) - taken out where they are, and
+    once more moved by H, whichever fragment they hang on."""
     moved = transformed(moving_poly, H)
     loops_fixed = cut_loops(fixed_poly, *fixed_cut)
     loops_moving = [((H[:3, :3] @ loop.T).T + H[:3, 3]) for loop in cut_loops(moving_poly, *moving_cut)]
     joints = bridges(loops_fixed, loops_moving)
-    solid, info = solid_union([fixed_poly, moved] + joints, voxel=voxel)
+    exclude = []
+    for poly in others:
+        if poly is None or not poly.GetNumberOfPoints():
+            continue
+        # the other bone hangs on the fragment it touches: closer to the moving one -> moves with it
+        on_moving = _contact(poly, moving_poly) < _contact(poly, fixed_poly)
+        exclude.append(transformed(poly, H) if on_moving else poly)
+    solid, info = solid_union([fixed_poly, moved] + joints, voxel=voxel, exclude=exclude)
     info.update(bridges=len(joints), loops=(len(loops_fixed), len(loops_moving)))
     return solid, info
