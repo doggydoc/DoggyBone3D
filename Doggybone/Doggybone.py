@@ -95,6 +95,7 @@ importlib.reload(importlib.import_module('DoggyboneUI.ui_guide_build'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_pins'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_limb_bar'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_combined'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_report'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_centering'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_condyle_circles'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_saw'))
@@ -111,6 +112,7 @@ from DoggyboneUI.ui_limb_bar import LimbBarMixin
 from DoggyboneUI.ui_centering import CenteringMixin
 from DoggyboneUI.ui_condyle_circles import CondyleCirclesMixin
 from DoggyboneUI.ui_combined import CombinedCorrectionMixin
+from DoggyboneUI.ui_report import ReportMixin
 
 #
 # Doggybone
@@ -158,7 +160,7 @@ MIT License.
       self.parent.icon = qt.QIcon(iconPath)
 
 
-class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, CondyleCirclesMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
+class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, CenteringMixin, CondyleCirclesMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
                       ScriptedLoadableModuleWidget):
     """
     Base widget that manages the measurement groups
@@ -1293,6 +1295,14 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             button.setMinimumWidth(60)
             export_row.addWidget(button, 1)
         extrude_row.addLayout(export_row, 1, 0, 1, 2)
+        self.export_report_button = qt.QPushButton("Export planning report (PDF)...")
+        self.export_report_button.setToolTip(
+            "One PDF for the patient file: all measurements, target values and calculated corrections, the "
+            "correction preview and the guides (state, key values, pins) of every bone of this side, the guide "
+            "settings and a picture of the 3D view.")
+        self.export_report_button.clicked.connect(lambda: self.onExportPlanningReport(self.guide_status))
+        self.export_report_button.setMinimumHeight(self._reduction_row_height)
+        extrude_row.addWidget(self.export_report_button, 2, 0, 1, 2)
         extrude_row.setColumnStretch(0, 1)
         extrude_row.setColumnStretch(1, 1)
         extrude_widget = qt.QWidget()
