@@ -2727,12 +2727,20 @@ def sdf_guide_body(bone, mesh, selected, direction, gap, wall, slots=None, pins=
         else np.full(len(Q), np.inf)
     dU = np.minimum(dU, reach + rim_round + 6.0)
     f_reg = (0.5 * (dS - dU)).astype(np.float32)                         # < 0 inside the region
-    # the painted rim follows the triangles - smooth the region field (0.5 mm) for an even rim
-    reg3 = np.full(shape, reach, dtype=np.float32)
+    # the painted rim follows the triangles - smooth the region field (0.5 mm) for an even rim.
+    # Normalised over the band voxels only: the voxels inside the bone (and far outside) are not part
+    # of the band - as a constant 'outside the region' value they leaked into the smoothing right at
+    # the bone and lifted the whole fit surface ~0.3-0.6 mm off the bone (only the pin sleeves, built
+    # afterwards, kept the set fit gap).
+    reg3 = np.zeros(shape, dtype=np.float32)
+    weight = np.zeros(shape, dtype=np.float32)
     reg3.ravel()[band_idx] = f_reg
+    weight.ravel()[band_idx] = 1.0
     reg3 = ndi.gaussian_filter(reg3, 0.5 / voxel)
-    f_reg = reg3.ravel()[band_idx]
-    del reg3
+    weight = ndi.gaussian_filter(weight, 0.5 / voxel)
+    w_band = weight.ravel()[band_idx]
+    f_reg = np.where(w_band > 1e-3, reg3.ravel()[band_idx] / np.maximum(w_band, 1e-3), f_reg).astype(np.float32)
+    del reg3, weight, w_band
     # --- shell -----------------------------------------------------------------------------------
     f_inner = gap - db_band
     f_outer = db_outer - reach
