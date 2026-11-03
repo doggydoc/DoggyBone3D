@@ -1032,7 +1032,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         # columns, every field / button as high as 'Extrude guide'
         reduction_grid.setColumnStretch(1, 1)
         reduction_grid.setColumnStretch(3, 1)
-        reduction_grid.setVerticalSpacing(2)
+        reduction_grid.setVerticalSpacing(4)
         row_height = qt.QPushButton("X").sizeHint.height()
         for widget in (self.pin_row_count, self.pin_row_spacing_proximal, self.pin_row_spacing_distal,
                        self.pin_row_pattern, self.place_pin_rows_button,
@@ -1213,7 +1213,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         fields_grid = qt.QGridLayout()
         fields_grid.setContentsMargins(0, 0, 0, 0)
         fields_grid.setHorizontalSpacing(6)
-        fields_grid.setVerticalSpacing(2)
+        fields_grid.setVerticalSpacing(4)                  # a little air between the rows
         self._guide_field_labels = {}
         labels_in_order = [label for label, _f in guide_fields]
         if "+Holes P" in labels_in_order and labels_in_order.index("+Holes P") % 2 == 1:
@@ -1227,6 +1227,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             fields_grid.addWidget(text, row, 2 * col)
             field.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
             field.setMinimumWidth(60)
+            field.setMinimumHeight(self._reduction_row_height)     # same row height as the buttons
             if isinstance(field, qt.QComboBox):
                 field.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
                 field.setMinimumContentsLength(4)
