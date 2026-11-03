@@ -370,10 +370,7 @@ class SawMixin:
                 diameters.append(diameter)
             slot = guide_logic.plan_slot(bone_points, contour, origin, normal, other,
                                          common_v if common_v is not None else patch_normals[strip].mean(axis=0), gap,
-                                         adjust=self._saw_box_adjustment(label),
-                                         near_fraction=0.5 if (getattr(self, "guide_slot_extent", None) is not None
-                                                               and self.guide_slot_extent.currentText.startswith("Guide"))
-                                         else None)
+                                         adjust=self._saw_box_adjustment(label))   # slots: whole cross-section
             if "error" in slot:
                 notes.append(f"{label}: {slot['error']}")
                 continue

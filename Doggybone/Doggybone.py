@@ -1177,14 +1177,6 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         guide_fields.append(("Box wall", self.guide_box_wall))
         guide_fields.append(("+Holes P", self.shortening_holes_proximal))
         guide_fields.append(("+Holes D", self.shortening_holes_distal))
-        self.guide_slot_extent = combo(["Whole bone", "Guide side"], "Whole bone",
-                                       "Length of the slots along the cut:\n"
-                                       "Whole bone: the full width of the bone cross-section in the cutting plane "
-                                       "(the far cortex can stick out further than the near one).\n"
-                                       "Guide side: only the width of the half of the cross-section the guide "
-                                       "sits on - narrower guide; the far part of the cut is finished along the "
-                                       "plane without the slot.")
-        guide_fields.append(("Slot length", self.guide_slot_extent))
         self.guide_bridge_size = spin(2.0, 6.0, 3.0, 0.5, " mm",
                                       "Corner bridges: size of the closed ends of the saw slots (mm along the "
                                       "slot). Larger = stiffer saw block: the block grows sideways by the same "
