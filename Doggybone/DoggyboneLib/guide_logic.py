@@ -372,13 +372,23 @@ def external_mask(mesh, labelmap, label_value, margin=4.0, seal_iterations=3, sa
     corners = np.array([[x, y, z, 1.0] for x in (b[0] - margin, b[1] + margin)
                         for y in (b[2] - margin, b[3] + margin) for z in (b[4] - margin, b[5] + margin)])
     ijk = (Minv @ corners.T).T[:, :3]
-    lo = np.maximum(np.floor(ijk.min(axis=0)).astype(int), [ext[0], ext[2], ext[4]])
-    hi = np.minimum(np.ceil(ijk.max(axis=0)).astype(int) + 1, [ext[1] + 1, ext[3] + 1, ext[5] + 1])
+    # the box around the mesh is NOT clipped to the labelmap: Slicer crops a labelmap tightly to the
+    # bone, so the bone surface can touch the extent - the space beyond it is outside (empty), and
+    # without it the outermost surfaces of the bone would count as enclosed (not paintable)
+    lo = np.floor(ijk.min(axis=0)).astype(int)
+    hi = np.ceil(ijk.max(axis=0)).astype(int) + 1
+    ext_lo = np.array([ext[0], ext[2], ext[4]])
+    ext_hi = np.array([ext[1], ext[3], ext[5]]) + 1
     dims = (ext[5] - ext[4] + 1, ext[3] - ext[2] + 1, ext[1] - ext[0] + 1)
     full = vtk_to_numpy(labelmap.GetPointData().GetScalars()).reshape(dims)
-    if np.any(hi <= lo):                                   # mesh outside the labelmap: nothing to test
+    if np.any(hi <= lo):
         return np.zeros(len(P), dtype=bool)
-    bone = full[lo[2] - ext[4]:hi[2] - ext[4], lo[1] - ext[2]:hi[1] - ext[2], lo[0] - ext[0]:hi[0] - ext[0]] == label_value
+    bone = np.zeros(tuple((hi - lo)[::-1]), dtype=bool)       # (k, j, i)
+    a = np.maximum(lo, ext_lo)
+    b = np.minimum(hi, ext_hi)
+    if np.all(b > a):
+        bone[a[2] - lo[2]:b[2] - lo[2], a[1] - lo[1]:b[1] - lo[1], a[0] - lo[0]:b[0] - lo[0]] = \
+            full[a[2] - ext[4]:b[2] - ext[4], a[1] - ext[2]:b[1] - ext[2], a[0] - ext[0]:b[0] - ext[0]] == label_value
     solid = ndi.binary_closing(bone, iterations=int(seal_iterations), border_value=0) | bone
     # porous / thin cortex (low threshold): the medullary canal and the pores may still connect to the
     # outside in 3D - fill every enclosed hole slice by slice in all three directions, then in 3D
