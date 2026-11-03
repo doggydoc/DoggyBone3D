@@ -1745,6 +1745,14 @@ class CorrectionMixin:
             display.SetVisibility3D(saw_guide_view)
         else:
             display.SetVisibility(saw_guide_view)
+        if saw_guide_view:
+            # the saw guide sits on the UNCUT bone: the original segmentation alone - the fragments
+            # (same surface, partly moved) would show a second bone through it
+            proximal_name, distal_name, _t, combined_name, _w = self._preview_node_names(side, bone)
+            for name in (proximal_name, distal_name, combined_name):
+                node = slicer.mrmlScene.GetFirstNodeByName(name)
+                if node is not None and node.GetDisplayNode() is not None:
+                    node.GetDisplayNode().SetVisibility(False)
         self._enforce_single_surface()
 
     def _apply_segment_opacity(self):
