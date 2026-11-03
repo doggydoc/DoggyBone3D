@@ -1167,7 +1167,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         guide_fields.append(("Saw blade", self.guide_blade))
         self.guide_block_height = combo(["4 mm", "5 mm", "6 mm", "8 mm", "10 mm", "12 mm", "15 mm"], "10 mm",
                                         "Height of the saw blocks above the highest bone point (blade guidance). "
-                                        "Small dogs: 4-6 mm.")
+                                        "Small dogs: 4-6 mm. The pin sleeves do not depend on it.")
         guide_fields.append(("Slot height", self.guide_block_height))
         self.guide_box_wall = spin(1.0, 4.0, 2.5, 0.5, " mm",
                                    "Wall thickness of the saw box on each side of the slot. Small dogs: 1.0-1.5 mm "
@@ -1207,7 +1207,9 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
                                     "faces stays open. Smaller guide, easier to use on small bones.")
         guide_fields.append(("Saw guide", self.guide_saw_type))
         self.guide_pin = combo(["Auto (bone size)", "1.0 mm", "1.2 mm", "1.6 mm", "1.8 mm", "2.0 mm"], "Auto (bone size)",
-                               "Fixation pin diameter. Auto: bone up to 15 mm -> 1.2 mm, larger -> 1.6 mm.")
+                               "Fixation pin diameter. Auto: bone up to 15 mm -> 1.2 mm, larger -> 1.6 mm.\n"
+                               "The pin sleeves get a guidance length of 6 x the pin diameter above the bone "
+                               "(at least 6 mm, at most 15 mm): 1.0 mm -> 6 mm, 1.2 -> 7.2, 1.6 -> 9.6, 2.0 -> 12.")
         guide_fields.insert(0, ("Pin size", self.guide_pin))        # pin diameter first (top left)
         # parameters two per row (label, field, label, field) - keeps the panel narrow
         fields_grid = qt.QGridLayout()

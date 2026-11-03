@@ -34,7 +34,7 @@ class SawMixin:
             if segment is None:
                 rejected.append(f"{pin['label']}: {reason}")
                 continue
-            planned = guide_logic.plan_pin(obb, entry, axis, pin["diameter"], gap, guide_logic.BLOCK_HEIGHT)
+            planned = guide_logic.plan_pin(obb, entry, axis, pin["diameter"], gap)
             if "error" in planned:
                 rejected.append(f"{pin['label']}: {planned['error']} (outside the saw-guide surface)")
                 continue
@@ -170,7 +170,7 @@ class SawMixin:
                 continue
             node.SetNthControlPointDescription(i, segment)
             axis = pin_directions[segment]
-            pin = guide_logic.plan_pin(obb, p, axis, diameter, gap, guide_logic.BLOCK_HEIGHT)
+            pin = guide_logic.plan_pin(obb, p, axis, diameter, gap)
             if "error" in pin:
                 rejected.append(f"{label}: {pin['error']}")
                 continue

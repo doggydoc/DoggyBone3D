@@ -26,7 +26,7 @@ class PinsMixin:
         planned, rejected = [], []
         for pin in reduced:
             q = guide_logic.plan_pin(obb, pin["entry"] + 2.0 * pin["axis"], pin["axis"], pin["diameter"],
-                                     gap, guide_logic.BLOCK_HEIGHT)
+                                     gap)
             if "error" in q:
                 rejected.append(f"{pin['label']}: {q['error']} (outside the prepared surface)")
                 continue
@@ -536,8 +536,7 @@ class PinsMixin:
                                         largest=True)
         if centre is None:
             return {"error": "no bone at that level (end of the fragment)"}
-        pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(), float(self.guide_gap.value),
-                                   guide_logic.BLOCK_HEIGHT)
+        pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(), float(self.guide_gap.value))
         if "error" not in pin:
             pin["segment"], pin["centre"] = segment, centre
         return pin
@@ -557,8 +556,7 @@ class PinsMixin:
             if moved_centre is None:
                 return {"error": "the row line leaves the bone (end of the fragment)"}
             centre = moved_centre
-        pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(), float(self.guide_gap.value),
-                                   guide_logic.BLOCK_HEIGHT)
+        pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(), float(self.guide_gap.value))
         if "error" not in pin:
             pin["segment"], pin["centre"] = segment, np.asarray(centre, float)
         return pin
@@ -885,12 +883,12 @@ class PinsMixin:
         r_pin = 0.5 * float(pin.get("diameter", self._pin_diameter()))
         for offset in np.arange(max_offset, 0.99, -0.5):
             shifted = guide_logic.plan_pin(obb, centre + sign * offset * across, z, self._pin_diameter(),
-                                           float(self.guide_gap.value), guide_logic.BLOCK_HEIGHT)
+                                           float(self.guide_gap.value))
             if "error" in shifted or shifted["bone_length"] < 0.8 * float(pin["bone_length"]):
                 continue
             # bone left beside the pin: the line r_pin + 1.5 mm further out must still hit the bone
             beside = guide_logic.plan_pin(obb, centre + sign * (offset + r_pin + 1.5) * across, z,
-                                          self._pin_diameter(), float(self.guide_gap.value), guide_logic.BLOCK_HEIGHT)
+                                          self._pin_diameter(), float(self.guide_gap.value))
             if "error" in beside or beside["bone_length"] < 0.5 * float(pin["bone_length"]):
                 continue
             raw_entry = shifted["entry"] if segment != moved else (Minv @ np.append(shifted["entry"], 1.0))[:3]
@@ -1193,7 +1191,7 @@ class PinsMixin:
         if centre is None:
             return {"error": "no bone cross-section at that level"}
         pin = guide_logic.plan_pin(obb, centre, direction, self._pin_diameter(),
-                                   float(self.guide_gap.value), guide_logic.BLOCK_HEIGHT)
+                                   float(self.guide_gap.value))
         if "error" in pin:
             return pin
         pin["segment"] = segment
@@ -1513,8 +1511,7 @@ class PinsMixin:
             return {"error": "no corrected fragments"}
         segment = best[1]
         _poly, obb, _locator = fragments[segment]
-        pin = guide_logic.plan_pin(obb, p, direction, self._pin_diameter(), float(self.guide_gap.value),
-                                   guide_logic.BLOCK_HEIGHT)
+        pin = guide_logic.plan_pin(obb, p, direction, self._pin_diameter(), float(self.guide_gap.value))
         if "error" in pin:
             return pin
         pin["segment"], pin["centre"] = segment, p
@@ -1956,8 +1953,7 @@ class PinsMixin:
         direction, _shafts, error = self._reduction_pin_frame(M, moved) if M is not None else (None, None, "x")
         if error:
             return None
-        snapped = guide_logic.plan_pin(obb, target, direction, self._pin_diameter(), float(self.guide_gap.value),
-                                       guide_logic.BLOCK_HEIGHT)
+        snapped = guide_logic.plan_pin(obb, target, direction, self._pin_diameter(), float(self.guide_gap.value))
         if "error" in snapped:
             return None
         snapped["segment"], snapped["centre"] = pin["segment"], target

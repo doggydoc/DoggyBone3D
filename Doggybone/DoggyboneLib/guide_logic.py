@@ -885,9 +885,24 @@ def line_hits(obb, start, end):
     return P[order]
 
 
-def plan_pin(obb, point, axis, pin_diameter, gap, height, reach=90.0):
+SLEEVE_LENGTH_FACTOR = 6.0     # pin sleeve: guidance length = 6 x pin diameter above the bone ...
+SLEEVE_LENGTH_MIN = 6.0        # ... at least 6 mm
+SLEEVE_LENGTH_MAX = 15.0       # ... at most 15 mm
+
+
+def sleeve_height(pin_diameter):
+    """Length of a pin sleeve above the bone (+ fit gap), from the pin diameter alone - independent of
+    the slot height of the saw block: a thin pin bends and wanders in a short bore, ~6 x its
+    diameter of guidance keeps it on its axis. 1.0 mm -> 6 mm, 1.2 -> 7.2, 1.6 -> 9.6, 2.0 -> 12."""
+    return float(min(SLEEVE_LENGTH_MAX, max(SLEEVE_LENGTH_MIN, SLEEVE_LENGTH_FACTOR * float(pin_diameter))))
+
+
+def plan_pin(obb, point, axis, pin_diameter, gap, height=None, reach=90.0):
     """Pin through `point` (on the guide), axis = OUTWARD unit direction (bone -> guide).
+    height: sleeve length above the bone + gap; None = from the pin diameter (sleeve_height).
     Returns dict with entry (first bone hit), far (last bone hit), bone_length, top, radii."""
+    if height is None:
+        height = sleeve_height(pin_diameter)
     a = unit(np.asarray(axis, float))
     p = np.asarray(point, float)
     start = p + 30.0 * a
