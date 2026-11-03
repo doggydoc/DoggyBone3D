@@ -96,6 +96,7 @@ importlib.reload(importlib.import_module('DoggyboneUI.ui_pins'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_limb_bar'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_combined'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_report'))
+importlib.reload(importlib.import_module('DoggyboneUI.ui_sulcus'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_centering'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_condyle_circles'))
 importlib.reload(importlib.import_module('DoggyboneUI.ui_saw'))
@@ -113,6 +114,7 @@ from DoggyboneUI.ui_centering import CenteringMixin
 from DoggyboneUI.ui_condyle_circles import CondyleCirclesMixin
 from DoggyboneUI.ui_combined import CombinedCorrectionMixin
 from DoggyboneUI.ui_report import ReportMixin
+from DoggyboneUI.ui_sulcus import SulcusPinMixin
 
 #
 # Doggybone
@@ -160,7 +162,7 @@ MIT License.
       self.parent.icon = qt.QIcon(iconPath)
 
 
-class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, CenteringMixin, CondyleCirclesMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
+class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, SulcusPinMixin, CenteringMixin, CondyleCirclesMixin, TibiaTargetsMixin, PlanesMixin, CorrectionMixin, SegmentationMixin, GuideEditMixin, GuideBuildMixin, PinsMixin, SawMixin,
                       ScriptedLoadableModuleWidget):
     """
     Base widget that manages the measurement groups
@@ -1208,6 +1210,14 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Center
                                     "runs along its flat face. Closing wedge: the whole wedge between the two "
                                     "faces stays open. Smaller guide, easier to use on small bones.")
         guide_fields.append(("Saw guide", self.guide_saw_type))
+        self.guide_sulcus_pin = combo(list(self.SULCUS_DIAMETERS), "Off",
+                                      "Femur, saw guide: one more pin sleeve for a sulcus (trochlear groove) "
+                                      "prosthesis. The pin stays perpendicular to the condylar axis; its gizmo "
+                                      "shifts it in the frontal plane (arrows) and tilts it in the sagittal plane "
+                                      "(ring). Start: middle between the condyles, drilled cranial -> caudal. "
+                                      "Choose the pin diameter; built in with 'Extrude guide'.")
+        self.guide_sulcus_pin.currentIndexChanged.connect(self._on_sulcus_pin_changed)
+        guide_fields.append(("Sulcus pin", self.guide_sulcus_pin))
         self.guide_pin = combo(["Auto (bone size)", "1.0 mm", "1.2 mm", "1.6 mm", "1.8 mm", "2.0 mm"], "Auto (bone size)",
                                "Fixation pin diameter. Auto: bone up to 15 mm -> 1.2 mm, larger -> 1.6 mm.\n"
                                "The pin sleeves get a guidance length of 6 x the pin diameter above the bone "

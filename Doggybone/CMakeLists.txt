@@ -32,6 +32,7 @@ set(MODULE_PYTHON_SCRIPTS
   DoggyboneUI/ui_limb_bar.py
   DoggyboneUI/ui_combined.py
   DoggyboneUI/ui_report.py
+  DoggyboneUI/ui_sulcus.py
   DoggyboneUI/ui_centering.py
   DoggyboneUI/ui_condyle_circles.py
   )

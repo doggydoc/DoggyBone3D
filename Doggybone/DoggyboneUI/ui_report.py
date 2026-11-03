@@ -159,6 +159,18 @@ class ReportMixin:
                              f"{length:.1f} mm"))
         except Exception:
             pass
+        try:                                     # sulcus prosthesis pin (femur, saw guide)
+            sulcus = self._sulcus_pin_plan(float(self.guide_gap.value)) if hasattr(self, "_sulcus_pin_plan") else None
+            info = getattr(self, "_sulcus_report", None) or {}
+            if sulcus is not None:
+                tilt = info.get("tilt")
+                lean = "" if tilt is None else (
+                    ", perpendicular to the shaft" if abs(tilt) < 0.05 else
+                    f", entry end tilted {abs(tilt):.1f}\N{DEGREE SIGN} {'distally' if tilt > 0 else 'proximally'}")
+                pins.append(("S", "sulcus prosthesis (_|_ condylar axis" + lean + ")",
+                             f"{float(sulcus['diameter']):.1f} mm", f"{float(sulcus['bone_length']):.1f} mm"))
+        except Exception:
+            pass
         return guides, pins
 
     def _report_guide_settings(self):

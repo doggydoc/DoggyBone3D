@@ -140,6 +140,13 @@ class GuideBuildMixin:
             else:
                 pins, pin_note = self._plan_pins(slots, mesh, gap)
                 self._store_planned_pins(pins)
+                # sulcus prosthesis pin (femur): one more sleeve + bore in the saw guide
+                sulcus = self._sulcus_pin_plan(gap) if hasattr(self, "_sulcus_pin_plan") else None
+                if sulcus is not None:
+                    pins = list(pins) + [sulcus]
+                    pin_note = ((pin_note + "\n") if pin_note else "") + (
+                        f"Sulcus pin \u00d8 {sulcus['diameter']:.1f} mm: sleeve built in, "
+                        f"{sulcus['bone_length']:.1f} mm in bone.")
             # saw block(s): exact meshes, fused into the volume body and kept as they are
             parts = []
             if len(slots) == 2:
