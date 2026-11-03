@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Matthias Frank, Kleintierklinik Frank & Partner, Freiburg, Germany
 # Licensed under the MIT License, see LICENSE in the repository root.
 
-"""SulcusPinMixin: guide pin for a sulcus (trochlear groove) prosthesis, built as one more sleeve into
-the femoral saw guide.
+"""SulcusPinMixin: guide pin for the MaMaMia trochlear (sulcus) prosthesis (Intrauma), built as one
+more sleeve into the femoral saw guide, with the cut plane of the trochlea shown on demand.
 
 The pin is always perpendicular to the condylar axis (medial -> lateral femur condyle) - in the frontal
 plane it stays coupled to that axis. A plane gizmo carries it: the two arrows shift it in the frontal
@@ -15,7 +15,7 @@ from DoggyboneUI.common import *
 
 
 class SulcusPinMixin:
-    SULCUS_DIAMETERS = ("Off", "1.6 mm", "2.0 mm", "2.4 mm", "3.2 mm")
+    SULCUS_DIAMETERS = ("1.0 mm", "1.2 mm", "1.6 mm", "1.8 mm", "2.0 mm")    # the fixation pin sizes
     SULCUS_BONE = "Femur"
 
     def _sulcus_names(self, side):
@@ -23,10 +23,60 @@ class SulcusPinMixin:
         return f"Doggybone {side} sulcus pin gizmo", f"Doggybone {side} sulcus pin"
 
     def _sulcus_diameter(self):
+        button = getattr(self, "sulcus_pin_button", None)
         box = getattr(self, "guide_sulcus_pin", None)
-        if box is None or box.currentText == "Off":
+        if button is None or box is None or not button.checked:
             return None
         return float(box.currentText.split()[0])
+
+    def _sulcus_plane_name(self, side):
+        return f"Doggybone {side.lower()} sulcus cut plane"
+
+    def _update_sulcus_cut_plane(self, pin=None):
+        """Cut plane of the trochlea: perpendicular to the pin, 'Cut depth' below the pin's entry into the
+        bone (the cannulated cutter runs over the pin) - a thin disc over the width of the condyles."""
+        side = self._sulcus_side()
+        name = self._sulcus_plane_name(side)
+        node = slicer.mrmlScene.GetFirstNodeByName(name)
+        show = getattr(self, "sulcus_plane_checkbox", None)
+        if pin is None and self._sulcus_diameter() is not None:
+            pin = self._sulcus_pin_plan(float(self.guide_gap.value))
+        if pin is None or show is None or not show.checked:
+            if node is not None:
+                slicer.mrmlScene.RemoveNode(node)
+            return None
+        a = np.asarray(pin["axis"], float)
+        depth = float(self.sulcus_depth.value)
+        centre = np.asarray(pin["entry"], float) - depth * a
+        frame, _error = self._sulcus_frame(side)
+        radius = 12.0
+        if frame is not None:
+            medial, lateral = (self._named_position(side.lower(), n) for n in self.ML_LANDMARKS[self.SULCUS_BONE])
+            if medial is not None and lateral is not None:
+                radius = 0.5 * float(np.linalg.norm(np.asarray(lateral) - np.asarray(medial))) + 3.0
+        disc = vtk.vtkRegularPolygonSource()
+        disc.SetNumberOfSides(48)
+        disc.SetRadius(radius)
+        disc.SetCenter(*[float(v) for v in centre - 0.3 * a])
+        disc.SetNormal(*[float(v) for v in a])
+        slab = vtk.vtkLinearExtrusionFilter()
+        slab.SetInputConnection(disc.GetOutputPort())
+        slab.SetExtrusionTypeToNormalExtrusion()
+        slab.SetVector(*[float(v) for v in a])
+        slab.SetScaleFactor(0.6)                      # 0.6 mm thick: visible also edge-on
+        slab.CappingOn()
+        slab.Update()
+        if node is None:
+            node = slicer.modules.models.logic().AddModel(slab.GetOutput())
+            node.SetName(name)
+            display = node.GetDisplayNode()
+            display.SetColor(0.95, 0.55, 0.1)
+            display.SetOpacity(0.45)
+            display.SetBackfaceCulling(False)
+        else:
+            node.SetAndObservePolyData(slab.GetOutput())
+        node.GetDisplayNode().SetVisibility(True)
+        return depth
 
     def _sulcus_side(self):
         return self.osteotomy_side.currentText
@@ -66,15 +116,15 @@ class SulcusPinMixin:
         gizmo_name, pin_name = self._sulcus_names(side)
         diameter = self._sulcus_diameter()
         if diameter is None:
-            for name in (gizmo_name, pin_name):
+            for name in (gizmo_name, pin_name, self._sulcus_plane_name(side)):
                 node = slicer.mrmlScene.GetFirstNodeByName(name)
                 if node is not None:
                     slicer.mrmlScene.RemoveNode(node)
-            self.guide_status.setText("Sulcus pin removed.")
+            self.guide_status.setText("MaMaMia pin removed.")
             return
         frame, error = self._sulcus_frame(side)
         if error:
-            self.guide_status.setText(f"Sulcus pin: {error}")
+            self.guide_status.setText(f"MaMaMia pin: {error}")
             return
         gizmo = slicer.mrmlScene.GetFirstNodeByName(gizmo_name)
         if gizmo is None:
@@ -144,7 +194,7 @@ class SulcusPinMixin:
             return
         frame, error = self._sulcus_frame(side)
         if error:
-            self.guide_status.setText(f"Sulcus pin: {error}")
+            self.guide_status.setText(f"MaMaMia pin: {error}")
             return
         c, y0, z0, _mid = frame
         origin, z = self._sulcus_axes(gizmo)
@@ -165,7 +215,7 @@ class SulcusPinMixin:
         pin = self._sulcus_pin_plan(float(self.guide_gap.value))
         node = slicer.mrmlScene.GetFirstNodeByName(pin_name)
         if pin is None:
-            self.guide_status.setText("Sulcus pin: the pin axis misses the femur - move the gizmo onto the trochlea.")
+            self.guide_status.setText("MaMaMia pin: the pin axis misses the femur - move the gizmo onto the trochlea.")
             return
         a = np.asarray(pin["axis"], float)
         line = vtk.vtkLineSource()
@@ -190,12 +240,15 @@ class SulcusPinMixin:
         tilt = float(np.degrees(np.arcsin(np.clip(float(np.dot(a, shaft)), -1.0, 1.0))))
         lean = ("perpendicular to the shaft" if abs(tilt) < 0.05 else
                 f"entry end tilted {abs(tilt):.1f}° {'distally' if tilt > 0 else 'proximally'}")
-        self._sulcus_report = dict(diameter=diameter, to_shaft=to_shaft, tilt=tilt, bone_length=pin["bone_length"])
+        depth = self._update_sulcus_cut_plane(pin)
+        self._sulcus_report = dict(diameter=diameter, to_shaft=to_shaft, tilt=tilt, bone_length=pin["bone_length"],
+                                   cut_depth=depth)
         self.guide_status.setText(
-            f"Sulcus pin Ø {diameter:.1f} mm: perpendicular to the condylar axis; "
+            f"MaMaMia pin Ø {diameter:.1f} mm: perpendicular to the condylar axis; "
             f"sagittal: {lean} (angle to the femoral shaft axis {to_shaft:.1f}°), "
-            f"bone along the pin {pin['bone_length']:.1f} mm. "
-            "Arrows: shift in the frontal plane, ring: tilt in the sagittal plane. Built into the saw guide "
+            f"bone along the pin {pin['bone_length']:.1f} mm"
+            + (f", cut plane {depth:.1f} mm below the entry. " if depth is not None else ". ")
+            + "Arrows: shift in the frontal plane, ring: tilt in the sagittal plane. Built into the saw guide "
             "with 'Extrude guide'.")
 
     def _sulcus_pin_plan(self, gap):

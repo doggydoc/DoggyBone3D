@@ -1210,14 +1210,6 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
                                     "runs along its flat face. Closing wedge: the whole wedge between the two "
                                     "faces stays open. Smaller guide, easier to use on small bones.")
         guide_fields.append(("Saw guide", self.guide_saw_type))
-        self.guide_sulcus_pin = combo(list(self.SULCUS_DIAMETERS), "Off",
-                                      "Femur, saw guide: one more pin sleeve for a sulcus (trochlear groove) "
-                                      "prosthesis. The pin stays perpendicular to the condylar axis; its gizmo "
-                                      "shifts it in the frontal plane (arrows) and tilts it in the sagittal plane "
-                                      "(ring). Start: middle between the condyles, drilled cranial -> caudal. "
-                                      "Choose the pin diameter; built in with 'Extrude guide'.")
-        self.guide_sulcus_pin.currentIndexChanged.connect(self._on_sulcus_pin_changed)
-        guide_fields.append(("Sulcus pin", self.guide_sulcus_pin))
         self.guide_pin = combo(["Auto (bone size)", "1.0 mm", "1.2 mm", "1.6 mm", "1.8 mm", "2.0 mm"], "Auto (bone size)",
                                "Fixation pin diameter. Auto: bone up to 15 mm -> 1.2 mm, larger -> 1.6 mm.\n"
                                "The pin sleeves get a guidance length of 6 x the pin diameter above the bone "
@@ -1259,6 +1251,49 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         fields_widget = qt.QWidget()
         fields_widget.setLayout(fields_grid)
         guide_form.addRow(fields_widget)
+        # MaMaMia trochlear prosthesis (Intrauma): guide pin as one more sleeve of the femoral saw guide
+        self.sulcus_pin_button = qt.QPushButton("MaMaMia pin (trochlea)")
+        self.sulcus_pin_button.setCheckable(True)
+        self.sulcus_pin_button.setToolTip(
+            "Femur, saw guide: guide pin for the MaMaMia trochlear prosthesis (Intrauma) as one more sleeve of "
+            "the guide. The pin stays perpendicular to the condylar axis; its gizmo shifts it in the frontal "
+            "plane (arrows) and tilts it in the sagittal plane (ring). Start: on the trochlea between the "
+            "condyles, drilled cranial -> caudal. Built in with 'Extrude guide'.")
+        self.guide_sulcus_pin = combo(list(self.SULCUS_DIAMETERS), "1.6 mm",
+                                      "Diameter of the MaMaMia guide pin - the same sizes as the fixation pins.")
+        self.sulcus_plane_checkbox = qt.QCheckBox("Show cut plane")
+        self.sulcus_plane_checkbox.setToolTip(
+            "Shows the cut plane of the trochlea: perpendicular to the pin (the cutter runs over the pin), "
+            "'Cut depth' below the pin's entry into the bone.")
+        self.sulcus_depth = spin(0.0, 10.0, 2.0, 0.25, " mm",
+                                 "Depth of the trochlear cut below the pin's entry into the bone, along the pin.",
+                                 decimals=2)
+        sulcus_grid = qt.QGridLayout()
+        sulcus_grid.setContentsMargins(0, 0, 0, 0)
+        sulcus_grid.setHorizontalSpacing(6)
+        sulcus_grid.setVerticalSpacing(4)
+        sulcus_pin_label, sulcus_depth_label = qt.QLabel("Pin \u00d8"), qt.QLabel("Cut depth")
+        for widget in (self.sulcus_pin_button, self.guide_sulcus_pin, self.sulcus_plane_checkbox, self.sulcus_depth):
+            widget.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+            widget.setMinimumWidth(60)
+            widget.setMinimumHeight(self._reduction_row_height)
+        sulcus_grid.addWidget(self.sulcus_pin_button, 0, 0, 1, 2)
+        sulcus_grid.addWidget(self.sulcus_plane_checkbox, 0, 2, 1, 2)
+        sulcus_grid.addWidget(sulcus_pin_label, 1, 0)
+        sulcus_grid.addWidget(self.guide_sulcus_pin, 1, 1)
+        sulcus_grid.addWidget(sulcus_depth_label, 1, 2)
+        sulcus_grid.addWidget(self.sulcus_depth, 1, 3)
+        for label in (sulcus_pin_label, sulcus_depth_label):
+            label.setFixedWidth(self._guide_label_width)
+        sulcus_grid.setColumnStretch(1, 1)
+        sulcus_grid.setColumnStretch(3, 1)
+        sulcus_widget = qt.QWidget()
+        sulcus_widget.setLayout(sulcus_grid)
+        guide_form.addRow(sulcus_widget)
+        self.sulcus_pin_button.toggled.connect(lambda _on: self._on_sulcus_pin_changed())
+        self.guide_sulcus_pin.currentIndexChanged.connect(lambda _i: self._on_sulcus_pin_changed())
+        self.sulcus_plane_checkbox.toggled.connect(lambda _on: self._on_sulcus_pin_changed())
+        self.sulcus_depth.valueChanged.connect(lambda _v: self._on_sulcus_pin_changed())
         self._update_guide_tool_visibility()        # again, now that the parameter fields exist
         self.guide_extrude_button = qt.QPushButton("Extrude guide body")
         self.guide_extrude_button.clicked.connect(self.onExtrudeGuideBody)

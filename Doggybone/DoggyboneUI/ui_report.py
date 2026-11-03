@@ -167,7 +167,9 @@ class ReportMixin:
                 lean = "" if tilt is None else (
                     ", perpendicular to the shaft" if abs(tilt) < 0.05 else
                     f", entry end tilted {abs(tilt):.1f}\N{DEGREE SIGN} {'distally' if tilt > 0 else 'proximally'}")
-                pins.append(("S", "sulcus prosthesis (_|_ condylar axis" + lean + ")",
+                depth = info.get("cut_depth")
+                cut = f", cut plane {depth:.1f} mm below the entry" if depth is not None else ""
+                pins.append(("S", "MaMaMia trochlear prosthesis (_|_ condylar axis" + lean + cut + ")",
                              f"{float(sulcus['diameter']):.1f} mm", f"{float(sulcus['bone_length']):.1f} mm"))
         except Exception:
             pass
