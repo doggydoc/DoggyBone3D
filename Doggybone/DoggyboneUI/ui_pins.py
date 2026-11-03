@@ -841,7 +841,7 @@ class PinsMixin:
                 f"pin spacing {spacings['proximal']:.1f} / {spacings['distal']:.1f} mm (= cut -> first pin) - "
                 + ("staggered to both sides of the bone centre" if self._pin_row_staggered() else "centred")
                 + ", parallel to each other and to the cut plane(s). Drag the row handles along the bone to "
-                "adjust, then 'Extrude'.")
+                "adjust, then 'Extrude guide'.")
         if getattr(self, "_pin_tilt_note", ""):
             text += "\n" + self._pin_tilt_note
         if raised:
@@ -1281,7 +1281,7 @@ class PinsMixin:
 
     def _guide_footprint_lost(self, mode):
         """True when this guide is built on a painted footprint and that footprint (on its prepared
-        bone surface) is gone - e.g. removed after the segmentation changed. 'Extrude' alone cannot
+        bone surface) is gone - e.g. removed after the segmentation changed. 'Extrude guide' alone cannot
         rebuild it then; the footprint has to be painted again."""
         if mode == "reduction" and self._reduction_is_bar():
             return False
@@ -1837,7 +1837,7 @@ class PinsMixin:
         label = node.GetNthControlPointLabel(index)
         text = (f"Pin {label} moved ({pin['segment']} fragment, {'centred' if centred else 'free'}), "
                 f"{pin['bone_length']:.1f} mm in bone, parallel to the other pins. Rebuild the guide "
-                "('Extrude') when all pins are placed."
+                "('Extrude guide') when all pins are placed."
                 + (f"\nPushed {shift:.1f} mm away from the cut so the saw guide can take it." if shift > 0 else ""))
         if ok_segment is None:
             self.guide_status.setStyleSheet(STATUS_WARN_STYLE)

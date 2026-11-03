@@ -162,7 +162,7 @@ class GuideEditMixin:
             self.guide_status.setText(
                 f"Footprint suggested on the {self.guide_side_selector.currentText.lower()} side of the "
                 f"{side} {bone.lower()}: {int(selected.sum())} surface points, ~{area:.0f} mm\N{SUPERSCRIPT TWO}. "
-                f"Refine with brush / lasso, then 'Extrude'." + (f"\n{pin_note}" if pin_note else ""))
+                f"Refine with brush / lasso, then 'Extrude guide'." + (f"\n{pin_note}" if pin_note else ""))
         finally:
             qt.QApplication.restoreOverrideCursor()
 
@@ -205,7 +205,7 @@ class GuideEditMixin:
 
     def _reduction_surface_outdated(self):
         """True when this bone's prepared reduction surface (painted footprint) was made for another
-        correction - 'Extrude' would discard the painted footprint then (independent of the mode)."""
+        correction - 'Extrude guide' would discard the painted footprint then (independent of the mode)."""
         node = slicer.mrmlScene.GetFirstNodeByName("Doggybone guide bone surface" + self._bone_tag() + " (reduction)")
         return (node is not None
                 and node.GetAttribute("Doggybone.CorrectionSignature") != self._correction_signature(reduction=True))

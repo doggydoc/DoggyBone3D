@@ -23,7 +23,7 @@ class GuideBuildMixin:
         self._warn_guides_outdated()
 
     def _rebuild_other_guide_if_outdated(self):
-        """After 'Extrude' of one guide: the OTHER guide of this bone is extruded again as well when it
+        """After 'Extrude guide' of one guide: the OTHER guide of this bone is extruded again as well when it
         exists and no longer matches the plan (e.g. the pins changed) - both stay consistent."""
         if not hasattr(self, "_guide_states"):
             return
@@ -419,7 +419,7 @@ class GuideBuildMixin:
         File names come from the guide itself: patient name - number - fem/tib - dx/sx - cut/red.stl."""
         guides = self._all_guide_bodies()
         if not guides:
-            self.guide_status.setText("No guide yet - press 'Extrude guide body' first.")
+            self.guide_status.setText("No guide yet - press 'Extrude guide' first.")
             return
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
         folder = qt.QFileDialog.getExistingDirectory(slicer.util.mainWindow(), "Export guides to folder", start_dir)
@@ -457,7 +457,7 @@ class GuideBuildMixin:
             if changed:
                 kind = "reduction guide" if mode == "reduction" else "osteotomy guide"
                 outdated.append(f"{side_text} {bone.lower()} {kind}: changed since it was built ({', '.join(changed)}) "
-                                f"- press 'Extrude' for this guide, then export again")
+                                f"- press 'Extrude guide' for this guide, then export again")
             else:
                 fresh.append(job)
         jobs = fresh
@@ -484,7 +484,7 @@ class GuideBuildMixin:
             if pieces != 1:
                 notes.append(f"{pieces} separate pieces")
             if open_edges:
-                notes.append(f"{open_edges} open edges - press 'Extrude' again and export again")
+                notes.append(f"{open_edges} open edges - press 'Extrude guide' again and export again")
             if side is None:
                 notes.append("side taken from the current selection (guide built before sides were stored)")
             check = side_checks.get(side_text, {})
@@ -536,7 +536,7 @@ class GuideBuildMixin:
             changed = None
         if changed and not slicer.util.confirmOkCancelDisplay(
                 "This guide no longer matches the plan - changed since it was built: " + ", ".join(changed)
-                + ".\n\nPress 'Extrude' again before printing. Export the outdated guide anyway?",
+                + ".\n\nPress 'Extrude guide' again before printing. Export the outdated guide anyway?",
                 windowTitle="Export cutting guide"):
             return
         default_name = self._export_file_name(self._bone_config(bone).file_code,
@@ -880,11 +880,11 @@ class GuideBuildMixin:
         if info is not None:
             info.setText(
                 "Reduction guide: place the pins on the corrected bone ('Place pins', click a pin to move "
-                "it), then 'Extrude'. The saw guide takes these pins over."
+                "it), then 'Extrude guide'. The saw guide takes these pins over."
                 if self._guide_mode_is_reduction() else
                 "Footprint = coloured area on the bone surface where the guide sits. Paint it by hand "
                 "with Brush + / Lasso + anywhere on the outer bone surface around the osteotomy (rotate "
-                "the view as needed), then 'Extrude'.")
+                "the view as needed), then 'Extrude guide'.")
         qt.QTimer.singleShot(0, self._relayout_guide_panel)
 
     def _relayout_guide_panel(self):
@@ -965,7 +965,7 @@ class GuideBuildMixin:
             problems.append("no corrected bone (run the correction preview)")
         self.guide_status.setText(
             "Reduction guide: 'Place pins' on the corrected bone (click a pin to move it), then "
-            "'Extrude'. The saw guide takes these pins over, pre-angled."
+            "'Extrude guide'. The saw guide takes these pins over, pre-angled."
             + (("\nMissing: " + "; ".join(problems)) if problems else ""))
         self._warn_guides_outdated()
 

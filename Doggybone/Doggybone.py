@@ -981,7 +981,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         self.reduction_gap_guide.setToolTip(
             "Same value as 'Reduction gap' in Osteotomy Planning (the two fields are linked): gap left "
             "between the cut faces after reduction. Changes the corrected bone - press 'Show/update "
-            "preview' again, then 'Extrude' the reduction guide.")
+            "preview' again, then press 'Extrude guide' for the reduction guide.")
 
         def link(source, target):
             def copy(value):
@@ -1029,7 +1029,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
             box.valueChanged.connect(lambda _v: self._pin_rows_changed())
         self.reduction_type.currentIndexChanged.connect(lambda _i: self._update_guide_tool_visibility())
         # same look as the guide parameters below: label | field | label | field, two equal field
-        # columns, every field / button as high as 'Extrude'
+        # columns, every field / button as high as 'Extrude guide'
         reduction_grid.setColumnStretch(1, 1)
         reduction_grid.setColumnStretch(3, 1)
         reduction_grid.setVerticalSpacing(2)
@@ -1264,11 +1264,11 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, CenteringMixin, Con
         self.guide_label_mode = qt.QComboBox()
         self.guide_label_mode.addItems(["Label: break-off tag", "Label: on the guide", "No label"])
         self.guide_label_mode.setToolTip(
-            "Label with patient no., bone, side and an arrow to proximal - built with 'Extrude'. "
+            "Label with patient no., bone, side and an arrow to proximal - built with 'Extrude guide'. "
             "'Break-off tag': a small plate at the proximal end of the guide on a thin neck, broken off with "
             "pliers when no longer needed. 'On the guide': raised text on a free flat area of the guide.")
         # workflow order: Extrude | Label, below Export guides | Export bone STL | Export corrected bone
-        self.guide_extrude_button.setText("Extrude")
+        self.guide_extrude_button.setText("Extrude guide")
         self.guide_extrude_button.setToolTip("Build the guide body (guide body, saw blocks / pin bosses, label).")
         self.guide_export_bone_button = qt.QPushButton("Export bone STL...")
         self.guide_export_bone_button.setToolTip(
