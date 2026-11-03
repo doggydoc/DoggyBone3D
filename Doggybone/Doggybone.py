@@ -801,6 +801,10 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         guide_collapsible_button.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         self.layout.addWidget(guide_collapsible_button)
         self._guide_collapsible = guide_collapsible_button
+        # MaMaMia pin (saw guide): shown only while the guide panel is open
+        guide_collapsible_button.connect('contentsCollapsed(bool)',
+                                         lambda _c: self._sync_sulcus_visibility()
+                                         if hasattr(self, "_sync_sulcus_visibility") and hasattr(self, "guide_gap") else None)
         # opening / closing the guide panel switches the uncut bone on / off in 3D (saw guide vs. preview)
         guide_collapsible_button.connect('contentsCollapsed(bool)', lambda collapsed: (
             None if collapsed else self._on_planning_section_opened(self._show_osteotomy_view),
@@ -1252,10 +1256,10 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         fields_widget.setLayout(fields_grid)
         guide_form.addRow(fields_widget)
         # MaMaMia trochlear prosthesis (Intrauma): guide pin as one more sleeve of the femoral saw guide
-        self.sulcus_pin_button = qt.QPushButton("MaMaMia pin (trochlea)")
+        self.sulcus_pin_button = qt.QPushButton("MaMaMia prosthesis")
         self.sulcus_pin_button.setCheckable(True)
         self.sulcus_pin_button.setToolTip(
-            "Femur, saw guide: guide pin for the MaMaMia trochlear prosthesis (Intrauma) as one more sleeve of "
+            "Femur, saw guide only: guide pin for the MaMaMia trochlear prosthesis (Intrauma) as one more sleeve of "
             "the guide. The pin stays perpendicular to the condylar axis; its gizmo shifts it in the frontal "
             "plane (arrows) and tilts it in the sagittal plane (ring). Start: on the trochlea between the "
             "condyles, drilled cranial -> caudal. Built in with 'Extrude guide'.")
@@ -1290,6 +1294,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         sulcus_widget = qt.QWidget()
         sulcus_widget.setLayout(sulcus_grid)
         guide_form.addRow(sulcus_widget)
+        self._sulcus_widget = sulcus_widget                 # saw guide (femur) only
         self.sulcus_pin_button.toggled.connect(lambda _on: self._on_sulcus_pin_changed())
         self.guide_sulcus_pin.currentIndexChanged.connect(lambda _i: self._on_sulcus_pin_changed())
         self.sulcus_plane_checkbox.toggled.connect(lambda _on: self._on_sulcus_pin_changed())

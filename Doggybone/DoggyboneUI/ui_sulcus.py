@@ -173,6 +173,7 @@ class SulcusPinMixin:
             gizmo.AddObserver(slicer.vtkMRMLMarkupsNode.PointEndInteractionEvent,
                               lambda caller, event: self._on_sulcus_gizmo_moved(final=True))
         self._on_sulcus_gizmo_moved(final=True)
+        self._sync_sulcus_visibility()
 
     def _sulcus_axes(self, gizmo):
         x, y, z = [0.0] * 3, [0.0] * 3, [0.0] * 3
@@ -267,3 +268,20 @@ class SulcusPinMixin:
             return None
         pin["label"], pin["segment"] = "S", "sulcus"
         return pin
+
+    def _sync_sulcus_visibility(self):
+        """The MaMaMia pin belongs to the saw guide (uncut bone): its controls, gizmo, pin and cut plane are
+        shown only with the guide section open in saw mode on the femur - never in the reduction guide."""
+        saw = getattr(self, "_guide_mode", "saw") == "saw"
+        panel = getattr(self, "_guide_collapsible", None)
+        femur = self.osteotomy_bone.currentText == self.SULCUS_BONE
+        widget = getattr(self, "_sulcus_widget", None)
+        if widget is not None:
+            widget.setVisible(saw and femur)
+        show = (saw and femur and panel is not None and not panel.collapsed
+                and self._sulcus_diameter() is not None)
+        side = self._sulcus_side()
+        for name in self._sulcus_names(side) + (self._sulcus_plane_name(side),):
+            node = slicer.mrmlScene.GetFirstNodeByName(name)
+            if node is not None and node.GetDisplayNode() is not None:
+                node.GetDisplayNode().SetVisibility(show)

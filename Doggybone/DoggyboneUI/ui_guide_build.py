@@ -578,6 +578,11 @@ class GuideBuildMixin:
             + "".join("\n" + note for note in notes))
 
     def _on_guide_bone_switched(self):
+        self._guide_bone_switched()
+        if hasattr(self, "_sync_sulcus_visibility"):
+            self._sync_sulcus_visibility()
+
+    def _guide_bone_switched(self):
         """Osteotomy bone changed (femur <-> tibia): the other bone's guides, pins and correction preview
         are hidden (kept, never deleted), the original segmentation is shown, this bone's guide objects
         (if any) come back. Guide objects are stored per bone, so planning the tibia never touches the
@@ -907,6 +912,11 @@ class GuideBuildMixin:
         box.layout().activate()
 
     def onGuideModeChanged(self):
+        self._on_guide_mode_changed()
+        if hasattr(self, "_sync_sulcus_visibility"):
+            self._sync_sulcus_visibility()              # MaMaMia pin: saw guide only
+
+    def _on_guide_mode_changed(self):
         mode = "reduction" if self.guide_mode_reduction.checked else "saw"
         if mode == getattr(self, "_guide_mode", "saw"):
             return
