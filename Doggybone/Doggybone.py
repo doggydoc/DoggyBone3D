@@ -1327,7 +1327,8 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
             "The osteotomised bone in its PLANNED position as ONE closed STL: fixed and moved fragment "
             "(incl. fine shift), the gap between the cut faces bridged, so the printed model is one "
             "connected piece (e.g. to pre-contour the plate). CT coordinates, mm. Side and bone as chosen "
-            "above; needs the correction preview.")
+            "above; needs the correction preview. Femur with 'MaMaMia prosthesis' on: the external disc of the "
+            "sulcus (the shown cut plane, 'Cut depth' below the pin entry) is cut off the model.")
         self.export_corrected_bone_button.clicked.connect(lambda: self.onExportCorrectedBoneStl(self.guide_status))
         extrude_row = qt.QGridLayout()
         extrude_row.setContentsMargins(0, 0, 0, 0)

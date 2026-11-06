@@ -177,7 +177,7 @@ def _contact(poly, fragment, samples=3000):
     return float(d[:max(1, len(d) // 20)].mean())
 
 
-def corrected_solid(fixed_poly, moving_poly, H, fixed_cut, moving_cut, voxel=0.35, others=()):
+def corrected_solid(fixed_poly, moving_poly, H, fixed_cut, moving_cut, voxel=0.35, others=(), removals=()):
     """The corrected bone as one solid: fixed fragment + moved fragment (moving_poly moved by H) + bridges
     over the gap between their cut faces. fixed_cut / moving_cut: (origin, normal) of each fragment's cut
     face in ITS OWN (original) coordinates. others: closed surfaces of the OTHER bones in the original
@@ -194,6 +194,11 @@ def corrected_solid(fixed_poly, moving_poly, H, fixed_cut, moving_cut, voxel=0.3
         # the other bone hangs on the fragment it touches: closer to the moving one -> moves with it
         on_moving = _contact(poly, moving_poly) < _contact(poly, fixed_poly)
         exclude.append(transformed(poly, H) if on_moving else poly)
+    # removals: closed bodies cut away from the bone (e.g. the sulcus disc of a trochlear prosthesis),
+    # given in the original position - moved by H when they lie on the moving fragment
+    for poly, on_moving in removals:
+        if poly is not None and poly.GetNumberOfPoints():
+            exclude.append(transformed(poly, H) if on_moving else poly)
     solid, info = solid_union([fixed_poly, moved] + joints, voxel=voxel, exclude=exclude)
     info.update(bridges=len(joints), loops=(len(loops_fixed), len(loops_moving)))
     return solid, info

@@ -32,6 +32,51 @@ class SulcusPinMixin:
     def _sulcus_plane_name(self, side):
         return f"Doggybone {side.lower()} sulcus cut plane"
 
+    def _sulcus_disc_radius(self, side):
+        """Radius of the trochlear disc that is cut off: half the condylar width + 3 mm (whole sulcus)."""
+        medial, lateral = (self._named_position(side.lower(), n) for n in self.ML_LANDMARKS[self.SULCUS_BONE])
+        if medial is None or lateral is None:
+            return 12.0
+        return 0.5 * float(np.linalg.norm(np.asarray(lateral) - np.asarray(medial))) + 3.0
+
+    def _sulcus_removal(self):
+        """For the export of the osteotomised femur: the external disc of the sulcus as a closed body
+        (cylinder around the pin axis, radius of the shown cut plane, from the cut plane 'Cut depth' below
+        the pin's entry out to well above the bone) and the pin entry - or None (option off / no pin)."""
+        if self._sulcus_diameter() is None:
+            return None
+        pin = self._sulcus_pin_plan(float(self.guide_gap.value))
+        if pin is None:
+            return None
+        a = guide_logic.unit(np.asarray(pin["axis"], float))
+        entry = np.asarray(pin["entry"], float)
+        base = entry - float(self.sulcus_depth.value) * a
+        height = 40.0
+        cylinder = vtk.vtkCylinderSource()                  # along y, centred at the origin
+        cylinder.SetRadius(self._sulcus_disc_radius(self._sulcus_side()))
+        cylinder.SetHeight(height)
+        cylinder.SetResolution(64)
+        cylinder.CappingOn()
+        y = np.array([0.0, 1.0, 0.0])
+        axis = np.cross(y, a)
+        angle = float(np.degrees(np.arccos(np.clip(float(np.dot(y, a)), -1.0, 1.0))))
+        transform = vtk.vtkTransform()
+        transform.PostMultiply()
+        if np.linalg.norm(axis) > 1e-9:
+            transform.RotateWXYZ(angle, *[float(v) for v in axis])
+        elif float(np.dot(y, a)) < 0:
+            transform.RotateX(180.0)
+        transform.Translate(*[float(v) for v in base + 0.5 * height * a])
+        placed = vtk.vtkTransformPolyDataFilter()
+        placed.SetInputConnection(cylinder.GetOutputPort())
+        placed.SetTransform(transform)
+        triangles = vtk.vtkTriangleFilter()
+        triangles.SetInputConnection(placed.GetOutputPort())
+        triangles.Update()
+        body = vtk.vtkPolyData()
+        body.DeepCopy(triangles.GetOutput())
+        return body, entry
+
     def _update_sulcus_cut_plane(self, pin=None):
         """Cut plane of the trochlea: perpendicular to the pin, 'Cut depth' below the pin's entry into the
         bone (the cannulated cutter runs over the pin) - a thin disc over the width of the condyles."""
@@ -48,12 +93,7 @@ class SulcusPinMixin:
         a = np.asarray(pin["axis"], float)
         depth = float(self.sulcus_depth.value)
         centre = np.asarray(pin["entry"], float) - depth * a
-        frame, _error = self._sulcus_frame(side)
-        radius = 12.0
-        if frame is not None:
-            medial, lateral = (self._named_position(side.lower(), n) for n in self.ML_LANDMARKS[self.SULCUS_BONE])
-            if medial is not None and lateral is not None:
-                radius = 0.5 * float(np.linalg.norm(np.asarray(lateral) - np.asarray(medial))) + 3.0
+        radius = self._sulcus_disc_radius(side)
         disc = vtk.vtkRegularPolygonSource()
         disc.SetNumberOfSides(48)
         disc.SetRadius(radius)

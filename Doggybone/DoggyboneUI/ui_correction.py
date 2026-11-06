@@ -2468,8 +2468,19 @@ class CorrectionMixin:
                         split_info = (getattr(self, "_bone_split_cache", None) or (None, None, {}))[2]
                         if other_poly is not None and split_info.get("separated") and not split_info.get("missing"):
                             others.append(other_poly)
+            # MaMaMia trochlear prosthesis (femur): the external disc of the sulcus is cut off the exported bone
+            removals, sulcus_note = [], ""
+            sulcus = self._sulcus_removal() if bone == "Femur" and hasattr(self, "_sulcus_removal") else None
+            if sulcus is not None:
+                disc, entry = sulcus
+                on_moving = bone_export._contact(_point_poly(entry), moving.GetPolyData()) < \
+                    bone_export._contact(_point_poly(entry), fixed.GetPolyData())
+                removals.append((disc, on_moving))
+                sulcus_note = (f", sulcus disc for the MaMaMia prosthesis cut off ({self.sulcus_depth.value:.1f} mm "
+                               "below the pin entry)")
             solid, info = bone_export.corrected_solid(fixed.GetPolyData(), moving.GetPolyData(), H,
-                                                      cuts[fixed_name], cuts[moving_name], others=others)
+                                                      cuts[fixed_name], cuts[moving_name], others=others,
+                                                      removals=removals)
             triangles = vtk.vtkTriangleFilter()
             triangles.SetInputData(solid)
             writer = vtk.vtkSTLWriter()
@@ -2484,7 +2495,7 @@ class CorrectionMixin:
             status.setText(
                 f"Corrected bone exported as one piece: {path}\n"
                 f"({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x {b[5] - b[4]:.1f} mm, {solid.GetNumberOfCells()} triangles, "
-                f"{info.get('bridges', 0)} bridge(s) across the osteotomy, voxel {info.get('voxel', 0):.2f} mm, "
+                f"{info.get('bridges', 0)} bridge(s) across the osteotomy{sulcus_note}, voxel {info.get('voxel', 0):.2f} mm, "
                 f"{time.time() - started:.0f} s)")
 
     def _ensure_segmentation_visible(self):
@@ -2535,3 +2546,12 @@ class CorrectionMixin:
         self._ensure_segmentation_visible()
         self.onHideAnnotationsToggled(False)           # labels and cutting planes back
         self.correction_status.setText("Preview removed." if removed_any else "No preview to remove.")
+
+
+def _point_poly(point):
+    """A one-point polydata (for distance checks)."""
+    points = vtk.vtkPoints()
+    points.InsertNextPoint(*[float(v) for v in point])
+    poly = vtk.vtkPolyData()
+    poly.SetPoints(points)
+    return poly
