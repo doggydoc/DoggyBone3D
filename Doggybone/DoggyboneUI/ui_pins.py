@@ -323,9 +323,19 @@ class PinsMixin:
         margin = guide_logic.pin_cut_margin(guide_logic.sleeve_radii(self._pin_diameter())[0],
                                             bores_carved=len(planes) == 2)
         if len(planes) == 2:
+            # which side of each cut is kept: the proximal cut keeps its proximal side, the distal cut its
+            # distal side - from the shaft axis. (The other plane's origin is no guide: when the two planes
+            # cross close to their origins - a hinge near the plane centres, e.g. a large wedge - it lies
+            # on either side by chance and the proximal pins were all 'inside the wedge'.)
+            shaft, _ml, _ap, frame_error = self._get_anatomical_frame(self.osteotomy_side.currentText.lower(),
+                                                                       self.osteotomy_bone.currentText)
             for index, (label, o, n) in enumerate(planes):
-                o2 = planes[1 - index][1]
-                towards_wedge = np.sign(float((o2 - o) @ n)) or 1.0
+                if not frame_error and abs(float(np.dot(n, shaft))) > 0.2:
+                    along = float(np.sign(float(np.dot(n, shaft))))          # +1: n points distally
+                    towards_wedge = along if label == "proximal" else -along
+                else:
+                    o2 = planes[1 - index][1]
+                    towards_wedge = np.sign(float((o2 - o) @ n)) or 1.0
                 s_val = float((p - o) @ n) * towards_wedge
                 if s_val < 0:                                    # kept side of this cut
                     if -s_val < margin:
