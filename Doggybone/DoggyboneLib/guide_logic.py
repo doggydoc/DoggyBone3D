@@ -2532,6 +2532,22 @@ def _bone_fields(bone, R, voxel, i_lo, dims, gap, reach, rim_round, outer_smooth
             sl[ax] = end
             bone_mask[tuple(sl)] = ndi.binary_fill_holes(bone_mask[tuple(sl)])
     bone_mask = ndi.binary_fill_holes(bone_mask)
+    # medullary canal reached from outside through small cortical gaps (thin / porous cortex, segmentation
+    # defects): the 3D fill above leaves it open, and the guide grew through the gaps into the marrow.
+    # Seal the gaps (closing ~0.75 mm) only to FIND the enclosed cavities - slice by slice in all three
+    # directions, then in 3D - and add just those cavities to the bone (the outer surface stays as it is).
+    closed = ndi.binary_closing(bone_mask, iterations=max(1, int(round(0.75 / voxel))), border_value=0) | bone_mask
+    filled = closed.copy()
+    for ax in range(3):
+        for index in range(filled.shape[ax]):
+            sl = [slice(None)] * 3
+            sl[ax] = index
+            face = filled[tuple(sl)]
+            if face.any():
+                filled[tuple(sl)] = ndi.binary_fill_holes(face)
+    filled = ndi.binary_fill_holes(filled)
+    bone_mask |= filled & ~closed
+    del closed, filled
     # pits / pores of the bone surface: closed with a ball of radius pit_close
     pit_mask = None
     pit_db = None
