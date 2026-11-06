@@ -136,8 +136,18 @@ class GuideEditMixin:
             external = self._guide_external(mesh, recompute=True)
             outer = outer & external
             selected = selected & outer
+            restored = 0
             if empty:
                 selected = np.zeros_like(selected)
+                # saw guide: a footprint painted before is still shown (its model survives when the bone
+                # surface had to be rebuilt after a segmentation edit) - take it over instead of starting empty
+                old_points = self._painted_footprint_points() if not self._guide_mode_is_reduction() else None
+                if old_points is not None:
+                    from scipy.spatial import cKDTree
+                    P_new, _N = guide_logic.points_and_normals(mesh)
+                    near = cKDTree(old_points).query(P_new, distance_upper_bound=0.6)[0] < np.inf
+                    selected = guide_logic.close_selection(mesh, near) & outer
+                    restored = int(selected.sum())
             guide_logic.set_selection(mesh, selected)
             guide_logic.set_selection(mesh, outer, name="Outer")
 
@@ -154,7 +164,11 @@ class GuideEditMixin:
                 old.GetDisplayNode().SetVisibility(False)
             area = self._update_guide_footprint_display()
             pin_note = "" if self._guide_mode_is_reduction() else self._show_saw_pin_preview()
-            if empty:
+            if empty and restored:
+                self.guide_status.setText(
+                    "Bone surface prepared again (the bone segmentation had changed) - the footprint painted "
+                    "before was taken over. Check it, then 'Extrude guide'." + (f"\n{pin_note}" if pin_note else ""))
+            elif empty:
                 self.guide_status.setText(
                     "Bone surface around the osteotomy prepared - paint the footprint with Brush + / "
                     "Lasso + (rotate the view to reach every side)." + (f"\n{pin_note}" if pin_note else ""))
@@ -165,6 +179,16 @@ class GuideEditMixin:
                 f"Refine with brush / lasso, then 'Extrude guide'." + (f"\n{pin_note}" if pin_note else ""))
         finally:
             qt.QApplication.restoreOverrideCursor()
+
+    def _painted_footprint_points(self):
+        """Points of the footprint still shown for this guide (or None) - the painted region survives a
+        rebuild of the prepared bone surface through them."""
+        node = slicer.mrmlScene.GetFirstNodeByName(self.GUIDE_FOOTPRINT_NAME)
+        polydata = node.GetPolyData() if node is not None else None
+        if polydata is None or polydata.GetNumberOfPoints() < 3 or polydata.GetNumberOfCells() == 0:
+            return None
+        from vtk.util.numpy_support import vtk_to_numpy
+        return vtk_to_numpy(polydata.GetPoints().GetData()).astype(float)
 
     def _update_guide_footprint_display(self):
         mesh_node = self._guide_mesh_node()

@@ -92,6 +92,12 @@ class GuideBuildMixin:
             return          # footprint had to be discarded - nothing to extrude yet
         self.guide_status.setStyleSheet("")
         mesh_node = self._guide_mesh_node()
+        if mesh_node is None and not self._guide_mode_is_reduction() and self._painted_footprint_points() is not None:
+            # the prepared bone surface was dropped (segmentation edited) - rebuild it, keeping the footprint
+            self.onSuggestGuideFootprint(empty=True)
+            mesh_node = self._guide_mesh_node()
+            if mesh_node is not None and not guide_logic.get_selection(mesh_node.GetPolyData()).any():
+                mesh_node = None
         if mesh_node is None:
             self.guide_status.setText("Paint a footprint first (Brush + / Lasso +).")
             return
