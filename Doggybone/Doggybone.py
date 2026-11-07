@@ -1592,15 +1592,16 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
             if polydata is None:
                 status.setText(note or "Separating the bone failed.")
                 return
-            parts = (level.lower()[:3], "dx" if side == "Right" else "sx")
+            parts = (level.lower(), "dx" if side == "Right" else "sx")          # e.g. ...-femur-sx.stl
         else:
             polydata = self._get_bone_polydata()
+            parts = ("bone",)                                                # whole segmentation: ...-bone.stl
         if polydata is None or polydata.GetNumberOfPoints() == 0:
             status.setText("No bone segmentation to export - segment the bone first.")
             return
-        default_name = self._export_file_name(*parts)           # name-number(-fem-dx).stl
+        default_name = self._export_file_name(*parts)           # name-number-femur-dx.stl / -bone.stl
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
-        title = f"Export {level.lower()}" if parts else "Export segmented bone"
+        title = f"Export {level.lower()}" if len(parts) > 1 else "Export segmented bone"
         path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), title,
                                               os.path.join(start_dir, default_name), "STL (*.stl)")
         if not path:
@@ -1620,7 +1621,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         self._last_stl_dir = os.path.dirname(path)
         b = polydata.GetBounds()
         status.setText(
-            f"{level if parts else 'Bone'} exported: {path}\n({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x "
+            f"{level if len(parts) > 1 else 'Bone'} exported: {path}\n({b[1] - b[0]:.1f} x {b[3] - b[2]:.1f} x "
             f"{b[5] - b[4]:.1f} mm, {polydata.GetNumberOfCells()} triangles)" + (f"\n{note}" if note else ""))
 
     def _ensure_landmark_observers(self):

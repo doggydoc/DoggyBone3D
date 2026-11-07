@@ -2448,7 +2448,7 @@ class CorrectionMixin:
         transform.GetMatrixTransformToWorld(matrix)
         H = np.array([[matrix.GetElement(r, c) for c in range(4)] for r in range(4)])
         start_dir = getattr(self, "_last_stl_dir", None) or qt.QDir.homePath()
-        default_name = self._export_file_name(bone.lower()[:3], "dx" if side == "right" else "sx", "corr")
+        default_name = self._export_file_name(bone.lower(), "dx" if side == "right" else "sx", "corr")
         path = qt.QFileDialog.getSaveFileName(slicer.util.mainWindow(), "Export corrected bone (one piece)",
                                               os.path.join(start_dir, default_name), "STL (*.stl)")
         if not path:
