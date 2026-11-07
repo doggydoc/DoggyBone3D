@@ -262,27 +262,9 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         segmentation_form_layout.addRow("Lower threshold", self.threshold_lower)
         segmentation_form_layout.addRow("Upper threshold", self.threshold_upper)
 
-        # A separate threshold for landmark snapping, independent of the segmentation's own
-        # Lower threshold above. The segmentation threshold controls how complete the visual bone
-        # mesh looks (too high, and legitimate lower-density bone gets excluded, leaving gaps);
-        # the snap threshold controls how strictly "bone" has to read before a landmark is
-        # allowed to land there. A scan where soft tissue reads unusually high (e.g. ~340 HU)
-        # needs a snap threshold well above that, without needing to raise the segmentation
-        # threshold to match and degrade the mesh.
-        self.snap_threshold = qt.QSpinBox()
-        self.snap_threshold.setRange(-3000, 3000)
-        self.snap_threshold.setValue(600)
-        self.snap_threshold.setMinimumWidth(70)
-        self.snap_threshold.setToolTip(
-            "How strictly a landmark must land on bone density (HU) when placed or dragged. "
-            "Independent of the segmentation Lower threshold above - raise this if landmarks "
-            "keep landing on soft tissue, without needing to change the segmentation itself.")
-        self.snap_threshold.valueChanged.connect(self.onSnapThresholdChanged)
-        segmentation_form_layout.addRow("Landmark snap threshold", self.snap_threshold)
-
-        # Keep the landmark bone-snapping threshold in sync with this control's current value
-        # from the start, not just from the first time the user moves it.
-        landmark_logic.set_bone_threshold(self.snap_threshold.value)
+        # landmarks snap onto bone density at the segmentation's own Lower threshold
+        landmark_logic.set_bone_threshold(self.threshold_lower.value)
+        self.threshold_lower.valueChanged.connect(landmark_logic.set_bone_threshold)
 
         self.smoothing = qt.QDoubleSpinBox()
         self.smoothing.setRange(0, 1)
@@ -1872,7 +1854,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         subclasses this widget: their module-level providers must point at the widget that is SHOWN, not
         at whichever widget ran setup() last - so they are (re-)registered in setup() and enter()."""
         from DoggyboneLib import measurement_logic as _ml
-        landmark_logic.set_bone_threshold(self.snap_threshold.value)
+        landmark_logic.set_bone_threshold(self.threshold_lower.value)
         # diaphysis centres (CentroidLandmark) are taken from the bone segmentation's surface
         landmark_logic.set_bone_surface_provider(self._get_bone_polydata)
         # the CT this widget segmented (the other limb module may have segmented the same scene: keep that)
@@ -2663,9 +2645,6 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         # creates, so segmentations built separately (e.g. in Segment Editor) are covered too.
         for segmentation_node in slicer.util.getNodesByClass("vtkMRMLSegmentationNode"):
             self._apply_opacity(segmentation_node, opacity)
-
-    def onSnapThresholdChanged(self, value):
-        landmark_logic.set_bone_threshold(value)
 
     # ------------------------------------------------------------------
     # Landmark lists: reuse + re-link

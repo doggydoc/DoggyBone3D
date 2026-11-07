@@ -45,13 +45,9 @@ def snap_to_nearest_bone_voxel(position_ras, in_plane_radius_mm=100.0, out_of_pl
     neighborhood in the underlying CT volume for the nearest voxel at or above
     lower_threshold + margin_hu and returns its RAS center.
 
-    lower_threshold defaults to get_bone_threshold(), which is kept in sync with the module's own
-    "Landmark snap threshold" control - a value independent of the segmentation's own Lower
-    threshold, so a strict bone-only snap doesn't require sacrificing segmentation completeness
-    (raising the segmentation threshold to keep partial-volume/soft-tissue voxels out can also
-    exclude legitimate lower-density bone, leaving gaps in the mesh). margin_hu is an optional
-    extra cushion on top of that, off by default since the snap threshold is already meant to be
-    set to whatever value works for a given scan.
+    lower_threshold defaults to get_bone_threshold(), which is kept in sync with the segmentation's
+    "Lower threshold" - a landmark lands on what is segmented as bone. margin_hu is an optional extra
+    cushion on top of that (off by default).
 
     The search is anisotropic rather than a plain cube/sphere: wide within the axial slice plane
     (in_plane_radius_mm, along the volume's I/J axes) so it can actually reach from a click on the
