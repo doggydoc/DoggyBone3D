@@ -647,7 +647,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
         self.reduction_gap.setRange(0.0, 0.5)
         self.reduction_gap.setDecimals(2)
         self.reduction_gap.setSingleStep(0.05)
-        self.reduction_gap.setValue(0.2)
+        self.reduction_gap.setValue(0.0)                 # default: fragments reduced without a gap
         self.reduction_gap.setSuffix(" mm")
         self.reduction_gap.setToolTip(
             "Small gap left between the cut faces after reduction (0.1-0.3 mm recommended) to avoid "
