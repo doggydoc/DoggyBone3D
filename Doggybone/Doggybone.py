@@ -540,6 +540,7 @@ class DoggyboneWidget(LimbBarMixin, CombinedCorrectionMixin, ReportMixin, Sulcus
 
         self.osteotomy_technique = qt.QComboBox()
         self.osteotomy_technique.addItems(["OWO - Opening Wedge", "CWO - Closing Wedge"])
+        self.osteotomy_technique.setCurrentText("CWO - Closing Wedge")          # default at start
         self.osteotomy_technique.setToolTip(
             "OWO: one cut is enough, the distal fragment is opened up, the gap stays/is bridged "
             "(e.g. plate/bone graft). CWO: a bone wedge is removed, no gap - needs a second, "
